@@ -36,13 +36,14 @@ Parser limits:
 
 | Status | Meaning | Who sets it |
 |---|---|---|
-| `draft` | The phase skill is still writing the artifact | The phase skill, when it starts writing |
+| `draft` | The phase skill is still writing the artifact, or `iterate` is changing the plan | The phase skill, when it starts writing; `iterate`, when it starts a plan change after implementation started |
 | `in-review` | The artifact is complete and waits for review | The phase skill, when it finishes; `iterate`, after every edit |
 | `approved` | The user approved the artifact | Only `/loom:iterate approve` |
 
 Rules:
 
 - A phase skill writes `draft` while it works and `in-review` when it finishes.
+- `iterate` writes `draft` on `04-plan.md` while it changes the plan after implementation started, and `in-review` when the change is done. The next `iterate` finishes an interrupted plan change.
 - Never set `approved` yourself, except in `iterate` when the user runs `/loom:iterate approve`.
 - `iterate` refuses `approve` while open questions remain, unless the user repeats `approve`.
 - Feedback on an artifact keeps `status: in-review` and changes `updated`.
@@ -126,4 +127,4 @@ Reason: …
 
 ## Superseded files
 
-A mode change to full renames an existing `02-research.md` to `02-research.superseded.md`. `loom-state` ignores `*.superseded.md` files. Do not read them as inputs.
+A mode change to full renames an existing `02-research.md` to `02-research.superseded.md` and an existing `04-plan.md` to `04-plan.superseded.md`. `loom-state` ignores `*.superseded.md` files. Do not read them as inputs.
