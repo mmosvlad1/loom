@@ -1,0 +1,1123 @@
+# loom — Specification
+
+> A Claude Code plugin for structured, agent-driven development: **Research → Plan → Implement**, with GitHub Issues as the backlog, artifacts as the hand-off between phases, and a full git flow from issue to squash merge.
+
+Status: **Draft, revision 2** · Last updated: 2026-11-08 · Describes plugin release **v1**
+
+Changes in revision 2: fixes from the spec review (finish-task commands, agent `tools`, namespacing, versioning, config use, hook exit codes, oneshot conditions), decisions on the post-PR flow, setup bootstrap, approval gates, mode changes and resume, and new features: `loom-state`, `/loom:next`, enforced checks, harness evals, shared snippets, writing style.
+
+---
+
+## Table of Contents
+
+1. [Overview](#1-overview)
+2. [Core Principles](#2-core-principles)
+3. [Glossary](#3-glossary)
+4. [Architecture](#4-architecture)
+5. [Workflow Modes](#5-workflow-modes)
+6. [End-to-End Lifecycle](#6-end-to-end-lifecycle)
+7. [Sessions and Context Model](#7-sessions-and-context-model)
+8. [The State Script: `loom-state`](#8-the-state-script-loom-state)
+9. [Skills Reference](#9-skills-reference)
+10. [Subagents](#10-subagents)
+11. [Hooks](#11-hooks)
+12. [Question Rounds Protocol](#12-question-rounds-protocol)
+13. [Artifacts](#13-artifacts)
+14. [Writing Style](#14-writing-style)
+15. [Project Documentation Structure](#15-project-documentation-structure)
+16. [Git Conventions](#16-git-conventions)
+17. [Checks and CI](#17-checks-and-ci)
+18. [Stack Detection](#18-stack-detection)
+19. [Configuration](#19-configuration)
+20. [Testing the Harness](#20-testing-the-harness)
+21. [Distribution and Development](#21-distribution-and-development)
+22. [Differences from HumanLayer](#22-differences-from-humanlayer)
+23. [Roadmap and Out of Scope](#23-roadmap-and-out-of-scope)
+24. [Open Topics and Items to Verify](#24-open-topics-and-items-to-verify)
+
+---
+
+## 1. Overview
+
+### 1.1 What loom is
+
+loom is a Claude Code plugin that turns a GitHub issue into a merged pull request through a sequence of explicit phases. Each phase runs in its own session and produces a markdown artifact. The next phase reads only those artifacts. The human stays in control at defined checkpoints: design approval, plan approval, manual verification, push, and merge.
+
+### 1.2 Origin
+
+loom is derived from HumanLayer's Research-Plan-Implement plugin (`humanlayer/humanlayer`, `apps/riptide-rpi-claude-plugin`, Apache-2.0). That plugin depends on HumanLayer's daemon and cloud for subagent registration, `{SKILLBASE}` substitution, artifact sync, and ticket integrations. loom keeps the methodology and the best prompt rules and makes everything self-contained in one plugin. It needs no external services beyond `git` and `gh`.
+
+License: loom is Apache-2.0. It keeps HumanLayer's `LICENSE` and adds a `NOTICE` entry for derived prompts.
+
+### 1.3 Goals
+
+- **Portable:** install once from a marketplace; per project only a small config file.
+- **Stack-agnostic:** only `setup` knows about stacks; everything else reads `.claude/loom.json`.
+- **Few interruptions:** batched question rounds, approval only where it matters, auto-advance through implementation phases.
+- **Reliable:** checks are enforced by hooks, not by trust in the agent.
+- **Visible process:** decisions, ADRs, and task summaries are committed; the plan is attached to the PR.
+- **Self-contained:** no daemon, no cloud, no Linear/Jira.
+- **Tested:** the harness has its own eval suite.
+
+### 1.4 Language
+
+- All prompts (skills, agents, templates, shared snippets) are in **English**.
+- All artifacts (research, design, plan, docs, ADRs, PRs, commits) are in **English**.
+- Conversation with the user may be in any language.
+
+---
+
+## 2. Core Principles
+
+1. **Research describes, never prescribes.** Research documents only what exists today: where, how, and how components interact. No recommendations, critique, or proposals.
+2. **Research is blind to intent (full mode).** Research questions must not leak what will be built ("how does X work", never "how should we build Y"). In full mode the research phase reads the questions, not the ticket.
+3. **The human resolves design questions.** The agent may recommend an option. It never closes a design question itself, except under the round cap rule (§12.5).
+4. **Vertical slices.** A plan is split into phases that each cut across layers and end in something that can be run, queried, or tested.
+5. **Artifacts are the only hand-off.** Each phase starts in a fresh session and reads the previous artifacts.
+6. **Later phases win.** When artifacts disagree, the artifact of the later phase controls (order: ticket → research-questions → research → design → plan). For current behavior, the code is the source of truth.
+7. **Read inputs fully.** Skills read referenced artifacts in full, in the main context, before they spawn subagents.
+8. **Prefer automated verification.** A manual check is listed only when it cannot reasonably be automated.
+9. **State is computed, not remembered.** The task state comes from `loom-state` (§8), never from the model's memory of the conversation.
+
+---
+
+## 3. Glossary
+
+Prompts and artifacts use these terms with exactly one meaning each (see §14).
+
+| Term | Meaning |
+|---|---|
+| **task** | One GitHub issue being worked on, with one branch and one task directory |
+| **task directory** | `.loom/tasks/<n>-<slug>/` |
+| **mode** | `oneshot`, `quick`, or `full` (§5) |
+| **phase** | One workflow step that produces one artifact: research-questions, research, design, plan, implement |
+| **implementation phase** | One vertical slice inside the plan |
+| **artifact** | A markdown file a phase writes into the task directory |
+| **round** | One batch of open questions in design or plan (§12) |
+| **approve** | Set an artifact's status to `approved` |
+| **gate** | A phase that cannot start until a previous artifact is `approved` |
+| **checks** | The commands in `loom.json` → `checks` |
+
+---
+
+## 4. Architecture
+
+### 4.1 Plugin repository layout
+
+```
+loom/
+├── .claude-plugin/
+│   ├── plugin.json                 # the only place with "version"
+│   └── marketplace.json
+├── skills/
+│   ├── _shared/                    # snippets read by several skills
+│   │   ├── frontmatter.md          # artifact frontmatter and status rules
+│   │   ├── question-rounds.md      # §12
+│   │   ├── visual-conventions.md   # trees, diff blocks
+│   │   ├── writing-style.md        # §14
+│   │   └── final-answer.md         # format of every skill's last message
+│   ├── setup/
+│   │   ├── SKILL.md
+│   │   └── references/
+│   │       ├── stacks/python-uv.md
+│   │       ├── stacks/node.md
+│   │       └── templates/          # ci.yml, Makefile, CLAUDE.md, docs/*, statusline
+│   ├── backlog/      (SKILL.md, references/issue-format.md)
+│   ├── start-task/   (SKILL.md, references/ticket-template.md)
+│   ├── research-questions/  (SKILL.md, references/template.md)
+│   ├── research/     (SKILL.md, references/template.md)
+│   ├── design/       (SKILL.md, references/template.md)
+│   ├── plan/         (SKILL.md, references/template.md)
+│   ├── iterate/      (SKILL.md)
+│   ├── implement/    (SKILL.md, references/log-format.md)
+│   ├── describe-pr/  (SKILL.md, references/summary-template.md, adr-template.md, pr-template.md)
+│   ├── finish-task/  (SKILL.md)
+│   └── next/         (SKILL.md)
+├── agents/
+│   ├── codebase-locator.md
+│   ├── codebase-analyzer.md
+│   ├── codebase-pattern-finder.md
+│   ├── web-search-researcher.md
+│   ├── implementer.md
+│   └── implementation-reviewer.md
+├── hooks/
+│   └── hooks.json
+├── scripts/
+│   ├── loom-state                  # §8
+│   ├── session-start.sh
+│   ├── guard-main.sh
+│   ├── block-output-filtering.sh
+│   ├── subagent-checks.sh
+│   └── stop-lint.sh
+├── evals/                          # §20
+├── tests/                          # unit tests for loom-state and hook scripts
+├── LICENSE
+├── NOTICE
+└── README.md
+```
+
+- Only skills that produce an artifact have a `template.md`.
+- Skills address their own files relative to the skill directory, and shared files through `${CLAUDE_PLUGIN_ROOT}/skills/_shared/…` (no `{SKILLBASE}` placeholder).
+
+### 4.2 Project-side footprint
+
+```
+<project>/
+├── CLAUDE.md                     # committed, short
+├── Makefile                      # committed (or stack-native equivalent)
+├── .github/workflows/ci.yml      # committed
+├── .claude/
+│   ├── loom.json                 # committed — loom config
+│   └── settings.json             # committed — marketplace, enabled plugin, permissions, statusline
+├── docs/                         # committed — durable knowledge (§15)
+└── .loom/                        # gitignored — working area
+    └── tasks/
+        ├── 42-auth-flow/
+        └── _archive/
+```
+
+### 4.3 Two zones
+
+| Zone | Git | Purpose | Lifetime |
+|---|---|---|---|
+| `.loom/` | ignored | Working artifacts: ticket copy, research, design, plan, log | Until the task is finished, then archived locally |
+| `docs/` | committed | Durable knowledge: vision, architecture, ADRs, task summaries | Permanent |
+
+`describe-pr` distills durable knowledge from `.loom/` into `docs/` before the PR is opened. Limitation: `.loom/` belongs to one checkout. It does not travel between machines or worktrees.
+
+---
+
+## 5. Workflow Modes
+
+### 5.1 Modes
+
+| Mode | For | Phases |
+|---|---|---|
+| **oneshot** | Trivial, obvious changes: typo, dependency bump, config tweak, tiny fix | start-task → implement → describe-pr → finish-task |
+| **quick** | Small/medium changes with a clear design | start-task → research → plan → implement → describe-pr → finish-task |
+| **full** | Larger features, unclear behavior or code shape | start-task → research-questions → research → design → plan → implement → describe-pr → finish-task |
+
+### 5.2 Choosing a mode
+
+1. `start-task --oneshot | --quick | --full` forces a mode.
+2. Otherwise the issue label `mode:*` sets it.
+3. Otherwise `start-task` proposes one from `size:*` (`S` → oneshot, `M` → quick, `L` → full) and the user confirms.
+
+The mode is stored in `00-ticket.md` frontmatter.
+
+### 5.3 Changing the mode
+
+A mode change is allowed **only before `implement` starts**. After that, a different scope becomes a new issue.
+
+| Change | Effect |
+|---|---|
+| oneshot → quick | Adds research and plan |
+| oneshot → full / quick → full | Existing `02-research.md` is renamed `02-research.superseded.md`, because it read the ticket. Research is redone blind: research-questions first, then a new research. |
+| full → quick | Remaining phases skip design; existing artifacts stay valid |
+| any → oneshot | Allowed only if no plan exists |
+
+### 5.4 Mode differences
+
+| | oneshot | quick | full |
+|---|---|---|---|
+| Research questions | — | — | ✓ |
+| Research reads the ticket | — | ✓ (accepted bias) | ✗ (reads questions only) |
+| Design | — | — | ✓ (gate) |
+| Plan | — | ✓ (gate) | ✓ (gate) |
+| Implementation phases | 1, built from the ticket | from plan | from plan |
+| `log.md` | ✓ | ✓ | ✓ |
+| Task summary in `docs/tasks/` | — | ✓ | ✓ |
+| ADRs | — | if a decision qualifies | if a decision qualifies |
+| Docs commit in describe-pr | only if `overview.md` changed | ✓ | ✓ |
+| PR description | short | full | full |
+
+---
+
+## 6. End-to-End Lifecycle
+
+### 6.1 Main path
+
+```
+/loom:backlog          discuss ideas → create GitHub issues (labels: type, size, mode)
+        │
+/loom:start-task #42   git switch main && git pull
+        │              git switch -c feat/42-auth-flow
+        │              .loom/tasks/42-auth-flow/00-ticket.md
+        │
+   ── /clear → /loom:next ──   runs the next phase for the mode:
+        │
+        ├─ research-questions  (full)   → 01-research-questions.md
+        ├─ research                     → 02-research.md
+        ├─ design              (full)   → 03-design.md   rounds via /loom:iterate, then approve
+        ├─ plan                         → 04-plan.md     round via /loom:iterate, then approve
+        └─ implement           per implementation phase:
+                               implementer → checks (enforced) → reviewer → commit → log.md
+                               auto-advance unless manual verification is needed
+        │
+/loom:describe-pr      docs/tasks/42-auth-flow.md, ADRs, overview.md update
+        │              commit: docs(#42): record decisions and summary
+        │              git rebase origin/main
+        │              git push + gh pr create     (confirmation)
+        │
+   CI (GitHub Actions) make check
+        │
+/loom:finish-task      branch up to date? CI green? → gh pr merge --squash --delete-branch   (confirmation)
+                       git switch main && git pull && git fetch --prune
+                       move task directory → .loom/tasks/_archive/
+```
+
+### 6.2 After the PR is open
+
+`/loom:next` reads the PR state and routes:
+
+| PR state | Route |
+|---|---|
+| Checks failing | `/loom:iterate` → reads failed check logs (`gh run view --log-failed`), fixes |
+| Changes requested / review comments | `/loom:iterate` → reads comments (`gh pr view --comments`), fixes |
+| Branch behind `main` | `/loom:iterate rebase` → `git rebase origin/main`, re-runs checks |
+| Checks pending | Wait; `/loom:finish-task` watches checks |
+| Checks green, no requested changes | `/loom:finish-task` |
+
+The post-PR fix path in `iterate`: fix → checks → commit → refresh `docs/tasks/<n>-<slug>.md` and the PR body if affected → push (confirmation; `--force-with-lease` after a rebase).
+
+---
+
+## 7. Sessions and Context Model
+
+### 7.1 One phase, one session
+
+Each phase starts in a fresh session (`/clear` between phases). A long session fills with search results, test output, and old drafts, and quality drops. Artifacts carry everything the next phase needs.
+
+The normal loop between phases is two commands: `/clear`, then `/loom:next`.
+
+### 7.2 How a fresh session knows the task
+
+The `SessionStart` hook (§11.1) runs `loom-state` and injects the task directory, mode, artifact statuses, and the next step. It fires on `startup`, `resume`, `clear`, and `compact`.
+
+### 7.3 Exceptions
+
+- **Question rounds** (design, plan) stay in one session. Answering and regenerating rounds needs continuity.
+- **implement** may run as one session. Each implementation phase runs in a fresh `implementer` subagent; the main session only orchestrates.
+
+### 7.4 Phase endings
+
+Every skill ends with the format from `_shared/final-answer.md`: artifact path, status, open questions count, and the next step, e.g.:
+
+```
+Next: /clear, then /loom:next
+```
+
+Claude Code cannot clear its own context, so the user runs `/clear`.
+
+### 7.5 Skills and forked context
+
+`research`, `design`, `plan`, and `implement` must **not** use `context: fork`: a forked skill runs as a subagent, and subagents cannot spawn the research and implementer agents these skills depend on.
+
+---
+
+## 8. The State Script: `loom-state`
+
+### 8.1 Purpose
+
+One deterministic script computes the task state. Every component that needs "where is the task and what comes next" uses it: the `SessionStart` hook, `/loom:next`, every phase skill's header, and the statusline. No other component re-implements this logic.
+
+### 8.2 Interface
+
+`${CLAUDE_PLUGIN_ROOT}/scripts/loom-state [--json | --line | --pr | --docs]`
+
+`--json` (default) output:
+
+```json
+{
+  "branch": "feat/42-auth-flow",
+  "onMain": false,
+  "task": { "number": 42, "slug": "auth-flow", "dir": ".loom/tasks/42-auth-flow", "mode": "full" },
+  "artifacts": [
+    { "file": "02-research.md", "phase": "research", "status": "in-review", "openQuestions": 0, "stale": false },
+    { "file": "03-design.md", "phase": "design", "status": "in-review", "openQuestions": 3, "acceptedByDefault": 0 }
+  ],
+  "implementation": { "total": 3, "done": 1, "blocked": null },
+  "workingTree": "clean",
+  "pr": null,
+  "next": { "command": "/loom:iterate", "reason": "design has 3 open questions" }
+}
+```
+
+- `--line`: one line for the statusline, e.g. `#42 · full · design:in-review · 3 open Q`.
+- `--pr`: adds PR state (number, checks, review decision, behind main). This calls `gh` and the network, so it is not used by the `SessionStart` hook.
+- `--docs`: reserved for the docs freshness check (§23).
+
+### 8.3 Rules
+
+- **Task lookup:** branch `^(feat|fix|chore|docs|refactor)/(\d+)-(.+)$` → issue number → task directory `.loom/tasks/<n>-*` (matched by number, so an edited issue title does not break it). If not found, it also looks in `_archive/` and reports `archived: true`.
+- **Config:** reads `mainBranch` and `workDir` from `.claude/loom.json`.
+- **Statuses:** read from artifact frontmatter.
+- **Implementation progress:** read from plan checkboxes and `log.md` entries (§13.2).
+- **Stale research:** `true` when files referenced in `02-research.md` changed on `main` between the research `git_commit` and `merge-base(HEAD, origin/main)`. The task's own commits do not count.
+- **Next step:** computed by the decision table in §9.12.
+
+### 8.4 Implementation
+
+A single Python script with no dependencies outside the standard library (or POSIX shell plus `jq`), with unit tests in `tests/`.
+
+---
+
+## 9. Skills Reference
+
+### 9.0 Common rules
+
+- All skills set `disable-model-invocation: true`. They run only when invoked as `/loom:<skill>`.
+- Phase skills start by injecting state: `` !`${CLAUDE_PLUGIN_ROOT}/scripts/loom-state --json` `` (exact syntax to verify, §24).
+- Skills spawn agents by their namespaced name: `loom:codebase-locator`, etc.
+- Model and effort per skill (values to tune; frontmatter support to verify, §24):
+
+| Skill | Model | Effort |
+|---|---|---|
+| design, plan | inherit | high |
+| research-questions, research, implement, iterate, describe-pr, backlog | inherit | default |
+| setup, start-task | inherit | default |
+| next, finish-task | haiku | low |
+
+### 9.1 `setup`
+
+**Purpose:** prepare a project for loom. Safe to re-run.
+
+**Does:**
+1. Detects the stack (§18) and existing commands.
+2. Bootstraps through loom's own flow, because the guard blocks commits on `main`:
+   1. After confirmation, creates the issue "Set up loom" and the branch `chore/<n>-loom-setup`.
+   2. Shows a diff, then writes:
+      - `.claude/loom.json`
+      - `Makefile` (or stack-native scripts) with `lint`, `typecheck`, `test`, `check`
+      - `.github/workflows/ci.yml`
+      - `.claude/settings.json`: `extraKnownMarketplaces`, `enabledPlugins`, permission allowlist (§19.3), `statusLine` calling `loom-state --line`
+      - `docs/` skeleton: `product/vision.md`, `architecture/overview.md`, `architecture/decisions/`, `conventions.md`, `tasks/`
+      - short `CLAUDE.md` pointing to `docs/`
+      - `.loom/` entry in `.gitignore`
+   3. Optionally creates the labels `type:*`, `size:*`, `mode:*`.
+   4. Commits, then hands over to `/loom:describe-pr` (oneshot-style PR).
+3. **Ruleset:** offered by `finish-task` after the setup PR is merged, so the required CI check already exists on `main` (§17.3).
+
+**Rules:** existing files are never overwritten silently. Existing commands and CI are reused, not replaced. On an empty repository with no `main` yet, the first commit (only `.gitignore` and `README.md`) is allowed on `main` once; the guard allows it when `main` has no commits.
+
+### 9.2 `backlog`
+
+**Argument:** `[idea or question]`
+
+**Purpose:** product-level planning, between tasks.
+
+**Does:**
+- **Discuss ideas:** reads `docs/product/vision.md`, open issues (`gh issue list`), and the code state; discusses options.
+- **Create issues** in the format of `references/issue-format.md`: title, context, acceptance criteria, labels. Shows the list and waits for confirmation before `gh issue create`.
+- **Prioritize:** answers "what next?" from issue dependencies and what is done.
+- Helps fill `vision.md` when it is still a skeleton.
+
+### 9.3 `start-task`
+
+**Argument:** `<#issue | free text>` and optional `--oneshot | --quick | --full`
+
+**Does:**
+1. Free text: drafts an issue in the `backlog` issue format, confirms, creates it.
+2. Reads the issue: `gh issue view <n> --json title,body,labels,url`.
+3. Determines the mode (§5.2).
+4. Determines the branch type from the `type:*` label; if missing, proposes one and confirms.
+5. Builds the slug: issue title → lowercase ASCII, non-alphanumerics → `-`, at most 5 words / 40 characters.
+6. Refuses if the working tree is dirty (offers stash). Then `git switch <mainBranch> && git pull`, then `git switch -c <type>/<n>-<slug>`.
+7. Creates `.loom/tasks/<n>-<slug>/00-ticket.md`.
+8. Ends with `Next: /clear, then /loom:next`.
+
+If the issue already has an archived task directory, offers to restore it from `_archive/` instead.
+
+### 9.4 `research-questions` (full mode)
+
+**Input:** `00-ticket.md` and files the user mentions.
+**Output:** `01-research-questions.md`.
+
+Light contextual research with `loom:codebase-locator`, `loom:codebase-analyzer`, `loom:codebase-pattern-finder` (and `loom:web-search-researcher` only if needed). Writes 2–8 descriptive questions and a verbatim **Key Context Pointers** section. Adds design-system questions if UI work is possible.
+
+**Rule:** questions never reveal what will be built.
+
+### 9.5 `research`
+
+**Input:** full → `01-research-questions.md` only (never the ticket). quick → `00-ticket.md`.
+**Output:** `02-research.md`, `git_commit` = `HEAD`.
+
+**Does:**
+1. Groups questions into 2–6 subagent tasks: locators first, analyzers on promising areas, pattern-finder for conventions, web researcher for external docs (links required).
+2. Waits for all agents, then synthesizes with `file:line` references.
+3. **Claim check:** one `loom:codebase-analyzer` run verifies about 5 randomly chosen `file:line` claims. Failed claims are fixed or moved to "Not Found / Unclear".
+
+**Rule:** describes only; no recommendations or critique.
+
+### 9.6 `design` (full mode)
+
+**Input:** ticket and research (never research questions).
+**Output:** `03-design.md`.
+
+Current state, desired end state, out of scope, proposed architecture (before/after trees, `diff` blocks, key interfaces), testing approach, and the first round (§12). Optional follow-up research with agents.
+
+**Rule:** all questions are written as open. Recommendations are allowed, resolution is not.
+
+### 9.7 `plan`
+
+**Input:** all artifacts except research questions.
+**Output:** `04-plan.md`.
+
+Writes the **Phase Overview** (one line per vertical slice) and full implementation phase details (goal, changes as file tree + key signatures, verification with checkboxes). Adds a round only where uncertain. The whole plan is written at once.
+
+**Rule:** implementation phases are vertical slices; each is verifiable by `loom.json` checks.
+
+### 9.8 `iterate`
+
+**Argument:** `<answers | feedback | "approve" | "rebase">`, or empty.
+
+The single skill for changing anything that already exists. It detects the target from `loom-state --pr` and the argument:
+
+| Situation | Action |
+|---|---|
+| Open round, argument has answers | Records answers (§12.4), rewrites affected sections, generates the next round or closes questions |
+| Open round, empty argument or `ok` | Accepts all recommendations of the current round |
+| Feedback on an artifact | Edits it, bumps `updated`, keeps `status: in-review` |
+| `approve` | Sets `status: approved`. Refuses while open questions remain, unless the user repeats `approve` |
+| Feedback on an implemented phase (before PR) | Runs `loom:implementer` on the fix → checks → reviewer → commit → deviation in `log.md` |
+| Feedback after the plan is approved that changes the plan | Edits the plan, sets it back to `in-review`, marks affected not-done implementation phases as unchecked; done phases stay done and the change is logged as a deviation |
+| PR open: failing checks or review comments | Post-PR fix path (§6.2) |
+| `rebase` | `git rebase origin/<mainBranch>`, checks, push with `--force-with-lease` (confirmation) |
+| Mode change | §5.3 rules |
+
+### 9.9 `implement`
+
+**Argument:** `[implementation phase number]`. Default: the first unchecked phase.
+**Input:** `04-plan.md` with `status: approved`; in oneshot, `00-ticket.md`.
+
+**Start:**
+- Runs `loom-state`. If the working tree is dirty or `log.md` has a phase `in-progress`, offers: resume, stash, or discard.
+
+**Per implementation phase:**
+1. Writes `in-progress` for the phase in `log.md`.
+2. Launches `loom:implementer` with a short prompt: plan path + phase number (oneshot: ticket path). The implementer never commits.
+3. Checks are enforced by the `SubagentStop` hook (§11.4): the implementer cannot finish while `checks.check` fails.
+4. Launches `loom:implementation-reviewer` (oneshot: compares the diff with the ticket). The verdict has the categories of §10.2. Only `blocking` items go back to the implementer. At most 2 fix attempts; then `blocked: <reason>` in `log.md` and stop.
+5. Commits: `<type>(<scope>): <summary> (#<n>)`, body `Phase N: <name>`.
+6. Ticks the phase checkboxes in `04-plan.md` and writes `done` with commit hash, checks result, and deviations to `log.md`.
+7. **Auto-advance** if checks pass, no `blocking` items remain, and the phase lists no manual verification. Otherwise stops with a phase summary and the manual steps.
+
+The user can override: "do all phases and stop at the end" or "stop after every phase".
+
+### 9.10 `describe-pr`
+
+**Does:**
+1. Reads all artifacts and `log.md`.
+2. quick/full: writes `docs/tasks/<n>-<slug>.md` (§13.4).
+3. Creates ADRs for resolved decisions marked `ADR? = yes` (§13.5).
+4. Checks whether the task changed the architecture; if so, proposes an update to `docs/architecture/overview.md`.
+5. Commits `docs(#<n>): record decisions and summary` — only if something changed.
+6. `git rebase origin/<mainBranch>`; re-runs checks if the rebase brought changes.
+7. Drafts the PR body (§13.6), shows it, and after confirmation runs `git push -u origin <branch>` and `gh pr create`.
+8. Stores the PR number in `00-ticket.md` frontmatter (`pr: 57`).
+9. Proposes follow-ups from the summary as new issues, in the format of `${CLAUDE_PLUGIN_ROOT}/skills/backlog/references/issue-format.md` (confirmation required).
+
+### 9.11 `finish-task`
+
+**Does:**
+1. Runs from the task branch. Refuses on `main`.
+2. Checks the branch is not behind `origin/<mainBranch>`; if it is, routes to `/loom:iterate rebase`.
+3. `gh pr checks --required --watch` (pending ≠ failed). Refuses to merge on failure; "no required checks" is reported separately and needs explicit confirmation.
+4. After confirmation: `gh pr merge --squash --delete-branch` (no number: it selects the PR of the current branch; it deletes the local and remote branch).
+5. `git switch <mainBranch> && git pull && git fetch --prune`. Deletes the local branch with `git branch -D` only if it still exists.
+6. Moves the task directory to `.loom/tasks/_archive/`.
+7. If the merged task was the setup task and no ruleset exists, offers to enable it (§17.3).
+
+All steps are idempotent: re-running after a partial failure continues where it stopped.
+
+### 9.12 `next`
+
+**Purpose:** show the task state and **run** the next phase. It replaces the earlier `next-phase` idea.
+
+**Does:** runs `loom-state --pr`, prints a 3–5 line state summary, then reads and follows the next phase's `SKILL.md` from `${CLAUDE_PLUGIN_ROOT}/skills/<phase>/` (same rules as invoking that skill directly). For `iterate`, `describe-pr`, and `finish-task` it only names the command, because those need the user's input or confirmation.
+
+**Decision table** (first matching row wins):
+
+| # | Condition | Next |
+|---|---|---|
+| 1 | On `main` | suggest `/loom:backlog` or `/loom:start-task #n` |
+| 2 | Branch matches no task, or task archived | suggest `/loom:start-task #n` (restore if archived) |
+| 3 | Dirty tree or `log.md` phase `in-progress` | run `implement` (resume flow) |
+| 4 | Any artifact has `blocked` | show the reason; suggest `/loom:iterate <fix>` |
+| 5 | PR open | PR routing table §6.2 |
+| 6 | All implementation phases done | `/loom:describe-pr` |
+| 7 | Gate artifact (design/plan) has open questions | `/loom:iterate <answers>` |
+| 8 | Gate artifact `in-review`, no open questions | `/loom:iterate approve` |
+| 9 | Plan approved (or oneshot), phases left | run `implement` |
+| 10 | Otherwise | run the next missing phase for the mode |
+
+Non-gate artifacts (research-questions, research) never block row 10. If research is `in-review`, `next` prints "research not reviewed" and continues. If research is stale, it warns and offers to rerun research.
+
+---
+
+## 10. Subagents
+
+### 10.1 Definitions
+
+Defined as `agents/*.md`, ported from HumanLayer's daemon-registered agents. Plugin agents are namespaced: skills call them as `loom:<name>`.
+
+| Agent | Model | Tools | Used by | Role |
+|---|---|---|---|---|
+| `codebase-locator` | haiku | Grep, Glob, Bash | research-questions, research, design, plan | Finds WHERE things live; returns paths grouped by purpose |
+| `codebase-analyzer` | sonnet | Read, Grep, Glob | same + research claim check | Explains HOW code works with `file:line` references |
+| `codebase-pattern-finder` | sonnet | Read, Grep, Glob | same | Finds similar implementations and conventions |
+| `web-search-researcher` | sonnet | WebSearch, WebFetch | research | External docs and libraries; always returns links |
+| `implementer` | inherit | Read, Edit, Write, Grep, Glob, Bash | implement, iterate | Implements exactly one implementation phase; runs checks; never commits |
+| `implementation-reviewer` | sonnet | Read, Grep, Glob, Bash | implement, iterate | Compares the phase diff with the plan (or ticket in oneshot) |
+
+- `tools` lists only plain tool names. Command restrictions (e.g. read-only Bash for the locator and reviewer) are stated in the agent prompt and enforced by hooks where needed.
+- All research agents carry the "document what exists, never critique" rule.
+
+### 10.2 Reviewer verdict format
+
+```markdown
+## Verdict: pass | changes-needed
+### As planned
+### Deviations          ← each: what, why it matters, blocking | nit
+### Additions           ← not in the plan
+### Planned but missing ← blocking by default
+```
+
+`implement` sends only `blocking` items back. Deviations and additions go to `log.md` and later into the task summary.
+
+---
+
+## 11. Hooks
+
+All hooks are declared in `hooks/hooks.json` and call scripts in `${CLAUDE_PLUGIN_ROOT}/scripts/`.
+
+### 11.1 `SessionStart` — task context
+
+- Matchers: `startup`, `resume`, `clear`, `compact`.
+- Runs `loom-state --json` (no `--pr`: no network at session start) and injects a short summary as additional context: task directory, mode, artifact statuses, next step.
+- On `main` or an unrecognized branch: injects one hint line.
+
+### 11.2 `PreToolUse` (Bash) — guard the main branch
+
+- Reads `mainBranch` from `loom.json`.
+- Blocks `git commit` and `git push` when the current branch is the main branch, except the very first commit of an empty repository (§9.1).
+- Blocks any force push to the main branch.
+- Denies with the reason: "Create a task branch with /loom:start-task".
+
+### 11.3 `PreToolUse` (Bash) — block output filtering
+
+Ported from HumanLayer's `block-test-output-filtering.sh`, adapted to `make`, `pytest`, `ruff`, `pyright`, `npm test`. Blocks check commands piped into `head`, `tail`, `grep`, etc., because filtered output hides failures. Denies with the reason: "Run checks unfiltered".
+
+### 11.4 `SubagentStop` — enforce checks for the implementer
+
+- Matcher: the `loom:implementer` agent.
+- Runs `checks.check`. On failure, exits with code 2: the subagent cannot finish and receives the failure output.
+- Uses `stop_hook_active` to avoid infinite loops: after the configured number of attempts (`hooks.maxCheckAttempts`, default 3) it lets the subagent stop, and `implement` records `blocked`.
+
+### 11.5 `Stop` — quick lint (optional)
+
+- Enabled by `hooks.stopLint` (default `false`).
+- Runs only if the working tree has code changes (not only `.loom/` or `docs/`).
+- Runs `checks.lint`. On failure exits 2 so Claude sees the output; respects `stop_hook_active` to avoid loops.
+
+---
+
+## 12. Question Rounds Protocol
+
+Used by `design` and `plan`. `iterate` processes the answers. Full text lives in `_shared/question-rounds.md`.
+
+### 12.1 Independence rule
+
+A round contains only questions whose answers do not depend on another open question. Dependent questions are deferred to the next round.
+
+### 12.2 Format
+
+```markdown
+## Open Questions — Round 1 of ~3
+
+**Q1. Where should agent state be persisted between runs?**
+- a) SQLite — recommended: already a dependency, no infrastructure
+- b) Redis
+- c) JSON files
+
+**Q2. …**
+```
+
+- Every question has 2–4 options and one recommended option with a one-line reason.
+- Questions are numbered across rounds (round 2 starts after the last number of round 1).
+
+### 12.3 Answering
+
+- Compact answers: `1a, 2b, 3: custom answer …`
+- Bulk: `accept all except 2`.
+- Empty `/loom:iterate` or `ok`: accept all recommendations of the current round.
+- Interactive buttons: the skill may ask through the interactive question tool in batches of up to 4 questions. The artifact remains the source of truth.
+
+### 12.4 After each round
+
+1. Answers move to **Resolved Decisions**: question, decision, rationale, round, `ADR?`.
+2. Sections affected by the answers are rewritten.
+3. The next round contains only questions unlocked by the answers.
+
+### 12.5 How many rounds
+
+Rounds end when no open question affects the plan, not at a fixed count.
+
+| Size | Expected rounds | Cap |
+|---|---|---|
+| S | 1–2 | 2 |
+| M | 2–3 | 3 |
+| L | 3–5 | 5 |
+
+After the cap, the remaining minor questions are resolved with the recommendation and marked **"accepted by default — revisit if needed"**. `loom-state` reports their count.
+
+---
+
+## 13. Artifacts
+
+### 13.1 Frontmatter and gates
+
+```yaml
+---
+task: 42-auth-flow
+phase: design            # ticket | research-questions | research | design | plan
+status: in-review        # draft | in-review | approved   (not used on the ticket)
+based_on: [02-research.md]
+git_commit: a1b2c3d      # research only: code state the artifact describes
+updated: 2026-11-08
+---
+```
+
+The ticket frontmatter has instead: `mode`, `issue`, `url`, `pr` (after describe-pr).
+
+| Artifact | Statuses | Set by | Gate for |
+|---|---|---|---|
+| `00-ticket.md` | — | start-task | — |
+| `01-research-questions.md` | draft → in-review → approved | skill / iterate | none |
+| `02-research.md` | draft → in-review → approved | skill / iterate | none (warning only) |
+| `03-design.md` | draft → in-review → approved | skill / iterate | plan |
+| `04-plan.md` | draft → in-review → approved | skill / iterate | implement |
+| `log.md` | per phase: in-progress / done / blocked | implement | — |
+
+A skill writes `draft` while it works and `in-review` when it finishes. Only `iterate approve` sets `approved`.
+
+### 13.2 Working artifacts (`.loom/tasks/<n>-<slug>/`)
+
+**`00-ticket.md`** — copy of the issue: title, body, labels, URL. Not edited by agents except frontmatter (`mode`, `pr`).
+
+**`01-research-questions.md`** (full)
+```markdown
+## Key Context Pointers      ← links, paths, packages from the ticket, verbatim
+## Questions                 ← 2–8, descriptive only
+```
+
+**`02-research.md`**
+```markdown
+## Summary
+## Findings                  ← one section per question, every claim with file:line
+## Patterns & Conventions
+## External Sources
+## Not Found / Unclear       ← includes claims that failed the claim check
+```
+
+**`03-design.md`** (full)
+```markdown
+## Current State
+## Desired End State
+## Out of Scope
+## Proposed Architecture
+## Open Questions — Round N of ~M
+## Resolved Decisions
+   | # | Question | Decision | Rationale | Round | ADR? |
+## Testing Approach
+```
+
+**`04-plan.md`**
+```markdown
+## Phase Overview
+   - [ ] 1. Fixed-response endpoint, verifiable via curl
+   - [ ] 2. Wire to real storage
+## Open Questions — Round N
+## Phase 1: <name>
+   ### Goal
+   ### Changes
+   ### Verification
+       - [ ] Automated: make test
+       - [ ] Manual: (only if it cannot be automated)
+## Phase 2: …
+```
+
+**`log.md`** — machine-readable headings, parsed by `loom-state`:
+```markdown
+## Phase 1 — done — d4e5f6
+Checks: lint ✓ typecheck ✓ test ✓ (42 passed)
+Reviewer: pass
+Deviations: switched from X to Y because …
+
+## Phase 2 — blocked
+Reason: …
+```
+
+### 13.3 Visual conventions
+
+In `_shared/visual-conventions.md`: proper tree glyphs (`├──`, `└──`, `│`), unchanged paths omitted; `diff` blocks for changes to existing shapes (`+` added, `-` removed, `~` changed); plain language blocks for new shapes; short prose between visuals; only visuals that help a decision.
+
+### 13.4 Task summary — `docs/tasks/<n>-<slug>.md` (quick, full)
+
+```markdown
+# #42 Auth flow
+## Problem
+## Outcome
+## Key Decisions        ← links to ADRs
+## Implementation       ← phases → commits
+## Deviations from Plan
+## Verification
+## Follow-ups
+```
+
+### 13.5 ADR — `docs/architecture/decisions/NNNN-<slug>.md`
+
+Created from resolved decisions marked `ADR? = yes` (architecture level: storage, protocols, agent structure, major libraries).
+
+```markdown
+# NNNN. Use SQLite for agent state
+Status: Accepted · Task: #42 · Date: 2026-11-08
+## Context
+## Decision
+## Alternatives Considered
+## Consequences
+```
+
+### 13.6 PR body
+
+```markdown
+Closes #42
+
+## Summary
+## Changes
+## Verification
+## Decisions          ← links to ADRs and the task summary
+
+<details><summary>Implementation plan</summary>
+
+…04-plan.md…
+
+</details>
+```
+
+- If the body would exceed 60,000 characters (GitHub limit: 65,536), the plan is replaced by its Phase Overview plus a note.
+- oneshot PRs contain only `Closes`, Summary, and Verification.
+
+---
+
+## 14. Writing Style
+
+loom uses an **STE-lite** style, inspired by ASD-STE100, defined in `_shared/writing-style.md`.
+
+### 14.1 Rules
+
+1. One term, one meaning. Use the glossary (§3). Do not rotate synonyms.
+2. Active voice.
+3. Sentences of at most 20 words for instructions and 25 for descriptions.
+4. One instruction per sentence.
+5. Lists for 3 or more steps or conditions.
+6. No introductions, recaps of the request, or filler.
+7. Keep every condition, number, and scope qualifier, even if the sentence gets longer.
+8. Define a project-specific term once.
+
+### 14.2 Where it applies
+
+| Text | Applies |
+|---|---|
+| research, plan, log, PR, ADR, `docs/` | Yes |
+| Final messages of skills | Yes, strictly |
+| Skill and agent prompts | Rule 1 always; others where they do not remove nuance |
+| Design rationale | Rules 1, 2, 6, 7 |
+| `vision.md`, `backlog` discussion | No |
+
+---
+
+## 15. Project Documentation Structure
+
+```
+CLAUDE.md                        # short: what the project is, commands, links into docs/
+docs/
+├── product/
+│   └── vision.md                # what, for whom, non-goals
+├── architecture/
+│   ├── overview.md              # components, data flow, diagram
+│   └── decisions/
+│       └── NNNN-*.md            # ADRs
+├── conventions.md               # code style, testing rules, module layout
+└── tasks/
+    └── <n>-<slug>.md            # task summaries
+```
+
+- `CLAUDE.md` stays short because it loads into every session.
+- `conventions.md` holds project-specific rules (e.g. how LLM calls are tested). `plan` and `implement` read it.
+- `overview.md` is updated in the same PR as the change that affects it.
+- ADRs come from design decisions.
+
+---
+
+## 16. Git Conventions
+
+### 16.1 Branches
+
+- Format: `<type>/<issue>-<slug>`, e.g. `feat/42-auth-flow`.
+- `type`: `feat`, `fix`, `chore`, `docs`, `refactor` (from the `type:*` label).
+- Created from an up-to-date main branch, with a clean working tree.
+- Docs and code live in the **same branch**.
+
+### 16.2 Commits
+
+- Conventional Commits with the issue number: `feat(auth): add token storage (#42)`.
+- One commit per implementation phase, created by `implement` (never by the implementer agent).
+- Docs commit before the PR, only if docs changed: `docs(#42): record decisions and summary`.
+- No commits during research/design/plan (those artifacts are in `.loom/`).
+
+### 16.3 Rebase and merge
+
+- Before push and before merge, the branch is rebased on `origin/<mainBranch>`. After a rebase of an already pushed branch, push uses `--force-with-lease`.
+- **Squash merge:** the main branch stays linear, one commit per task; implementation-phase commits stay visible in the PR.
+- `gh pr merge --squash --delete-branch` deletes the local and remote branch. The repo setting "Automatically delete head branches" is also recommended. A deleted branch can be restored from the PR page.
+
+### 16.4 What needs user confirmation
+
+| Action | Confirmation |
+|---|---|
+| Local commits, rebase, `git branch -D` of a merged task branch | No |
+| `git push` (including `--force-with-lease` on a task branch) | Yes |
+| `gh pr create`, `gh pr merge` | Yes |
+| `gh issue create` | Yes |
+| Repo settings, labels, ruleset (`gh api`, `gh label create`) | Yes |
+
+### 16.5 Protection
+
+- `PreToolUse` guard (§11.2).
+- GitHub ruleset on the main branch (§17.3).
+
+---
+
+## 17. Checks and CI
+
+### 17.1 Single entry point
+
+Checks run in four places — the implementer, the `SubagentStop` hook, the optional `Stop` hook, and CI — and must never diverge. The project exposes them through one entry point (Python: `Makefile`):
+
+```makefile
+lint:       ; uv run ruff check . && uv run ruff format --check .
+typecheck:  ; uv run pyright
+test:       ; uv run pytest
+check: lint typecheck test
+```
+
+`loom.json` references these targets; CI runs `make check`.
+
+### 17.2 CI workflow (v1)
+
+`.github/workflows/ci.yml`, on `pull_request` and `push` to the main branch. One job named `check` (the ruleset requires this name):
+
+| Step | Python example | Catches |
+|---|---|---|
+| Install | `uv sync --locked` (cached) | lock file out of sync |
+| Lint | `ruff check` | bugs, unused imports |
+| Format | `ruff format --check` | unformatted code |
+| Types | `pyright` | type errors |
+| Tests | `pytest` | broken logic |
+
+Single Python version. Action versions are pinned when `setup` generates the file.
+
+### 17.3 Ruleset
+
+Offered by `finish-task` after the setup PR is merged, created with `gh api` after confirmation:
+- Merge to the main branch only through a PR.
+- Required status check: `check`.
+- Required approvals: **0** (a solo developer cannot approve their own PR).
+- Block force pushes and deletion.
+
+Availability: rulesets work on public repositories on the free plan; private repositories need a paid plan (to verify, §24). If unavailable, loom relies on the guard hook only.
+
+Project-specific testing strategy (e.g. recorded LLM responses, evals of the product) is **not** part of loom. It belongs in the project's `conventions.md`.
+
+---
+
+## 18. Stack Detection
+
+Only `setup` knows about stacks.
+
+```
+                    ┌─ references/stacks/python-uv.md
+setup ── detects ───┼─ references/stacks/node.md
+   stack            └─ (unknown → investigate and ask the user)
+   │
+   ▼
+.claude/loom.json  → checks: { lint, typecheck, test, check }   (same shape for every stack)
+   │
+   ▼
+everything else — stack-agnostic
+```
+
+1. **Marker files:** `pyproject.toml` + `uv.lock` → uv; `package.json` + lock file → npm/pnpm/bun; `go.mod` → Go; `Cargo.toml` → Rust.
+2. **Prefer what exists:** an existing `Makefile`, `package.json` scripts, or CI workflow is reused.
+3. **Idiomatic entry point:** Python → `Makefile`; Node → `package.json` scripts.
+4. **Idempotent:** re-running shows a diff.
+
+v1 ships recipes for **python-uv** and **node**. Adding a stack means adding one recipe file. Monorepos with several stacks are out of scope for v1.
+
+---
+
+## 19. Configuration
+
+### 19.1 `.claude/loom.json` (committed)
+
+```json
+{
+  "version": 1,
+  "tracker": "github",
+  "mainBranch": "main",
+  "workDir": ".loom/tasks",
+  "docsDir": "docs",
+  "checks": {
+    "lint": "make lint",
+    "typecheck": "make typecheck",
+    "test": "make test",
+    "check": "make check"
+  },
+  "hooks": {
+    "stopLint": false,
+    "maxCheckAttempts": 3
+  },
+  "rounds": {
+    "cap": { "S": 2, "M": 3, "L": 5 }
+  },
+  "implement": {
+    "maxFixAttempts": 2,
+    "autoAdvance": true
+  }
+}
+```
+
+Every component reads `mainBranch`, `workDir`, and `docsDir` from this file. None of them hard-codes `main` or `.loom/tasks`.
+
+### 19.2 Issue labels
+
+| Label | Values |
+|---|---|
+| `type:` | `feat`, `fix`, `chore`, `docs`, `refactor` |
+| `size:` | `S`, `M`, `L` |
+| `mode:` | `oneshot`, `quick`, `full` |
+
+### 19.3 `.claude/settings.json` (committed, written by `setup`)
+
+- `extraKnownMarketplaces` + `enabledPlugins`: anyone who clones and trusts the project is offered loom.
+- `statusLine`: runs `loom-state --line`.
+- Permission allowlist (routine, reversible):
+  - `git status`, `git diff`, `git log`, `git add`, `git commit`, `git switch`, `git pull`, `git fetch`, `git rebase`, `git stash`, `git branch`
+  - `make *` (or the stack's check commands)
+  - `gh issue view`, `gh issue list`, `gh pr view`, `gh pr checks`, `gh run view`
+  - `mv` inside `.loom/`
+- **Not** allowlisted (always asked): `git push`, `gh pr create`, `gh pr merge`, `gh issue create`, `gh label create`, `gh api`.
+
+---
+
+## 20. Testing the Harness
+
+### 20.1 Unit tests
+
+`tests/` covers `loom-state` (task lookup, statuses, decision table, stale research, log parsing) and the hook scripts (guard, output filtering) with fixture directories. Runs in loom's CI.
+
+### 20.2 Evals
+
+`evals/` holds a suite for `claude plugin eval`:
+- A scaffold script builds a tiny fixture Python repository with a prepared task directory for each scenario.
+- Graders that do not call a model:
+  - `research` creates `02-research.md` with `status: in-review` and `file:line` references (file and regex checks).
+  - In full mode, `research` never reads `00-ticket.md` (tool-use check with max 0).
+  - `design` writes all questions as open; none appear under Resolved Decisions.
+  - `implement` stops on a phase with manual verification.
+  - The guard blocks a commit on `main`.
+- Run with `make eval` locally. In loom's CI: `claude plugin validate --strict` on every PR; evals manually or on a schedule (they cost tokens).
+
+### 20.3 When to run
+
+After every change to a skill, agent, shared snippet, or hook script. A prompt change is not done until its eval scenario passes.
+
+---
+
+## 21. Distribution and Development
+
+- **Repository:** a public GitHub repository `loom` with `.claude-plugin/marketplace.json` and the plugin.
+- **Install:**
+  ```
+  /plugin marketplace add <owner>/loom
+  /plugin install loom@<marketplace-name>
+  ```
+- **Versioning:** semver, **only in `plugin.json`**; bump on every release. Users update with `/plugin marketplace update`.
+- **Local development:** `claude --plugin-dir ./loom` runs the working copy; exercise it on a sandbox repository and with evals.
+- **loom's own CI:** unit tests, `claude plugin validate --strict`, and a check that every `template.md` has its required headings.
+- **Commands** appear as `/loom:<skill>`; agents as `loom:<agent>`.
+
+---
+
+## 22. Differences from HumanLayer
+
+| HumanLayer | loom | Why |
+|---|---|---|
+| Subagents registered by the daemon via SDK | `agents/*.md` in the plugin, namespaced `loom:` | Self-contained |
+| `{SKILLBASE}` substituted by the daemon | Relative paths and `${CLAUDE_PLUGIN_ROOT}` | No daemon |
+| Task directory injected by the daemon | `SessionStart` hook + `loom-state` | No daemon; one source of truth |
+| `.humanlayer/tasks` synced to cloud | `.loom/tasks` local + distilled `docs/` committed | No cloud; visible process |
+| Linear / Jira | GitHub Issues via `gh` | Free, next to the code |
+| RPI, PRD-Oriented, Oneshot, Freeform | oneshot, quick, full | PRD/TDD split is overkill for solo work |
+| Separate structure outline and plan | One plan with Phase Overview + details | One phase less |
+| 9 `iterate-*` skills | One `iterate`, also for post-PR fixes | Less duplication, covers the PR loop |
+| One-question-at-a-time checkpoints | Batched rounds with an independence rule and caps | Fewer interruptions |
+| Every artifact reviewed before moving on | Gates only on design and plan | Fewer interruptions |
+| Stop after every implementation phase | Auto-advance unless manual verification is needed | Fewer interruptions |
+| Checks trusted from the agent's report | Enforced by a `SubagentStop` hook | Reliability |
+| User remembers the next skill | `/loom:next` computes and runs it | Less friction |
+| Artifacts gitignored | Working artifacts ignored, knowledge committed | Clean repo + visible process |
+| "Only use when invoked by name" in description | `disable-model-invocation: true` | Enforced, saves context |
+| — | `backlog`, `finish-task`, `setup` with CI and ruleset, evals | Full lifecycle, tested harness |
+
+---
+
+## 23. Roadmap and Out of Scope
+
+### 23.1 v1.1 (planned)
+
+- **Observability:** `SubagentStart`/`SubagentStop` hooks append one line per subagent run (agent, phase, duration, result) to `<task dir>/events.jsonl`. `describe-pr` adds a "Process metrics" line to the task summary.
+- **Docs freshness gate:** `loom-state --docs` flags paths in `overview.md` and ADRs that no longer exist and modules added since the last summary; `describe-pr` asks to address them.
+- **PR layout:** "Why" in one sentence, 1–3 "Special things to note", and a "Change outline" (file tree or interface `diff`).
+
+### 23.2 Deferred, needs a separate discussion
+
+- **Onboarding existing repositories:** how loom adopts a project that already has code, docs, CI, and conventions (drafting `overview.md` and `conventions.md` from the code, reusing existing docs, migrating existing branches and issues). v1 targets new projects; `setup` on an existing repository only adds config, checks, and empty doc skeletons.
+
+### 23.3 Out of scope
+
+- Git worktrees and parallel tasks.
+- Monorepos with multiple stacks.
+- Agents other than Claude Code.
+- Linear / Jira.
+- pre-commit hooks, Dependabot, coverage reports.
+- Sync of `.loom/` between machines.
+
+---
+
+## 24. Open Topics and Items to Verify
+
+### 24.1 Open topics
+
+- Exact prompt texts for each skill and agent (ported from HumanLayer, adapted to this spec).
+- Content of `_shared/*.md` and `final-answer.md`.
+
+### 24.2 To verify against current Claude Code docs during implementation
+
+- Syntax for running a command inside `SKILL.md` and injecting its output (`` !`…` ``), and which variables (`${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SKILL_DIR}`) expand in skill content.
+- Skill frontmatter fields `model` and `effort`.
+- `SubagentStop` matcher on a plugin agent name and the exit-code-2 behavior for subagents.
+- Whether a plugin's `bin/` directory is added to the Bash `PATH` (if yes, `loom-state` can move to `bin/`).
+- `claude plugin eval` scenario format and available graders.
+- GitHub rulesets availability on the free plan for public repositories.
