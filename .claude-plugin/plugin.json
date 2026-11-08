@@ -1,0 +1,19 @@
+{
+  "name": "loom",
+  "version": "0.1.0",
+  "description": "Structured, agent-driven development for Claude Code: Research, Plan, Implement, with GitHub Issues as the backlog and a full git flow from issue to squash merge.",
+  "author": {
+    "name": "Vlad"
+  },
+  "homepage": "https://github.com/mmosvlad1/loom",
+  "repository": "https://github.com/mmosvlad1/loom",
+  "license": "Apache-2.0",
+  "keywords": [
+    "workflow",
+    "research-plan-implement",
+    "github",
+    "git-flow",
+    "planning",
+    "hooks"
+  ]
+}

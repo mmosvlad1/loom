@@ -1,0 +1,14 @@
+{
+  "name": "loom",
+  "owner": {
+    "name": "Vlad"
+  },
+  "description": "Marketplace for loom, a Claude Code plugin for structured Research, Plan, Implement development.",
+  "plugins": [
+    {
+      "name": "loom",
+      "source": "./",
+      "description": "Structured, agent-driven development: Research, Plan, Implement, from GitHub issue to squash merge."
+    }
+  ]
+}
