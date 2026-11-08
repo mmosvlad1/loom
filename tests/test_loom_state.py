@@ -59,6 +59,35 @@ class ConfigTest(RepoTestCase):
         self.assertTrue(s["onMain"])
 
 
+class TodayTest(RepoTestCase):
+    """`today` gives skills the date without a `date` command injection."""
+
+    def test_today_on_main_and_on_a_task_branch(self):
+        import datetime
+        today = datetime.date.today().isoformat()
+        proc = run_loom_state(self.repo, "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        data = json.loads(proc.stdout)
+        self.assertIsNone(data["task"])
+        self.assertEqual(data["today"], today)
+        git(self.repo, "switch", "-q", "-c", "feat/42-auth-flow")
+        self.ticket(self.task_dir("42-auth-flow"))
+        data = json.loads(run_loom_state(self.repo).stdout)
+        self.assertEqual(data["task"]["number"], 42)
+        self.assertEqual(data["today"], today)
+
+    def test_today_with_pr(self):
+        import datetime
+        original = ls.fetch_pr
+        ls.fetch_pr = lambda top, cfg: (None, ["gh is not installed; PR state unknown"])
+        self.addCleanup(setattr, ls, "fetch_pr", original)
+        git(self.repo, "switch", "-q", "-c", "feat/42-auth-flow")
+        self.ticket(self.task_dir("42-auth-flow"))
+        s = ls.compute_state(self.repo, with_pr=True)
+        self.assertEqual(s["today"], datetime.date.today().isoformat())
+        self.assertIsNone(s["pr"])
+
+
 class TaskLookupTest(RepoTestCase):
     def test_on_main(self):
         s = self.state()

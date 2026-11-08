@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import datetime
 import fnmatch
 import json
 import os
@@ -851,6 +852,7 @@ def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
     main_branch = cfg["mainBranch"]
     branch = current_branch(top)
     state: Dict[str, Any] = {
+        "today": datetime.date.today().isoformat(),
         "branch": branch,
         "mainBranch": main_branch,
         "onMain": branch == main_branch,
@@ -999,7 +1001,55 @@ def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
     impl = state.get("implementation") or {}
     artifacts = state.get("artifacts") or []
 
-    # Row 3: dirty working tree or an implementation phase in progress.
+    # The plan gate after implementation started: a plan changed by
+    # /loom:iterate (draft while the edit runs, then in-review) must be
+    # finished and approved again before anything else happens.
+    started = bool(
+        impl.get("blocked") or impl.get("inProgress") or (impl.get("done") or 0) > 0
+        or any(p.get("status") != "pending" for p in impl.get("phases") or [])
+    )
+    plan = next((a for a in artifacts if a.get("phase") == "plan"), None)
+    plan_reopened = (
+        started
+        and task.get("mode") != "oneshot"
+        and plan is not None
+        and plan.get("status") != "approved"
+    )
+
+    # Row 3: a blocked artifact, or a blocked implementation phase while the
+    # plan gate holds (plan approved, no plan, or oneshot). /loom:iterate
+    # handles it, also when its unfinished fix leaves the tree dirty.
+    for art in artifacts:
+        if art.get("status") == "blocked":
+            return _next("/loom:iterate <fix>", "%s is blocked" % art.get("file"))
+    blocked = impl.get("blocked")
+    if blocked and not plan_reopened:
+        reason = blocked.get("reason") or "no reason recorded"
+        return _next(
+            "/loom:iterate <fix>",
+            "implementation phase %s is blocked: %s" % (blocked.get("phase"), reason),
+        )
+
+    # Row 4: implementation started and the plan is not approved (a plan
+    # change), with or without a blocked phase, also with a dirty tree.
+    # Comes before the dirty tree (row 5), PR routing (row 8), and
+    # describe-pr (row 9). Order: draft, open questions, approve.
+    if plan_reopened:
+        prefix = (
+            "implementation phase %s is blocked; " % blocked.get("phase") if blocked
+            else "implementation started; "
+        )
+        open_q = plan.get("openQuestions") or 0
+        if plan.get("status") == "draft":
+            return _next("/loom:iterate <feedback>", prefix + "04-plan.md edit not finished (draft)")
+        if open_q > 0:
+            return _next("/loom:iterate <answers>", prefix + "04-plan.md has %d open questions" % open_q)
+        return _next(
+            "/loom:iterate approve",
+            prefix + "04-plan.md is %s and must be approved first" % (plan.get("status") or "without status"),
+        )
+
+    # Row 5: dirty working tree or an implementation phase in progress.
     if state.get("workingTree") == "dirty":
         return _next("/loom:implement", "working tree has uncommitted changes (resume flow)")
     if impl.get("inProgress"):
@@ -1008,19 +1058,34 @@ def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
             "implementation phase %s is in progress (resume flow)" % impl["inProgress"],
         )
 
-    # Row 4: anything blocked.
-    for art in artifacts:
-        if art.get("status") == "blocked":
-            return _next("/loom:iterate <fix>", "%s is blocked" % art.get("file"))
-    blocked = impl.get("blocked")
-    if blocked:
-        reason = blocked.get("reason") or "no reason recorded"
-        return _next(
-            "/loom:iterate <fix>",
-            "implementation phase %s is blocked: %s" % (blocked.get("phase"), reason),
-        )
+    mode = task.get("mode")
+    valid_mode = mode in MODES
+    arts = {a.get("phase"): a for a in artifacts}
+    notes = _phase_notes(arts, mode) if valid_mode else ""
+    gates = [arts[p] for p in GATES_BY_MODE[mode] if p in arts] if valid_mode else []
 
-    # Row 5: pull request routing (section 6.2).
+    # Gate work beats PR routing and "all phases done": a design or plan that
+    # went back to review (e.g. a plan change after the PR) is never skipped.
+    # Rows 6 and 7 consider only gates in review: an approved gate is done,
+    # and a draft gate before implementation is unfinished, so row 11 reruns
+    # its phase (after implementation started, row 4 handles a draft plan).
+    # Row 6: a gate artifact has open questions.
+    for gate in gates:
+        if gate.get("status") == "in-review" and (gate.get("openQuestions") or 0) > 0:
+            return _next(
+                "/loom:iterate <answers>",
+                "%s has %d open questions%s" % (gate.get("phase"), gate["openQuestions"], notes),
+            )
+
+    # Row 7: a gate artifact is in review with no open questions.
+    for gate in gates:
+        if gate.get("status") == "in-review":
+            return _next(
+                "/loom:iterate approve",
+                "%s is in review with no open questions%s" % (gate.get("phase"), notes),
+            )
+
+    # Row 8: pull request routing (section 6.2).
     pr = state.get("pr")
     if isinstance(pr, dict):
         routed = _route_pr(pr)
@@ -1033,39 +1098,16 @@ def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
             "/loom:finish-task checks it before merging" % task["pr"],
         )
 
-    # Row 6: all implementation phases done.
+    # Row 9: all implementation phases done.
     total = impl.get("total") or 0
     done = impl.get("done") or 0
     if total > 0 and done >= total:
         return _next("/loom:describe-pr", "all %d implementation phases are done" % total)
 
-    mode = task.get("mode")
-    if mode not in MODES:
+    if not valid_mode:
         return _next("/loom:iterate", "%s has no valid mode; set it with a mode change" % TICKET_FILE)
 
-    arts = {a.get("phase"): a for a in artifacts}
-    notes = _phase_notes(arts, mode)
-    gates = [arts[p] for p in GATES_BY_MODE[mode] if p in arts]
-
-    # Rows 7 and 8 consider only gates in review: an approved gate is done,
-    # and a draft gate is unfinished, so row 10 reruns its phase.
-    # Row 7: a gate artifact has open questions.
-    for gate in gates:
-        if gate.get("status") == "in-review" and (gate.get("openQuestions") or 0) > 0:
-            return _next(
-                "/loom:iterate <answers>",
-                "%s has %d open questions%s" % (gate.get("phase"), gate["openQuestions"], notes),
-            )
-
-    # Row 8: a gate artifact is in review with no open questions.
-    for gate in gates:
-        if gate.get("status") == "in-review":
-            return _next(
-                "/loom:iterate approve",
-                "%s is in review with no open questions%s" % (gate.get("phase"), notes),
-            )
-
-    # Row 9: plan approved (or oneshot) and implementation phases left.
+    # Row 10: plan approved (or oneshot) and implementation phases left.
     plan = arts.get("plan")
     if mode == "oneshot" or (plan and plan.get("status") == "approved"):
         if total == 0 or done < total:
@@ -1075,7 +1117,7 @@ def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
                 reason = "implementation not started"
             return _next("/loom:implement", reason + notes)
 
-    # Row 10: the next missing phase for the mode. Non-gate artifacts never
+    # Row 11: the next missing phase for the mode. Non-gate artifacts never
     # block: a later phase that already exists wins over an earlier one.
     sequence = PHASES_BY_MODE[mode]
     reached = -1

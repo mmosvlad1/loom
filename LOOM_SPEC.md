@@ -71,7 +71,7 @@ License: loom is Apache-2.0. It keeps HumanLayer's `LICENSE` and adds a `NOTICE`
 
 1. **Research describes, never prescribes.** Research documents only what exists today: where, how, and how components interact. No recommendations, critique, or proposals.
 2. **Research is blind to intent (full mode).** Research questions must not leak what will be built ("how does X work", never "how should we build Y"). In full mode the research phase reads the questions, not the ticket.
-3. **The human resolves design questions.** The agent may recommend an option. It never closes a design question itself, except under the round cap rule (§12.5).
+3. **The human resolves design questions.** The agent may recommend an option. It never closes a design question itself, except under the round cap rule (§12.5) and when the user repeats `approve` (`/loom:iterate approve approve`, §9.8), which takes the recommendations of the open questions.
 4. **Vertical slices.** A plan is split into phases that each cut across layers and end in something that can be run, queried, or tested.
 5. **Artifacts are the only hand-off.** Each phase starts in a fresh session and reads the previous artifacts.
 6. **Later phases win.** When artifacts disagree, the artifact of the later phase controls (order: ticket → research-questions → research → design → plan). For current behavior, the code is the source of truth.
@@ -219,7 +219,7 @@ A mode change is allowed **only before `implement` starts**. After that, a diffe
 | Change | Effect |
 |---|---|
 | oneshot → quick | Adds research and plan |
-| oneshot → full / quick → full | Existing `02-research.md` is renamed `02-research.superseded.md`, because it read the ticket. Research is redone blind: research-questions first, then a new research. |
+| oneshot → full / quick → full | Existing `02-research.md` is renamed `02-research.superseded.md`, because it read the ticket. An existing `04-plan.md` is renamed `04-plan.superseded.md`, because it builds on that research and has no design. Research is redone blind: research-questions first, then a new research. |
 | full → quick | Remaining phases skip design; existing artifacts stay valid |
 | any → oneshot | Allowed only if no plan exists |
 
@@ -338,6 +338,7 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 
 ```json
 {
+  "today": "2026-11-08",
   "branch": "feat/42-auth-flow",
   "mainBranch": "main",
   "onMain": false,
@@ -356,6 +357,7 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 }
 ```
 
+- `today` is the local date (`YYYY-MM-DD`). Skills use it for `updated` instead of injecting a `date` command (§9.0).
 - `task` is `null` when the branch matches no task directory. `artifacts` lists only existing files of 01–04 (the ticket is reported through `task`; `*.superseded.md` files are ignored).
 - `implementation.blocked` is `null` or `{ "phase": N, "reason": "…" }`. Phase status is `pending`, `in-progress`, `done`, or `blocked`.
 - `task.size` is `S`, `M`, `L`, or `null`, from the ticket frontmatter.
@@ -388,8 +390,9 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
 
 - All skills set `disable-model-invocation: true`. They run only when invoked as `/loom:<skill>`.
 - Phase skills start by injecting state: `` !`"${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json` `` (verified: `` !`cmd` `` injects command output, and `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SKILL_DIR}` are substituted when the skill loads).
+- Every injected command needs a matching `allowed-tools` rule, or the skill aborts outside auto mode (§24.2). Phase skills set `allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json) Bash(loom-state --json) Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` (`iterate`: the injected command is `… --json --pr`). Only the injection line uses the full path; every Bash call in a skill body uses the bare `loom-state --json` (`bin/` is on the Bash `PATH`), which matches the §19.3 allowlist. The `Read` rule lets the skill read its shared snippets and templates, which lie outside the project's working directory. The grant lasts one turn, so skills read these files before they ask the user anything. Skills inject nothing else; the date comes from `loom-state` → `today`.
 - Skills spawn agents by their namespaced name: `loom:codebase-locator`, etc.
-- Model and effort per skill (values to tune; frontmatter support to verify, §24):
+- Model and effort per skill (values to tune), set as the skill frontmatter fields `model` and `effort` (verified, §24.2). `default` means the `effort` field is omitted, so the session's effort level applies:
 
 | Skill | Model | Effort |
 |---|---|---|
@@ -504,9 +507,10 @@ The single skill for changing anything that already exists. It detects the targe
 | Open round, argument has answers | Records answers (§12.4), rewrites affected sections, generates the next round or closes questions |
 | Open round, empty argument or `ok` | Accepts all recommendations of the current round |
 | Feedback on an artifact | Edits it, bumps `updated`, keeps `status: in-review` |
-| `approve` | Sets `status: approved`. Refuses while open questions remain, unless the user repeats `approve` |
+| `approve` | Sets `status: approved`. Refuses while open questions remain, unless the user repeats `approve` in the argument (`/loom:iterate approve approve`); the remaining questions then take their recommendations |
+| A blocked implementation phase | Runs the fix loop on it (implementer → checks → reviewer). Not yet committed: commits it as the phase commit and ticks its checkboxes. Already committed: commits a fix commit. Then `done` in `log.md` |
 | Feedback on an implemented phase (before PR) | Runs `loom:implementer` on the fix → checks → reviewer → commit → deviation in `log.md` |
-| Feedback after the plan is approved that changes the plan | Edits the plan, sets it back to `in-review`, marks affected not-done implementation phases as unchecked; done phases stay done and the change is logged as a deviation |
+| Feedback after the plan is approved that changes the plan | Edits the plan (as `draft` while the edit runs, if implementation started; an interrupted edit is finished by the next `iterate`), sets it back to `in-review`, marks affected not-done implementation phases as unchecked; done phases stay done and the change is logged as a deviation |
 | PR open: failing checks or review comments | Post-PR fix path (§6.2) |
 | `rebase` | `git rebase origin/<mainBranch>`, checks, push with `--force-with-lease` (confirmation) |
 | Mode change | §5.3 rules |
@@ -518,6 +522,7 @@ The single skill for changing anything that already exists. It detects the targe
 
 **Start:**
 - Runs `loom-state`. If the working tree is dirty or `log.md` has a phase `in-progress`, offers: resume, stash, or discard.
+- The resume flow does not handle a `blocked` implementation phase. A blocked phase is always handled by `/loom:iterate` (§9.12 rows 3 and 4); `implement` points there.
 
 **Per implementation phase:**
 1. Writes `in-progress` for the phase in `log.md`.
@@ -568,16 +573,17 @@ All steps are idempotent: re-running after a partial failure continues where it 
 |---|---|---|
 | 1 | On `main` | suggest `/loom:backlog` or `/loom:start-task #n` |
 | 2 | Branch matches no task, or task archived | suggest `/loom:start-task #n` (restore if archived) |
-| 3 | Dirty tree or `log.md` phase `in-progress` | run `implement` (resume flow) |
-| 4 | Any artifact has `blocked` | show the reason; suggest `/loom:iterate <fix>` |
-| 5 | PR open | PR routing table §6.2 |
-| 6 | All implementation phases done | `/loom:describe-pr` |
-| 7 | Gate artifact (design/plan) has open questions | `/loom:iterate <answers>` |
-| 8 | Gate artifact `in-review`, no open questions | `/loom:iterate approve` |
-| 9 | Plan approved (or oneshot), phases left | run `implement` |
-| 10 | Otherwise | run the next missing phase for the mode |
+| 3 | Any artifact has `blocked`, or an implementation phase is `blocked` and the plan gate holds (`04-plan.md` approved or missing, or oneshot) — also with a dirty tree | show the reason; suggest `/loom:iterate <fix>` |
+| 4 | Implementation started (`log.md` has a phase entry, or a plan phase is ticked), not oneshot, and `04-plan.md` exists and is not `approved` (a plan change) — with or without a blocked phase, also with a dirty tree | `/loom:iterate <feedback>` if the plan is `draft` (plan edit not finished); else `/loom:iterate <answers>` if it has open questions; else `/loom:iterate approve` |
+| 5 | Dirty tree or `log.md` phase `in-progress` | run `implement` (resume flow) |
+| 6 | Gate artifact (design/plan) `in-review` with open questions | `/loom:iterate <answers>` |
+| 7 | Gate artifact `in-review`, no open questions | `/loom:iterate approve` |
+| 8 | PR open | PR routing table §6.2 |
+| 9 | All implementation phases done | `/loom:describe-pr` |
+| 10 | Plan approved (or oneshot), phases left | run `implement` |
+| 11 | Otherwise | run the next missing phase for the mode |
 
-Non-gate artifacts (research-questions, research) never block row 10. If research is `in-review`, `next` prints "research not reviewed" and continues. If research is stale, it warns and offers to rerun research.
+Gate work (rows 6 and 7) comes before PR routing and "all implementation phases done": a design or plan that went back to review, for example after a plan change on an open PR, is never skipped. Before implementation starts, a `draft` gate artifact is unfinished work and falls to row 11, which reruns its phase (`/loom:plan` overwrites a draft plan). After implementation started, a draft or in-review plan is a plan change and row 4 handles it, before the dirty tree, PR routing, and describe-pr. Non-gate artifacts (research-questions, research) never block row 11. If research is `in-review`, `next` prints "research not reviewed" and continues. If research is stale, it warns and offers to rerun research.
 
 ---
 
@@ -753,7 +759,7 @@ The ticket frontmatter has instead: `mode`, `size` (`S`|`M`|`L`, optional, copie
 | `04-plan.md` | draft → in-review → approved | skill / iterate | implement |
 | `log.md` | per phase: in-progress / done / blocked | implement | — |
 
-A skill writes `draft` while it works and `in-review` when it finishes. Only `iterate approve` sets `approved`.
+A skill writes `draft` while it works and `in-review` when it finishes. `iterate` also writes `draft` on `04-plan.md` while it changes the plan after implementation started. Only `iterate approve` sets `approved`.
 
 ### 13.2 Working artifacts (`.loom/tasks/<n>-<slug>/`)
 
@@ -944,7 +950,7 @@ docs/
 |---|---|
 | Local commits, rebase, `git branch -D` of a merged task branch | No |
 | `git push` (including `--force-with-lease` on a task branch) | Yes |
-| `gh pr create`, `gh pr merge` | Yes |
+| `gh pr create`, `gh pr edit`, `gh pr merge` | Yes |
 | `gh issue create` | Yes |
 | Repo settings, labels, ruleset (`gh api`, `gh label create`) | Yes |
 
@@ -1072,8 +1078,9 @@ Every component reads `mainBranch`, `workDir`, and `docsDir` from this file. Non
   - `git status`, `git diff`, `git log`, `git add`, `git commit`, `git switch`, `git pull`, `git fetch`, `git rebase`, `git stash`, `git branch`
   - `make *` (or the stack's check commands)
   - `gh issue view`, `gh issue list`, `gh pr view`, `gh pr checks`, `gh run view`
+  - `loom-state --json`, `loom-state --json --pr` (the skills' `allowed-tools` grant lasts only one turn, §24.2; this keeps the `Next:` call from asking after the user answered a question)
   - `mv` inside `.loom/`
-- **Not** allowlisted (always asked): `git push`, `gh pr create`, `gh pr merge`, `gh issue create`, `gh label create`, `gh api`.
+- **Not** allowlisted (always asked): `git push`, `gh pr create`, `gh pr edit`, `gh pr merge`, `gh issue create`, `gh label create`, `gh api`.
 
 ---
 
@@ -1167,17 +1174,27 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
 ### 24.1 Open topics
 
 - Exact prompt texts for each skill and agent (ported from HumanLayer, adapted to this spec).
+- Inline PR review comments: `gh pr view --comments` shows PR comments and review summaries, not inline review comments on code lines. The post-PR fix path in `iterate` does not read them yet; reading them needs `gh api`, which always asks for confirmation (§19.3).
 - Content of `_shared/*.md` and `final-answer.md`.
 
 ### 24.2 To verify against current Claude Code docs during implementation
 
 Still open:
 
-- Skill frontmatter fields `model` and `effort`.
 - `SubagentStop` matcher value for a namespaced plugin agent (`loom:implementer` vs `implementer`) — to confirm in milestone M4.
 - `claude plugin eval` scenario format and available graders.
 - GitHub rulesets availability on the free plan for public repositories.
 - How the `statusLine` in `.claude/settings.json` references `loom-state`: `bin/` is documented on the Bash tool's `PATH` only, and `${CLAUDE_PLUGIN_ROOT}` is not documented for settings.
+
+Resolved (milestone M3):
+
+- **Skill frontmatter `model` and `effort`** (https://code.claude.com/docs/en/skills, frontmatter reference): both are supported. `model` accepts the values of `/model` (aliases such as `sonnet`, `opus`, `haiku`, or a full model ID) or `inherit`; it applies for the rest of the current turn. `effort` accepts `low`, `medium`, `high`, `xhigh`, `max` (available levels depend on the model); omitted, the normal effort resolution applies. There is no `default` value, so §9.0 `default` means the field is omitted. An unknown frontmatter field is ignored without an error, so `tests/test_skills.py` checks the field names and values against §9.0.
+- **Skill command injection** (same page, "Inject dynamic context"): a failing `` !`cmd` `` (non-zero exit) aborts the whole skill invocation with `Shell command failed for pattern "..."`. Injected commands never prompt: each is checked against the permission rules first. Outside auto mode, any result other than allow (a deny or ask rule, or no matching rule) aborts the invocation with `Shell command permission check failed for pattern "..."`. `allowed-tools` pre-approves a command for the invoking turn; deny and ask rules still override it. In auto mode an unmatched command does not abort; Claude runs it itself. `allowed-tools` accepts a space- or comma-separated string or a YAML list; `${CLAUDE_PLUGIN_ROOT}` is substituted in its Bash rules for plugin skills.
+  - Verified live (Claude Code 2.1.318, `claude -p --plugin-dir . --permission-mode default --setting-sources project,local`, fixture repository): without `allowed-tools`, `/loom:research` aborted with `Shell command permission check failed for pattern "!`"/…/loom"/bin/loom-state --json`": This command requires approval`. With `allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json)`, the injection ran and the skill received the state JSON. The quoted form matches the rule as written. `/loom:iterate` with the `… --json --pr` rule rendered too. A Bash call of the bare `loom-state --json` (as `final-answer.md` writes it) ran without a prompt under `Bash(loom-state --json)`.
+  - Also verified live: in default mode, `Read` of the plugin's `skills/` files is denied ("Path is outside allowed working directories") unless allowed; `Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` (an absolute-path rule, `//…` after substitution) allows it.
+  - `loom-state` exits 0 outside a loom project, so the injection does not fail there; skills treat empty state as "not a loom project".
+  - **Turn scope:** the `allowed-tools` grant lasts only until the user's next message. After a skill asks the user something (overwrite or rerun, fix items, push, rebase conflicts), plugin-file reads and `loom-state` calls fall back to the normal permission rules. Skills therefore read all plugin files (shared snippets, template) before the first question, and `setup` allowlists `loom-state` (§19.3).
+  - **Not documented:** the docs describe `${CLAUDE_PLUGIN_ROOT}` substitution in the Bash rules of `allowed-tools` only. Its substitution in the `Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` rule was seen live (see "Also verified live" above) but is not documented. An M6 eval in default permission mode must cover it.
 
 Resolved (milestone M1):
 

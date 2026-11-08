@@ -1,6 +1,6 @@
 # Final Answer Format
 
-End every skill with this message format and nothing else. The user reads it to decide the next command. Apply the writing style strictly (`${CLAUDE_PLUGIN_ROOT}/skills/_shared/writing-style.md`).
+End every skill with this message format and nothing else. The user reads it to decide the next command. Apply the writing style strictly (the shared `writing-style.md`, next to this file).
 
 ## Format
 
@@ -23,7 +23,7 @@ Optional lines, in this order, between `Open questions` and `Next`:
 - **Artifact**: the path relative to the repository root, e.g. `.loom/tasks/42-auth-flow/03-design.md`. A skill that writes no artifact replaces the `Artifact` and `Status` lines with one `Result:` line (e.g. the PR URL, or the merged commit).
 - **Status**: the frontmatter `status` (`draft`, `in-review`, `approved`). For `implement`, the progress: `implementation phase 2 of 3 done (d4e5f6)` or `implementation phase 2 blocked: <reason>`.
 - **Open questions**: the number of `**Q<n>.` items under `## Open Questions`, as `loom-state` reports it. Add the round for design and plan: `3 (round 1 of ~3)`. Write `0` when none are open. Omit the line when the skill writes no artifact.
-- **Next**: compute it, do not remember it. Run `"${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json` after your last write and read `next.command`:
+- **Next**: compute it, do not remember it. Run `loom-state --json` (the plugin's `bin/` is on the Bash `PATH`) after your last write and read `next.command`:
   - `/loom:iterate …` (open round, approval, fix): write the command; it continues in this session.
   - `/loom:describe-pr` or `/loom:finish-task`: write `/clear, then /loom:describe-pr` (or `/loom:finish-task`).
   - Any other command: write `/clear, then /loom:next`.

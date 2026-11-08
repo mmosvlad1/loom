@@ -99,7 +99,7 @@ A skill may also ask the questions of the current round with the interactive que
    - questions of the current round that are still open
 4. If no open question affects the plan, end the rounds: write `None.` under `## Open Questions`.
 5. Change `updated` in the frontmatter. Keep `status: in-review`.
-6. End with the final answer (`${CLAUDE_PLUGIN_ROOT}/skills/_shared/final-answer.md`), including the open questions count.
+6. End with the final answer (the shared `final-answer.md`, next to this file), including the open questions count.
 
 ## How many rounds
 
@@ -111,7 +111,7 @@ Rounds end when no open question affects the plan, not at a fixed count.
 | M | 2-3 | 3 |
 | L | 3-5 | 5 |
 
-- Read the size from `task.size` in `"${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json` (validated there; start-task copies it from the `size:*` label). If it is `null`, use the size that matches the mode: quick → M, full → L.
+- Read the size from `task.size` in the `loom-state --json` output (validated there; start-task copies it from the `size:*` label). If it is `null`, use the size that matches the mode: quick → M, full → L.
 - The caps come from `.claude/loom.json` → `rounds.cap` (defaults above).
 - For `~M` in the design heading, use the upper bound of the expected range (S → 2, M → 3, L → 5).
 
