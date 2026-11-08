@@ -1,0 +1,17 @@
+loom
+Copyright 2026 Vlad (mmosvlad1)
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes material derived from HumanLayer
+(https://github.com/humanlayer/humanlayer), licensed under the Apache
+License, Version 2.0:
+
+  - The prompts in agents/ are adapted from HumanLayer's subagent
+    definitions (apps/riptide-daemon/src/agents/claudecode/agents/).
+  - The Research-Plan-Implement workflow, the skills, and the shared
+    snippets in skills/_shared/ are derived from HumanLayer's
+    riptide-rpi-claude-plugin and show-me skill.
+
+HumanLayer
+Copyright 2025-2026 QueryTale, Inc. d/b/a HumanLayer
