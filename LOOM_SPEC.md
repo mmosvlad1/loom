@@ -342,7 +342,7 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
   "mainBranch": "main",
   "onMain": false,
   "task": { "number": 42, "slug": "auth-flow", "dir": ".loom/tasks/42-auth-flow", "mode": "full",
-            "archived": false, "url": "https://github.com/o/r/issues/42", "pr": null },
+            "size": "L", "archived": false, "url": "https://github.com/o/r/issues/42", "pr": null },
   "artifacts": [
     { "file": "02-research.md", "phase": "research", "status": "in-review", "openQuestions": 0, "stale": false },
     { "file": "03-design.md", "phase": "design", "status": "in-review", "openQuestions": 3, "acceptedByDefault": 0 }
@@ -358,7 +358,8 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 
 - `task` is `null` when the branch matches no task directory. `artifacts` lists only existing files of 01–04 (the ticket is reported through `task`; `*.superseded.md` files are ignored).
 - `implementation.blocked` is `null` or `{ "phase": N, "reason": "…" }`. Phase status is `pending`, `in-progress`, `done`, or `blocked`.
-- `warnings` collects problems that did not stop the computation (unreadable `loom.json`, missing status, failed stale check, `gh` errors).
+- `task.size` is `S`, `M`, `L`, or `null`, from the ticket frontmatter.
+- `warnings` collects problems that did not stop the computation (unreadable `loom.json`, missing status, invalid size, unclosed code fence, failed stale check, `gh` errors).
 - `--line`: one line for the statusline, e.g. `#42 · full · design:in-review · 3 open Q`, `#42 · full · impl 1/3`, or `#42 · archived`. Empty output when there is no task.
 - `--pr`: adds PR state from `gh pr view --json number,state,reviewDecision,statusCheckRollup,mergeStateStatus` as `{ number, state, reviewDecision, checks: passing|failing|pending|none, mergeStateStatus, behindMain }`; `behindMain` is computed with git after `git fetch origin <mainBranch>`. This calls `gh` and the network, so it is not used by the `SessionStart` hook. If `gh` is missing or unauthenticated, or the branch has no PR, `pr` is `null` and a warning is added.
 - `--docs`: reserved for the docs freshness check (§23). In v1 it prints "not implemented in v1" to stderr and exits 2.
@@ -369,6 +370,7 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 - **Config:** reads `.claude/loom.json` at the git top-level; missing keys take the defaults of §19.1.
 - **Statuses:** read from artifact frontmatter (a minimal parser for the §13.1 fields: scalars and inline lists).
 - **Open questions:** numbered `**Q<n>.` items under the latest `## Open Questions` heading; items marked "accepted by default" are counted separately (`acceptedByDefault`).
+- **Code fences:** lines inside fenced code blocks are ignored. Fences follow CommonMark (3+ backticks or tildes; closed only by the same character, at least as long, with nothing after it), except that any indentation is accepted. An unclosed fence adds a warning.
 - **Implementation progress:** read from plan Phase Overview checkboxes and `log.md` headings (§13.2); a `log.md` entry wins over the checkbox of the same phase. oneshot has one implicit phase, tracked only through `log.md`.
 - **Working tree:** `clean` or `dirty`; files under `workDir` are ignored.
 - **Stale research:** `true` when files referenced in `02-research.md` (as `path:line` or `path`) changed on `main` between the research `git_commit` and `merge-base(HEAD, origin/main)`. The task's own commits do not count. Without `origin/<mainBranch>` the local main branch is used. If the check cannot run, `stale` is `false` and a warning is added.
@@ -522,7 +524,7 @@ The single skill for changing anything that already exists. It detects the targe
 2. Launches `loom:implementer` with a short prompt: plan path + phase number (oneshot: ticket path). The implementer never commits.
 3. Checks are enforced by the `SubagentStop` hook (§11.4): the implementer cannot finish while `checks.check` fails.
 4. Launches `loom:implementation-reviewer` (oneshot: compares the diff with the ticket). The verdict has the categories of §10.2. Only `blocking` items go back to the implementer. At most 2 fix attempts; then `blocked: <reason>` in `log.md` and stop.
-5. Commits: `<type>(<scope>): <summary> (#<n>)`, body `Phase N: <name>`.
+5. Commits: `<type>(<scope>): <summary> (#<n>)`, body `Phase N: <name>`; in oneshot mode the body is `Phase 1: oneshot`.
 6. Ticks the phase checkboxes in `04-plan.md` and writes `done` with commit hash, checks result, and deviations to `log.md`.
 7. **Auto-advance** if checks pass, no `blocking` items remain, and the phase lists no manual verification. Otherwise stops with a phase summary and the manual steps.
 
@@ -719,6 +721,8 @@ Rounds end when no open question affects the plan, not at a fixed count.
 | M | 2–3 | 3 |
 | L | 3–5 | 5 |
 
+The size comes from the ticket frontmatter `size` (copied from the `size:*` label); without it, the size matching the mode applies (quick → M, full → L). Caps come from `loom.json` → `rounds.cap`.
+
 After the cap, the remaining minor questions are resolved with the recommendation and marked **"accepted by default — revisit if needed"**. `loom-state` reports their count.
 
 ---
@@ -738,7 +742,7 @@ updated: 2026-11-08
 ---
 ```
 
-The ticket frontmatter has instead: `mode`, `issue`, `url`, `pr` (after describe-pr).
+The ticket frontmatter has instead: `mode`, `size` (`S`|`M`|`L`, optional, copied from the `size:*` label by start-task), `issue`, `url`, `pr` (after describe-pr).
 
 | Artifact | Statuses | Set by | Gate for |
 |---|---|---|---|
@@ -753,7 +757,7 @@ A skill writes `draft` while it works and `in-review` when it finishes. Only `it
 
 ### 13.2 Working artifacts (`.loom/tasks/<n>-<slug>/`)
 
-**`00-ticket.md`** — copy of the issue: title, body, labels, URL. Not edited by agents except frontmatter (`mode`, `pr`).
+**`00-ticket.md`** — copy of the issue: title, body, labels, URL; the `size:*` label is also stored as frontmatter `size`. Not edited by agents except frontmatter (`mode`, `pr`).
 
 **`01-research-questions.md`** (full)
 ```markdown
@@ -788,6 +792,8 @@ A skill writes `draft` while it works and `in-review` when it finishes. Only `it
    - [ ] 1. Fixed-response endpoint, verifiable via curl
    - [ ] 2. Wire to real storage
 ## Open Questions — Round N
+## Resolved Decisions
+   | # | Question | Decision | Rationale | Round | ADR? |
 ## Phase 1: <name>
    ### Goal
    ### Changes

@@ -247,6 +247,79 @@ class ArtifactsAndLineTest(RepoTestCase):
         self.assertEqual(s["next"]["command"], "/loom:iterate")
 
 
+class FenceWarningTest(RepoTestCase):
+    def setUp(self):
+        super().setUp()
+        self.dir = self.task_dir("42-auth-flow")
+        self.ticket(self.dir, mode="full")
+        git(self.repo, "switch", "-q", "-c", "feat/42-auth-flow")
+
+    def test_unclosed_fence_in_artifact_warns(self):
+        self.artifact(self.dir, "03-design.md", "design", "in-review", """
+            ## Proposed Architecture
+            ````text
+            ```
+            ## Open Questions — Round 1 of ~3
+            **Q1. Hidden by the open fence?**
+        """)
+        s = self.state()
+        design = [a for a in s["artifacts"] if a["file"] == "03-design.md"][0]
+        self.assertEqual(design["openQuestions"], 0)
+        self.assertIn("03-design.md has an unclosed code fence; the rest of the file is ignored",
+                      s["warnings"])
+
+    def test_unclosed_fence_in_log_warns(self):
+        write(os.path.join(self.dir, "log.md"), "## Phase 1 — done — abc123\n```\nlog\n")
+        self.assertIn("log.md has an unclosed code fence; the rest of the file is ignored",
+                      self.state()["warnings"])
+
+    def test_closed_fences_do_not_warn(self):
+        self.artifact(self.dir, "03-design.md", "design", "in-review", """
+            ````markdown
+            ```
+            **Q9. Example**
+            ```
+            ````
+            ## Open Questions — Round 1 of ~3
+            **Q1. Real?**
+        """)
+        s = self.state()
+        self.assertFalse([w for w in s["warnings"] if "unclosed" in w])
+        design = [a for a in s["artifacts"] if a["file"] == "03-design.md"][0]
+        self.assertEqual(design["openQuestions"], 1)
+
+
+class TicketSizeTest(RepoTestCase):
+    def setUp(self):
+        super().setUp()
+        self.dir = self.task_dir("42-auth-flow")
+        git(self.repo, "switch", "-q", "-c", "feat/42-auth-flow")
+
+    def write_ticket(self, size_line: str) -> None:
+        write(os.path.join(self.dir, "00-ticket.md"),
+              "---\ntask: 42-auth-flow\nphase: ticket\nmode: quick\n%sissue: 42\n---\n# Ticket\n" % size_line)
+
+    def test_size_is_read(self):
+        self.write_ticket("size: M\n")
+        self.assertEqual(self.state()["task"]["size"], "M")
+
+    def test_size_is_normalized(self):
+        self.write_ticket("size: l\n")
+        self.assertEqual(self.state()["task"]["size"], "L")
+
+    def test_size_is_optional(self):
+        self.write_ticket("")
+        s = self.state()
+        self.assertIsNone(s["task"]["size"])
+        self.assertFalse([w for w in s["warnings"] if "size" in w])
+
+    def test_invalid_size_warns(self):
+        self.write_ticket("size: XL\n")
+        s = self.state()
+        self.assertIsNone(s["task"]["size"])
+        self.assertTrue([w for w in s["warnings"] if "invalid size" in w])
+
+
 class WorkingTreeTest(RepoTestCase):
     def setUp(self):
         super().setUp()

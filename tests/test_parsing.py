@@ -97,6 +97,112 @@ class OpenQuestionsTest(unittest.TestCase):
         """)
         self.assertEqual(ls.count_open_questions(body), 2)
 
+    def test_four_backtick_fence_with_inner_block(self):
+        body = dedent("""
+            ## Open Questions — Round 1
+            **Q1. Real?**
+            ````markdown
+            ```markdown
+            **Q7. Example only**
+            ```
+            ## Open Questions — Round 9
+            **Q8. Example only**
+            ````
+            **Q2. Also real?**
+        """)
+        self.assertEqual(ls.count_open_questions(body), 2)
+
+    def test_tilde_fence_with_inner_backtick_block(self):
+        body = dedent("""
+            ## Open Questions — Round 1
+            **Q1. Real?**
+            ~~~markdown
+            ```
+            **Q7. Example only**
+            ```
+            ## Open Questions — Round 9
+            **Q8. Example only**
+            ~~~
+            **Q2. Also real?**
+        """)
+        self.assertEqual(ls.count_open_questions(body), 2)
+
+    def test_backtick_fence_not_closed_by_tildes_or_shorter_run(self):
+        body = dedent("""
+            ## Open Questions — Round 1
+            ````
+            ~~~~
+            ```
+            **Q7. Example only**
+            ````
+            **Q1. Real?**
+            **Q2. Also real?**
+        """)
+        self.assertEqual(ls.count_open_questions(body), 2)
+
+    def test_closing_fence_needs_nothing_after_the_run(self):
+        body = dedent("""
+            ## Open Questions — Round 1
+            ```
+            ``` not a closing fence
+            **Q7. Example only**
+            ```
+            **Q1. Real?**
+            **Q2. Also real?**
+        """)
+        self.assertEqual(ls.count_open_questions(body), 2)
+
+    def test_longer_run_closes_fence(self):
+        body = dedent("""
+            ## Open Questions — Round 1
+            ~~~
+            **Q7. Example only**
+            ~~~~~
+            **Q1. Real?**
+        """)
+        self.assertEqual(ls.count_open_questions(body), 1)
+
+    def test_indented_fence_in_list_item_is_recognized(self):
+        # Lenient on purpose: CommonMark allows at most 3 spaces of indentation,
+        # loom-state accepts any, so fences nested in list items are code.
+        body = dedent("""
+            ## Open Questions — Round 1
+            - Example:
+                ```markdown
+                **Q7. Example only**
+                ```
+            **Q1. Real?**
+        """)
+        self.assertEqual(ls.count_open_questions(body), 1)
+
+    def test_indented_close_matches_unindented_open(self):
+        body = dedent("""
+            ## Open Questions — Round 1
+            ```
+            **Q7. Example only**
+                    ```
+            **Q1. Real?**
+        """)
+        self.assertEqual(ls.count_open_questions(body), 1)
+
+    def test_unclosed_fence_detection(self):
+        self.assertFalse(ls.has_unclosed_fence("```\ncode\n```\ntext\n"))
+        self.assertFalse(ls.has_unclosed_fence("no fences\n"))
+        self.assertTrue(ls.has_unclosed_fence("````\n```\ncode\n```\n"))
+        self.assertTrue(ls.has_unclosed_fence("~~~\ntext\n```\n"))
+
+    def test_fenced_accepted_by_default_is_not_counted(self):
+        body = dedent("""
+            ````markdown
+            ```
+            accepted by default — revisit if needed
+            ```
+            accepted by default — revisit if needed
+            ````
+            Q3 accepted by default — revisit if needed
+        """)
+        self.assertEqual(ls.count_accepted_by_default(body), 1)
+
     def test_subheadings_do_not_end_section(self):
         body = "## Open Questions — Round 1\n### Storage\n**Q1. A?**\n### API\n**Q2. B?**\n"
         self.assertEqual(ls.count_open_questions(body), 2)
