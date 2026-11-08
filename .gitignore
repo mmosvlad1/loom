@@ -1,2 +1,4 @@
 .DS_Store
 .loom/
+__pycache__/
+*.pyc

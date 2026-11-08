@@ -140,17 +140,21 @@ loom/
 │   ├── web-search-researcher.md
 │   ├── implementer.md
 │   └── implementation-reviewer.md
+├── bin/
+│   └── loom-state                  # §8; on the Bash tool's PATH while the plugin is enabled
 ├── hooks/
 │   └── hooks.json
 ├── scripts/
-│   ├── loom-state                  # §8
-│   ├── session-start.sh
-│   ├── guard-main.sh
-│   ├── block-output-filtering.sh
-│   ├── subagent-checks.sh
-│   └── stop-lint.sh
+│   └── hooks/
+│       ├── loomhook.py             # shared helpers: hook input, shell parsing, loads bin/loom-state
+│       ├── session_start.py        # §11.1
+│       ├── guard_main.py           # §11.2
+│       ├── block_output_filtering.py  # §11.3
+│       ├── subagent_checks.py      # §11.4 (milestone M4)
+│       └── stop_lint.py            # §11.5 (milestone M4)
 ├── evals/                          # §20
-├── tests/                          # unit tests for loom-state and hook scripts
+├── tests/                          # unit tests for loom-state and hook scripts (stdlib unittest)
+├── Makefile                        # test, validate, check
 ├── LICENSE
 ├── NOTICE
 └── README.md
@@ -158,6 +162,9 @@ loom/
 
 - Only skills that produce an artifact have a `template.md`.
 - Skills address their own files relative to the skill directory, and shared files through `${CLAUDE_PLUGIN_ROOT}/skills/_shared/…` (no `{SKILLBASE}` placeholder).
+- `skills/`, `agents/`, `hooks/hooks.json`, and `bin/` at the plugin root are discovered automatically; `plugin.json` needs no paths for them.
+- `bin/` executables are on the Bash tool's `PATH` while the plugin is enabled. This is not documented for hooks, so hooks and skill injections reference it by its full path, `"${CLAUDE_PLUGIN_ROOT}"/bin/loom-state` (the Python hooks import that file).
+- Hook scripts and `loom-state` are Python 3.9+ with the standard library only (the stock macOS `python3`).
 
 ### 4.2 Project-side footprint
 
@@ -323,42 +330,53 @@ One deterministic script computes the task state. Every component that needs "wh
 
 ### 8.2 Interface
 
-`${CLAUDE_PLUGIN_ROOT}/scripts/loom-state [--json | --line | --pr | --docs]`
+`${CLAUDE_PLUGIN_ROOT}/bin/loom-state [--json | --line] [--pr] [--docs]`
+
+The script is a silent no-op (exit 0, no output) outside a git repository and in a repository without `.claude/loom.json`.
 
 `--json` (default) output:
 
 ```json
 {
   "branch": "feat/42-auth-flow",
+  "mainBranch": "main",
   "onMain": false,
-  "task": { "number": 42, "slug": "auth-flow", "dir": ".loom/tasks/42-auth-flow", "mode": "full" },
+  "task": { "number": 42, "slug": "auth-flow", "dir": ".loom/tasks/42-auth-flow", "mode": "full",
+            "archived": false, "url": "https://github.com/o/r/issues/42", "pr": null },
   "artifacts": [
     { "file": "02-research.md", "phase": "research", "status": "in-review", "openQuestions": 0, "stale": false },
     { "file": "03-design.md", "phase": "design", "status": "in-review", "openQuestions": 3, "acceptedByDefault": 0 }
   ],
-  "implementation": { "total": 3, "done": 1, "blocked": null },
+  "implementation": { "total": 3, "done": 1, "inProgress": null, "blocked": null,
+                      "phases": [ { "number": 1, "status": "done", "commit": "d4e5f6" } ] },
   "workingTree": "clean",
   "pr": null,
-  "next": { "command": "/loom:iterate", "reason": "design has 3 open questions" }
+  "next": { "command": "/loom:iterate <answers>", "reason": "design has 3 open questions" },
+  "warnings": []
 }
 ```
 
-- `--line`: one line for the statusline, e.g. `#42 · full · design:in-review · 3 open Q`.
-- `--pr`: adds PR state (number, checks, review decision, behind main). This calls `gh` and the network, so it is not used by the `SessionStart` hook.
-- `--docs`: reserved for the docs freshness check (§23).
+- `task` is `null` when the branch matches no task directory. `artifacts` lists only existing files of 01–04 (the ticket is reported through `task`; `*.superseded.md` files are ignored).
+- `implementation.blocked` is `null` or `{ "phase": N, "reason": "…" }`. Phase status is `pending`, `in-progress`, `done`, or `blocked`.
+- `warnings` collects problems that did not stop the computation (unreadable `loom.json`, missing status, failed stale check, `gh` errors).
+- `--line`: one line for the statusline, e.g. `#42 · full · design:in-review · 3 open Q`, `#42 · full · impl 1/3`, or `#42 · archived`. Empty output when there is no task.
+- `--pr`: adds PR state from `gh pr view --json number,state,reviewDecision,statusCheckRollup,mergeStateStatus` as `{ number, state, reviewDecision, checks: passing|failing|pending|none, mergeStateStatus, behindMain }`; `behindMain` is computed with git after `git fetch origin <mainBranch>`. This calls `gh` and the network, so it is not used by the `SessionStart` hook. If `gh` is missing or unauthenticated, or the branch has no PR, `pr` is `null` and a warning is added.
+- `--docs`: reserved for the docs freshness check (§23). In v1 it prints "not implemented in v1" to stderr and exits 2.
 
 ### 8.3 Rules
 
-- **Task lookup:** branch `^(feat|fix|chore|docs|refactor)/(\d+)-(.+)$` → issue number → task directory `.loom/tasks/<n>-*` (matched by number, so an edited issue title does not break it). If not found, it also looks in `_archive/` and reports `archived: true`.
-- **Config:** reads `mainBranch` and `workDir` from `.claude/loom.json`.
-- **Statuses:** read from artifact frontmatter.
-- **Implementation progress:** read from plan checkboxes and `log.md` entries (§13.2).
-- **Stale research:** `true` when files referenced in `02-research.md` changed on `main` between the research `git_commit` and `merge-base(HEAD, origin/main)`. The task's own commits do not count.
+- **Task lookup:** branch `^(feat|fix|chore|docs|refactor)/(\d+)-(.+)$` → issue number → task directory `<workDir>/<n>-*` (matched by number, so an edited issue title does not break it). If not found, it also looks in `<workDir>/_archive/` and reports `archived: true`. The mode comes from `00-ticket.md` frontmatter.
+- **Config:** reads `.claude/loom.json` at the git top-level; missing keys take the defaults of §19.1.
+- **Statuses:** read from artifact frontmatter (a minimal parser for the §13.1 fields: scalars and inline lists).
+- **Open questions:** numbered `**Q<n>.` items under the latest `## Open Questions` heading; items marked "accepted by default" are counted separately (`acceptedByDefault`).
+- **Implementation progress:** read from plan Phase Overview checkboxes and `log.md` headings (§13.2); a `log.md` entry wins over the checkbox of the same phase. oneshot has one implicit phase, tracked only through `log.md`.
+- **Working tree:** `clean` or `dirty`; files under `workDir` are ignored.
+- **Stale research:** `true` when files referenced in `02-research.md` (as `path:line` or `path`) changed on `main` between the research `git_commit` and `merge-base(HEAD, origin/main)`. The task's own commits do not count. Without `origin/<mainBranch>` the local main branch is used. If the check cannot run, `stale` is `false` and a warning is added.
 - **Next step:** computed by the decision table in §9.12.
 
 ### 8.4 Implementation
 
-A single Python script with no dependencies outside the standard library (or POSIX shell plus `jq`), with unit tests in `tests/`.
+A single Python script, `bin/loom-state`, with no dependencies outside the standard library (Python 3.9+, the stock macOS `python3`), with unit tests in `tests/`. The decision table is a pure function (`decide_next(state)`) that is tested with plain state dicts. Hook scripts import the same file instead of re-implementing its logic.
 
 ---
 
@@ -367,7 +385,7 @@ A single Python script with no dependencies outside the standard library (or POS
 ### 9.0 Common rules
 
 - All skills set `disable-model-invocation: true`. They run only when invoked as `/loom:<skill>`.
-- Phase skills start by injecting state: `` !`${CLAUDE_PLUGIN_ROOT}/scripts/loom-state --json` `` (exact syntax to verify, §24).
+- Phase skills start by injecting state: `` !`"${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json` `` (verified: `` !`cmd` `` injects command output, and `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SKILL_DIR}` are substituted when the skill loads).
 - Skills spawn agents by their namespaced name: `loom:codebase-locator`, etc.
 - Model and effort per skill (values to tune; frontmatter support to verify, §24):
 
@@ -399,6 +417,12 @@ A single Python script with no dependencies outside the standard library (or POS
 3. **Ruleset:** offered by `finish-task` after the setup PR is merged, so the required CI check already exists on `main` (§17.3).
 
 **Rules:** existing files are never overwritten silently. Existing commands and CI are reused, not replaced. On an empty repository with no `main` yet, the first commit (only `.gitignore` and `README.md`) is allowed on `main` once; the guard allows it when `main` has no commits.
+
+**Empty repository order:** on an empty repository, setup works in this order:
+1. Make the first commit on the main branch (only `.gitignore` and `README.md`).
+2. Run `git push -u origin <mainBranch>` (allowed by the guard exception in §11.2).
+3. Create the chore branch (step 2.1 above).
+4. Write `loom.json` and the other files (step 2.2 above).
 
 ### 9.2 `backlog`
 
@@ -589,24 +613,50 @@ Defined as `agents/*.md`, ported from HumanLayer's daemon-registered agents. Plu
 
 ## 11. Hooks
 
-All hooks are declared in `hooks/hooks.json` and call scripts in `${CLAUDE_PLUGIN_ROOT}/scripts/`.
+All hooks are declared in `hooks/hooks.json` and call Python scripts in `${CLAUDE_PLUGIN_ROOT}/scripts/hooks/` (`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/<name>.py"`).
+
+Rules for every hook:
+- Silent no-op (exit 0, no output) outside a git repository and in a repository without `.claude/loom.json`: the plugin may be enabled in unrelated projects.
+- Never break a session: on an unexpected error the hook exits 0 and writes a short message to stderr.
+- `PreToolUse` hooks deny with exit 0 and JSON: `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "…"}}`.
 
 ### 11.1 `SessionStart` — task context
 
 - Matchers: `startup`, `resume`, `clear`, `compact`.
-- Runs `loom-state --json` (no `--pr`: no network at session start) and injects a short summary as additional context: task directory, mode, artifact statuses, next step.
+- Runs the `loom-state` logic (no `--pr`: no network at session start) and prints a short plain-text summary to stdout, which Claude Code adds to the context: task directory, mode, artifact statuses, next step.
 - On `main` or an unrecognized branch: injects one hint line.
 
 ### 11.2 `PreToolUse` (Bash) — guard the main branch
 
 - Reads `mainBranch` from `loom.json`.
-- Blocks `git commit` and `git push` when the current branch is the main branch, except the very first commit of an empty repository (§9.1).
-- Blocks any force push to the main branch.
+- Blocks `git commit` and `git push` when the current branch is the main branch, with two bootstrap exceptions for an empty repository (§9.1):
+  - the very first commit, when the main branch has no commits;
+  - a plain first push of the main branch: `refs/remotes/origin/<mainBranch>` does not exist and the main branch has exactly one commit. The guard checks both conditions locally, with no network call. "Plain" means all of these:
+    - the real current HEAD (read from git, not from a `switch`/`checkout` earlier in the same command) is the main branch;
+    - the remote is `origin` (given, or resolved from `branch.<main>.pushRemote`, `remote.pushDefault`, `branch.<main>.remote`);
+    - the only flags are `-u`/`--set-upstream`, `-q`/`--quiet`, `-v`/`--verbose`;
+    - the refspecs are none, or only `<main>`, `HEAD`, `HEAD:<main>`, `<main>:<main>`, `refs/heads/<main>`. A `+` prefix, any force flag, `--mirror`, `--all`, `--branches`, `--delete`/`-d`, or an empty source (`:<main>`) never qualifies.
+- Blocks any push whose refspec targets the main branch, from any branch, including force pushes (`origin main`, `HEAD:main`, `+main`, `:main`, `--force`/`-f`/`--force-with-lease … main`, `--all`, `--mirror`). This is intentional: it closes bypasses such as `git push origin HEAD:main` from a task branch.
+- Parses the command with `shlex`: compound commands (`&&`, `||`, `;`, `|`, subshells), `cd <dir> && git …`, `git -C <path>`, global git options before the subcommand, git aliases (including `!` shell aliases), and `bash -c`. Text inside quotes (`echo "git commit"`) is not a command.
+- Follows branch switches earlier in the same command: `git switch`, `git checkout -b`, `--track <remote>/<branch>`, and `git checkout <name>` when `<name>` is a local branch or a remote branch that git creates locally.
+- If the command cannot be parsed, a conservative fallback applies: any `git … commit|push` in the text is denied while the current branch is the main branch.
+
 - Denies with the reason: "Create a task branch with /loom:start-task".
+
+Known limits:
+- Shell-function aliases that use positional arguments (`!f() { git push origin "$1"; }; f`) are not resolved.
+- The regex fallback for unparsable commands can match text after a `#` comment (on the main branch only).
+- The bootstrap exception does not inspect git config that turns a plain push into a forced or mirror push (`-c remote.origin.mirror=true`, a saved `remote.origin.push=+…`, `git remote add --mirror=push`). Each case needs deliberately set non-default config.
 
 ### 11.3 `PreToolUse` (Bash) — block output filtering
 
 Ported from HumanLayer's `block-test-output-filtering.sh`, adapted to `make`, `pytest`, `ruff`, `pyright`, `npm test`. Blocks check commands piped into `head`, `tail`, `grep`, etc., because filtered output hides failures. Denies with the reason: "Run checks unfiltered".
+
+- Check commands: the commands in `loom.json` → `checks`, plus `make lint|typecheck|test|check`, `pytest`, `ruff`, `pyright`, `mypy`, `npm test`, `npm run test|lint|typecheck`, and any of these behind `uv run` or `python -m`.
+- Filters: `head`, `tail`, `grep`, `sed`, `awk`, `cut`, `less`, `more`. `| tee <file>` is allowed.
+
+Known limits:
+- A check inside a `{ …; }` group or a loop is not caught when the group's output is piped (`{ pytest; } | tail`).
 
 ### 11.4 `SubagentStop` — enforce checks for the implementer
 
@@ -1050,8 +1100,8 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
 - **Repository:** a public GitHub repository `loom` with `.claude-plugin/marketplace.json` and the plugin.
 - **Install:**
   ```
-  /plugin marketplace add <owner>/loom
-  /plugin install loom@<marketplace-name>
+  /plugin marketplace add mmosvlad1/loom
+  /plugin install loom@loom
   ```
 - **Versioning:** semver, **only in `plugin.json`**; bump on every release. Users update with `/plugin marketplace update`.
 - **Local development:** `claude --plugin-dir ./loom` runs the working copy; exercise it on a sandbox repository and with evals.
@@ -1115,9 +1165,22 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
 
 ### 24.2 To verify against current Claude Code docs during implementation
 
-- Syntax for running a command inside `SKILL.md` and injecting its output (`` !`…` ``), and which variables (`${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SKILL_DIR}`) expand in skill content.
+Still open:
+
 - Skill frontmatter fields `model` and `effort`.
-- `SubagentStop` matcher on a plugin agent name and the exit-code-2 behavior for subagents.
-- Whether a plugin's `bin/` directory is added to the Bash `PATH` (if yes, `loom-state` can move to `bin/`).
+- `SubagentStop` matcher value for a namespaced plugin agent (`loom:implementer` vs `implementer`) — to confirm in milestone M4.
 - `claude plugin eval` scenario format and available graders.
 - GitHub rulesets availability on the free plan for public repositories.
+- How the `statusLine` in `.claude/settings.json` references `loom-state`: `bin/` is documented on the Bash tool's `PATH` only, and `${CLAUDE_PLUGIN_ROOT}` is not documented for settings.
+
+Resolved (milestone M1):
+
+- **Skill content:** `` !`cmd` `` injects command output; `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SKILL_DIR}` are substituted when the skill loads.
+- **`SubagentStop` exit code 2** for subagents is documented: the subagent cannot stop and receives stderr.
+- **`bin/` on `PATH`:** executables in the plugin's `bin/` are on the Bash tool's `PATH` while the plugin is enabled. Not documented for hooks, so hooks call `"${CLAUDE_PLUGIN_ROOT}"/bin/…` (quoted). `loom-state` lives in `bin/`.
+- **Manifests:** `.claude-plugin/plugin.json` requires only `name` (also `version`, `description`, `author{name,email,url}`, `homepage`, `repository`, `license`, `keywords`); the version lives only there. `.claude-plugin/marketplace.json` requires `name`, `owner{name}`, and `plugins[{name, source}]`; a plugin at the repository root uses `"source": "./"`. Install: `/plugin install loom@loom`.
+- **Auto-discovery:** `skills/`, `agents/`, `hooks/hooks.json`, and `bin/` at the plugin root.
+- **`hooks/hooks.json`:** `{"hooks": {"<Event>": [{"matcher": "…", "hooks": [{"type": "command", "command": "…", "timeout": 10}]}]}}`; `timeout` is in seconds. A matcher of letters, digits, `_`, `-`, `|`, `,`, and spaces is an exact name or a list; other characters make it an unanchored regex.
+- **`SessionStart`:** matchers `startup`, `resume`, `clear`, `compact` (also `fork`); stdin JSON has `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `source`; on exit 0, plain stdout is added to the context.
+- **`PreToolUse` (Bash):** the command is `tool_input.command`, plus `cwd`; deny with exit 0 and `hookSpecificOutput.permissionDecision: "deny"`.
+- **Validation:** `claude plugin validate --strict .` validates the marketplace manifest (and runs plugin directory checks); `claude plugin validate --strict .claude-plugin/plugin.json` validates the plugin manifest. `make validate` runs both.

@@ -1,0 +1,1128 @@
+#!/usr/bin/env python3
+"""loom-state: compute the state of the current loom task.
+
+This is the single source of truth for "where is the task and what comes
+next" (LOOM_SPEC.md section 8). It is used by the SessionStart hook,
+/loom:next, the phase skills, and the statusline.
+
+Usage: loom-state [--json | --line] [--pr] [--docs]
+
+The script is a silent no-op (exit 0, no output) outside a git repository and
+in a repository without .claude/loom.json. Standard library only; it runs on
+Python 3.9.
+"""
+from __future__ import annotations
+
+import argparse
+import copy
+import fnmatch
+import json
+import os
+import re
+import subprocess
+import sys
+from typing import Any, Dict, List, Optional, Tuple
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+CONFIG_PATH = os.path.join(".claude", "loom.json")
+
+DEFAULT_CONFIG: Dict[str, Any] = {
+    "version": 1,
+    "tracker": "github",
+    "mainBranch": "main",
+    "workDir": ".loom/tasks",
+    "docsDir": "docs",
+    "checks": {
+        "lint": "make lint",
+        "typecheck": "make typecheck",
+        "test": "make test",
+        "check": "make check",
+    },
+    "hooks": {"stopLint": False, "maxCheckAttempts": 3},
+    "rounds": {"cap": {"S": 2, "M": 3, "L": 5}},
+    "implement": {"maxFixAttempts": 2, "autoAdvance": True},
+}
+
+BRANCH_RE = re.compile(r"^(feat|fix|chore|docs|refactor)/(\d+)-(.+)$")
+
+TICKET_FILE = "00-ticket.md"
+LOG_FILE = "log.md"
+PLAN_FILE = "04-plan.md"
+RESEARCH_FILE = "02-research.md"
+ARCHIVE_DIR = "_archive"
+
+# Artifact files in phase order (the ticket and log.md are handled separately).
+ARTIFACT_FILES: List[Tuple[str, str]] = [
+    ("01-research-questions.md", "research-questions"),
+    ("02-research.md", "research"),
+    ("03-design.md", "design"),
+    ("04-plan.md", "plan"),
+]
+PHASE_FILE = {phase: name for name, phase in ARTIFACT_FILES}
+
+MODES = ("oneshot", "quick", "full")
+
+# Artifact-producing phases per mode, in order (implement follows them).
+PHASES_BY_MODE: Dict[str, List[str]] = {
+    "oneshot": [],
+    "quick": ["research", "plan"],
+    "full": ["research-questions", "research", "design", "plan"],
+}
+
+# Gate artifacts per mode (LOOM_SPEC.md section 13.1).
+GATES_BY_MODE: Dict[str, List[str]] = {
+    "oneshot": [],
+    "quick": ["plan"],
+    "full": ["design", "plan"],
+}
+
+PHASE_COMMAND = {
+    "research-questions": "/loom:research-questions",
+    "research": "/loom:research",
+    "design": "/loom:design",
+    "plan": "/loom:plan",
+}
+
+REVIEWED_STATUSES = ("in-review", "approved")
+
+GIT_TIMEOUT = 10
+GH_TIMEOUT = 20
+
+# ---------------------------------------------------------------------------
+# Subprocess helpers
+# ---------------------------------------------------------------------------
+
+
+def _env() -> Dict[str, str]:
+    env = dict(os.environ)
+    # Never take the index lock from a status query (statusline, hooks).
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    env.setdefault("LC_ALL", "C")
+    return env
+
+
+def run(
+    args: List[str], cwd: str, timeout: int = GIT_TIMEOUT, extra_env: Optional[Dict[str, str]] = None
+) -> Tuple[int, str, str]:
+    """Run a command and return (returncode, stdout, stderr). Never raises."""
+    env = _env()
+    if extra_env:
+        env.update(extra_env)
+    try:
+        proc = subprocess.run(
+            args,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            env=env,
+        )
+    except FileNotFoundError:
+        return 127, "", "%s: command not found" % args[0]
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, "", str(exc)
+    out = proc.stdout.decode("utf-8", "replace")
+    err = proc.stderr.decode("utf-8", "replace")
+    return proc.returncode, out, err
+
+
+def git(
+    args: List[str], cwd: str, timeout: int = GIT_TIMEOUT, extra_env: Optional[Dict[str, str]] = None
+) -> Tuple[int, str, str]:
+    return run(["git"] + args, cwd, timeout, extra_env)
+
+
+def non_interactive_env(cwd: str) -> Dict[str, str]:
+    """Environment for network git calls: fail instead of prompting.
+
+    Keeps the user's SSH setup: an existing GIT_SSH_COMMAND gets
+    `-oBatchMode=yes` appended; with core.sshCommand set, SSH is left alone.
+    """
+    env = {"GIT_TERMINAL_PROMPT": "0"}
+    current = os.environ.get("GIT_SSH_COMMAND")
+    if current:
+        env["GIT_SSH_COMMAND"] = current + " -oBatchMode=yes"
+    elif not git_out(["config", "--get", "core.sshCommand"], cwd):
+        env["GIT_SSH_COMMAND"] = "ssh -oBatchMode=yes"
+    return env
+
+
+def git_out(args: List[str], cwd: str) -> Optional[str]:
+    """Return stripped stdout of a git command, or None on failure."""
+    rc, out, _ = git(args, cwd)
+    if rc != 0:
+        return None
+    return out.strip()
+
+
+# ---------------------------------------------------------------------------
+# Repository and configuration
+# ---------------------------------------------------------------------------
+
+
+def find_toplevel(cwd: str) -> Optional[str]:
+    if not cwd or not os.path.isdir(cwd):
+        return None
+    top = git_out(["rev-parse", "--show-toplevel"], cwd)
+    return top or None
+
+
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def config_path(top: str) -> str:
+    return os.path.join(top, CONFIG_PATH)
+
+
+def load_config(top: str) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """Return (config with defaults, warnings), or (None, []) without loom.json."""
+    path = config_path(top)
+    if not os.path.isfile(path):
+        return None, []
+    warnings: List[str] = []
+    data: Any = {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        warnings.append("cannot read %s (%s); using defaults" % (CONFIG_PATH, exc))
+        data = {}
+    if not isinstance(data, dict):
+        warnings.append("%s is not a JSON object; using defaults" % CONFIG_PATH)
+        data = {}
+    cfg = _deep_merge(DEFAULT_CONFIG, data)
+    for key in ("mainBranch", "workDir", "docsDir"):
+        if not isinstance(cfg.get(key), str) or not cfg[key].strip():
+            warnings.append("%s: invalid %r; using default" % (CONFIG_PATH, key))
+            cfg[key] = DEFAULT_CONFIG[key]
+    if not isinstance(cfg.get("checks"), dict):
+        warnings.append("%s: invalid 'checks'; using defaults" % CONFIG_PATH)
+        cfg["checks"] = copy.deepcopy(DEFAULT_CONFIG["checks"])
+    return cfg, warnings
+
+
+def load_repo_config(cwd: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Return (toplevel, config) for cwd, or (None, None) if loom does not apply."""
+    top = find_toplevel(cwd)
+    if not top:
+        return None, None
+    cfg, _ = load_config(top)
+    if cfg is None:
+        return None, None
+    return top, cfg
+
+
+def work_dir_abs(top: str, cfg: Dict[str, Any]) -> str:
+    return os.path.normpath(os.path.join(top, cfg["workDir"]))
+
+
+def rel_to(top: str, path: str) -> str:
+    try:
+        rel = os.path.relpath(path, top)
+    except ValueError:
+        return path
+    if rel.startswith(".."):
+        return path
+    return rel.replace(os.sep, "/")
+
+
+def current_branch(cwd: str) -> Optional[str]:
+    """Current branch name (works on an unborn branch); None on detached HEAD."""
+    return git_out(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd) or None
+
+
+# ---------------------------------------------------------------------------
+# Markdown parsing
+# ---------------------------------------------------------------------------
+
+
+def _strip_inline_comment(value: str) -> str:
+    quote = None
+    for i, ch in enumerate(value):
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "#" and (i == 0 or value[i - 1] in " \t"):
+            return value[:i].rstrip()
+    return value
+
+
+def _unquote(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
+def _parse_scalar(value: str) -> Any:
+    value = value.strip()
+    if value in ("", "~", "null", "Null", "NULL"):
+        return None
+    return _unquote(value)
+
+
+def _split_inline_list(inner: str) -> List[str]:
+    items: List[str] = []
+    buf: List[str] = []
+    quote = None
+    for ch in inner:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            buf.append(ch)
+        elif ch == ",":
+            items.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    items.append("".join(buf))
+    return [_unquote(item.strip()) for item in items if item.strip()]
+
+
+def split_frontmatter(text: str) -> Tuple[Dict[str, Any], str]:
+    """Split a markdown file into (frontmatter dict, body).
+
+    Supports the fields of LOOM_SPEC.md section 13.1: `key: scalar` and
+    `key: [a, b]` inline lists, with optional quotes and trailing `# comments`.
+    Values stay strings (or lists of strings, or None); callers convert.
+    """
+    if text.startswith("﻿"):
+        text = text[1:]
+    lines = text.splitlines(True)
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() in ("---", "..."):
+            end = i
+            break
+    if end is None:
+        return {}, text
+    data: Dict[str, Any] = {}
+    for raw in lines[1:end]:
+        line = raw.rstrip("\r\n")
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line[0] in " \t" or ":" not in line:
+            continue  # nested structures are not used by loom
+        key, _, value = line.partition(":")
+        key = key.strip()
+        value = _strip_inline_comment(value.strip())
+        if value.startswith("[") and value.endswith("]"):
+            data[key] = _split_inline_list(value[1:-1])
+        else:
+            data[key] = _parse_scalar(value)
+    return data, "".join(lines[end + 1:])
+
+
+def parse_frontmatter(text: str) -> Dict[str, Any]:
+    return split_frontmatter(text)[0]
+
+
+_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+
+
+def iter_markdown_lines(body: str):
+    """Yield (line, heading_level, heading_text) for lines outside code fences.
+
+    heading_level is 0 for non-heading lines.
+    """
+    fence = None
+    for line in body.splitlines():
+        m = _FENCE_RE.match(line)
+        if m:
+            marker = m.group(1)
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        h = _HEADING_RE.match(line)
+        if h:
+            yield line, len(h.group(1)), h.group(2)
+        else:
+            yield line, 0, ""
+
+
+def section_lines(body: str, heading_prefix: str, last: bool = True) -> Optional[List[str]]:
+    """Lines of a `## <heading_prefix>...` section (the last one if several)."""
+    sections: List[List[str]] = []
+    current: Optional[List[str]] = None
+    prefix = heading_prefix.lower()
+    for line, level, text in iter_markdown_lines(body):
+        if level:
+            if level <= 2:
+                current = None
+            if level == 2 and text.lower().startswith(prefix):
+                current = []
+                sections.append(current)
+            continue
+        if current is not None:
+            current.append(line)
+    if not sections:
+        return None
+    return sections[-1] if last else sections[0]
+
+
+_QUESTION_RE = re.compile(r"^\s*(?:[-*]\s+)?\*\*Q(\d+)\.")
+ACCEPTED_BY_DEFAULT = "accepted by default"
+
+
+def count_open_questions(body: str) -> int:
+    """Count `**Q<n>.` items under the latest `## Open Questions` heading.
+
+    Items whose text says "accepted by default" are not open.
+    """
+    lines = section_lines(body, "open questions")
+    if not lines:
+        return 0
+    items: List[List[str]] = []
+    for line in lines:
+        if _QUESTION_RE.match(line):
+            items.append([line])
+        elif items:
+            items[-1].append(line)
+    count = 0
+    for item in items:
+        if ACCEPTED_BY_DEFAULT not in "\n".join(item).lower():
+            count += 1
+    return count
+
+
+def count_accepted_by_default(body: str) -> int:
+    """Count lines (outside code fences) marked "accepted by default"."""
+    return sum(
+        1 for line, level, _ in iter_markdown_lines(body)
+        if not level and ACCEPTED_BY_DEFAULT in line.lower()
+    )
+
+
+_CHECKBOX_RE = re.compile(r"^\s*[-*+]\s+\[([ xX])\]\s*(?:(\d+)[.)])?")
+
+
+def parse_phase_overview(body: str) -> List[Tuple[int, bool]]:
+    """Return [(phase number, checked)] from the plan's `## Phase Overview`."""
+    lines = section_lines(body, "phase overview", last=False)
+    if not lines:
+        return []
+    matches = [(m, len(line) - len(line.lstrip())) for line in lines for m in [_CHECKBOX_RE.match(line)] if m]
+    if not matches:
+        return []
+    # Only top-level items count: indented sub-checkboxes are not phases.
+    top_indent = min(indent for _, indent in matches)
+    result: List[Tuple[int, bool]] = []
+    for m, indent in matches:
+        if indent != top_indent:
+            continue
+        number = int(m.group(2)) if m.group(2) else len(result) + 1
+        result.append((number, m.group(1) in "xX"))
+    return result
+
+
+_LOG_HEADING_RE = re.compile(
+    r"^##\s+Phase\s+(\d+)\s*[—–-]+\s*(done|in-progress|blocked)\b"
+    r"(?:\s*[—–-]+\s*(.+?))?\s*$",
+    re.IGNORECASE,
+)
+_REASON_RE = re.compile(r"^\s*Reason:\s*(.+?)\s*$", re.IGNORECASE)
+
+
+def parse_log(text: str) -> Dict[int, Dict[str, Any]]:
+    """Parse log.md headings `## Phase N — done|in-progress|blocked[ — <x>]`.
+
+    The last heading for a phase wins. For `done`, <x> is the commit hash; for
+    `blocked`, a `Reason:` line (or <x>) is the reason.
+    """
+    phases: Dict[int, Dict[str, Any]] = {}
+    current: Optional[Dict[str, Any]] = None
+    for line, level, _ in iter_markdown_lines(text):
+        if level:
+            m = _LOG_HEADING_RE.match(line.strip())
+            if m:
+                number = int(m.group(1))
+                status = m.group(2).lower()
+                extra = m.group(3)
+                current = {"status": status, "commit": None, "reason": None}
+                if status == "done" and extra:
+                    current["commit"] = extra.split()[0]
+                elif status == "blocked" and extra:
+                    current["reason"] = extra
+                phases[number] = current
+            elif level <= 2:
+                current = None
+            continue
+        if current is not None and current["status"] == "blocked" and not current["reason"]:
+            r = _REASON_RE.match(line)
+            if r:
+                current["reason"] = r.group(1)
+    return phases
+
+
+def implementation_progress(
+    mode: Optional[str], plan_body: Optional[str], log_text: Optional[str]
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Combine plan Phase Overview checkboxes and log.md headings.
+
+    A log.md entry wins over the checkbox for the same phase. oneshot has one
+    implicit phase that only log.md tracks.
+    """
+    warnings: List[str] = []
+    log = parse_log(log_text) if log_text else {}
+    checked: Dict[int, bool] = {}
+    if mode == "oneshot":
+        numbers = {1}
+    else:
+        overview = parse_phase_overview(plan_body) if plan_body is not None else []
+        if plan_body is not None and not overview:
+            warnings.append("%s has no Phase Overview checkboxes" % PLAN_FILE)
+        for number, is_checked in overview:
+            checked[number] = is_checked
+        numbers = set(checked)
+    numbers |= set(log)
+    phases = []
+    for number in sorted(numbers):
+        entry = log.get(number)
+        if entry:
+            status = entry["status"]
+        else:
+            status = "done" if checked.get(number) else "pending"
+        phases.append({
+            "number": number,
+            "status": status,
+            "commit": entry["commit"] if entry else None,
+        })
+    blocked = None
+    in_progress = None
+    for phase in phases:
+        if phase["status"] == "blocked" and blocked is None:
+            reason = log[phase["number"]]["reason"]
+            blocked = {"phase": phase["number"], "reason": reason}
+        if phase["status"] == "in-progress" and in_progress is None:
+            in_progress = phase["number"]
+    return {
+        "total": len(phases),
+        "done": sum(1 for p in phases if p["status"] == "done"),
+        "inProgress": in_progress,
+        "blocked": blocked,
+        "phases": phases,
+    }, warnings
+
+
+# ---------------------------------------------------------------------------
+# Task lookup
+# ---------------------------------------------------------------------------
+
+
+def _task_dirs(parent: str, number: int) -> List[str]:
+    try:
+        names = os.listdir(parent)
+    except OSError:
+        return []
+    prefix = "%d-" % number
+    return sorted(
+        n for n in names
+        if n.startswith(prefix) and os.path.isdir(os.path.join(parent, n))
+    )
+
+
+def find_task_dir(work_dir: str, number: int, slug: str = "") -> Tuple[Optional[str], bool, List[str]]:
+    """Find `<workDir>/<n>-*`, then `<workDir>/_archive/<n>-*`.
+
+    Returns (absolute path or None, archived, warnings). Matching is by number,
+    so a renamed slug still finds the directory.
+    """
+    warnings: List[str] = []
+    for parent, archived in ((work_dir, False), (os.path.join(work_dir, ARCHIVE_DIR), True)):
+        names = _task_dirs(parent, number)
+        if not names:
+            continue
+        chosen = names[0]
+        if len(names) > 1:
+            exact = "%d-%s" % (number, slug)
+            chosen = exact if exact in names else names[0]
+            warnings.append(
+                "several task directories for #%d: %s; using %s" % (number, ", ".join(names), chosen)
+            )
+        return os.path.join(parent, chosen), archived, warnings
+    return None, False, warnings
+
+
+def read_text(path: str) -> Optional[str]:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _to_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    text = str(value).strip().lstrip("#")
+    return int(text) if text.isdigit() else None
+
+
+# ---------------------------------------------------------------------------
+# Working tree and stale research
+# ---------------------------------------------------------------------------
+
+
+def _is_under(path: str, prefix: str) -> bool:
+    prefix = prefix.rstrip("/")
+    return path == prefix or path.startswith(prefix + "/")
+
+
+def working_tree_status(top: str, cfg: Dict[str, Any]) -> Tuple[Optional[str], List[str]]:
+    """Return ("clean" | "dirty", warnings). Files under workDir are ignored."""
+    rc, out, err = git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], top)
+    if rc != 0:
+        return None, ["git status failed: %s" % (err.strip().splitlines() or ["?"])[0]]
+    work_rel = rel_to(top, work_dir_abs(top, cfg))
+    entries = out.split("\0")
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        code, path = entry[:2], entry[3:]
+        paths = [path]
+        if "R" in code or "C" in code:
+            if i < len(entries):
+                paths.append(entries[i])
+            i += 1
+        if not all(_is_under(p, work_rel) for p in paths):
+            return "dirty", []
+    return "clean", []
+
+
+# Path-like tokens; a `:line` or `:line-line` suffix is not part of the token.
+_PATH_RE = re.compile(r"(?<![\w/.@:-])((?:\.{0,2}/)?[\w@.+-]+(?:/[\w@.+-]+)*)")
+_EXT_RE = re.compile(r"[^/.][^/]*\.[A-Za-z0-9_]+$")
+
+# Well-known file names without an extension.
+KNOWN_FILE_NAMES = {
+    "Makefile", "GNUmakefile", "Dockerfile", "Containerfile", "Justfile", "justfile",
+    "Rakefile", "Gemfile", "Procfile", "Vagrantfile", "Brewfile", "Pipfile",
+    "LICENSE", "NOTICE", "CODEOWNERS",
+}
+
+
+def research_references(body: str) -> List[str]:
+    """Paths referenced in research as `path:line` or `path`.
+
+    A token counts when it has a file extension, contains `/` (for example
+    `bin/loom-state`), or is a well-known name such as `Makefile`.
+    False positives are harmless: they are only matched against changed files.
+    """
+    refs = set()
+    for m in _PATH_RE.finditer(body):
+        path = m.group(1).rstrip(".")
+        if body[m.end():m.end() + 3] == "://":
+            continue  # URL scheme
+        while path.startswith("./"):
+            path = path[2:]
+        path = path.rstrip("/")
+        if not path or path.startswith("../"):
+            continue
+        name = path.rsplit("/", 1)[-1]
+        if "/" in path or _EXT_RE.match(name) or name in KNOWN_FILE_NAMES:
+            refs.add(path)
+    return sorted(refs)
+
+
+def main_ref(top: str, main_branch: str) -> Optional[str]:
+    """origin/<main> if it exists, otherwise the local main branch."""
+    for ref in ("refs/remotes/origin/%s" % main_branch, "refs/heads/%s" % main_branch):
+        if git_out(["rev-parse", "--verify", "--quiet", ref + "^{commit}"], top):
+            return ref
+    return None
+
+
+def stale_research(
+    top: str, cfg: Dict[str, Any], git_commit: Optional[str], body: str
+) -> Tuple[bool, List[str], List[str]]:
+    """Return (stale, changed referenced files, warnings) per LOOM_SPEC.md 8.3.
+
+    Stale when files referenced in research changed on main between the
+    research `git_commit` and merge-base(HEAD, origin/<main>). Commits of the
+    task branch do not count. Any failure gives stale=false and a warning.
+    """
+    if not git_commit:
+        return False, [], ["%s has no git_commit; stale check skipped" % RESEARCH_FILE]
+    commit = git_out(["rev-parse", "--verify", "--quiet", "%s^{commit}" % git_commit], top)
+    if not commit:
+        return False, [], ["research git_commit %s not found; stale check skipped" % git_commit]
+    ref = main_ref(top, cfg["mainBranch"])
+    if not ref:
+        return False, [], ["main branch %r not found; stale check skipped" % cfg["mainBranch"]]
+    base = git_out(["merge-base", "HEAD", ref], top)
+    if not base:
+        return False, [], ["no merge-base of HEAD and %s; stale check skipped" % ref]
+    # A...B diffs from merge-base(A, B) to B: only changes on main count.
+    rc, out, err = git(["diff", "--name-only", "--no-renames", "%s...%s" % (commit, base)], top)
+    if rc != 0:
+        return False, [], ["git diff for stale check failed: %s" % (err.strip().splitlines() or ["?"])[0]]
+    changed = set(line.strip() for line in out.splitlines() if line.strip())
+    refs = set(research_references(body))
+    hits = sorted(changed & refs)
+    return bool(hits), hits, []
+
+
+# ---------------------------------------------------------------------------
+# Pull request state (--pr)
+# ---------------------------------------------------------------------------
+
+_FAIL_CONCLUSIONS = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"}
+_FAIL_STATES = {"FAILURE", "ERROR"}
+_PENDING_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
+
+
+def summarize_checks(rollup: Any) -> str:
+    """Reduce gh statusCheckRollup to passing | failing | pending | none."""
+    if not isinstance(rollup, list) or not rollup:
+        return "none"
+    failing = pending = False
+    for item in rollup:
+        if not isinstance(item, dict):
+            continue
+        if item.get("__typename") == "StatusContext" or ("state" in item and "conclusion" not in item):
+            state = str(item.get("state") or "").upper()
+            if state in _FAIL_STATES:
+                failing = True
+            elif state in _PENDING_STATES or not state:
+                pending = True
+            continue
+        status = str(item.get("status") or "").upper()
+        conclusion = str(item.get("conclusion") or "").upper()
+        if status and status != "COMPLETED":
+            pending = True
+        elif conclusion in _FAIL_CONCLUSIONS:
+            failing = True
+        elif not conclusion:
+            pending = True
+    if failing:
+        return "failing"
+    if pending:
+        return "pending"
+    return "passing"
+
+
+def behind_main(top: str, cfg: Dict[str, Any], fetch: bool = True) -> Tuple[Optional[int], List[str]]:
+    """Number of commits on origin/<main> (or local main) missing from HEAD."""
+    warnings: List[str] = []
+    main_branch = cfg["mainBranch"]
+    if fetch and git_out(["remote", "get-url", "origin"], top):
+        rc, _, err = git(["fetch", "--quiet", "origin", main_branch], top, timeout=GH_TIMEOUT,
+                         extra_env=non_interactive_env(top))
+        if rc != 0:
+            warnings.append("git fetch origin %s failed: %s" % (main_branch, (err.strip().splitlines() or ["?"])[0]))
+    ref = main_ref(top, main_branch)
+    if not ref:
+        return None, warnings + ["main branch %r not found" % main_branch]
+    count = git_out(["rev-list", "--count", "HEAD..%s" % ref], top)
+    if count is None or not count.isdigit():
+        return None, warnings + ["cannot count commits behind %s" % ref]
+    return int(count), warnings
+
+
+def fetch_pr(top: str, cfg: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    rc, out, err = run(
+        ["gh", "pr", "view", "--json", "number,state,reviewDecision,statusCheckRollup,mergeStateStatus"],
+        top,
+        timeout=GH_TIMEOUT,
+    )
+    if rc == 127:
+        return None, ["gh is not installed; PR state unknown"]
+    if rc != 0:
+        first = (err.strip().splitlines() or ["unknown error"])[0]
+        return None, ["gh pr view: %s" % first]
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return None, ["gh pr view returned invalid JSON"]
+    behind, warnings = behind_main(top, cfg)
+    pr = {
+        "number": data.get("number"),
+        "state": data.get("state"),
+        "reviewDecision": data.get("reviewDecision") or None,
+        "checks": summarize_checks(data.get("statusCheckRollup")),
+        "mergeStateStatus": data.get("mergeStateStatus"),
+        "behindMain": behind,
+    }
+    return pr, warnings
+
+
+# ---------------------------------------------------------------------------
+# State
+# ---------------------------------------------------------------------------
+
+
+def build_artifacts(top: str, cfg: Dict[str, Any], task_dir: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    artifacts: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    for name, phase in ARTIFACT_FILES:
+        text = read_text(os.path.join(task_dir, name))
+        if text is None:
+            continue
+        fm, body = split_frontmatter(text)
+        status = fm.get("status")
+        if not status:
+            warnings.append("%s has no status in its frontmatter" % name)
+        item: Dict[str, Any] = {
+            "file": name,
+            "phase": fm.get("phase") or phase,
+            "status": status or None,
+            "openQuestions": count_open_questions(body),
+        }
+        if phase in ("design", "plan"):
+            item["acceptedByDefault"] = count_accepted_by_default(body)
+        if phase == "research":
+            stale, files, w = stale_research(top, cfg, fm.get("git_commit"), body)
+            item["stale"] = stale
+            if files:
+                item["staleFiles"] = files
+            warnings.extend(w)
+        artifacts.append(item)
+    return artifacts, warnings
+
+
+def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
+    """Compute the task state for cwd, or None when loom does not apply."""
+    top = find_toplevel(cwd)
+    if not top:
+        return None
+    cfg, warnings = load_config(top)
+    if cfg is None:
+        return None
+    main_branch = cfg["mainBranch"]
+    branch = current_branch(top)
+    state: Dict[str, Any] = {
+        "branch": branch,
+        "mainBranch": main_branch,
+        "onMain": branch == main_branch,
+        "task": None,
+        "artifacts": [],
+        "implementation": None,
+        "workingTree": None,
+        "pr": None,
+        "next": None,
+        "warnings": warnings,
+    }
+    tree, w = working_tree_status(top, cfg)
+    state["workingTree"] = tree
+    warnings.extend(w)
+
+    m = BRANCH_RE.match(branch or "")
+    if m and not state["onMain"]:
+        number = int(m.group(2))
+        task_dir, archived, w = find_task_dir(work_dir_abs(top, cfg), number, m.group(3))
+        warnings.extend(w)
+        if task_dir:
+            dirname = os.path.basename(task_dir)
+            ticket_text = read_text(os.path.join(task_dir, TICKET_FILE))
+            ticket = parse_frontmatter(ticket_text) if ticket_text is not None else {}
+            if ticket_text is None:
+                warnings.append("%s is missing" % TICKET_FILE)
+            mode = ticket.get("mode")
+            if mode not in MODES:
+                warnings.append("%s has no valid mode (got %r)" % (TICKET_FILE, mode))
+                mode = mode or None
+            state["task"] = {
+                "number": number,
+                "slug": dirname[len("%d-" % number):],
+                "dir": rel_to(top, task_dir),
+                "mode": mode,
+                "archived": archived,
+                "url": ticket.get("url"),
+                "pr": _to_int(ticket.get("pr")),
+            }
+            artifacts, w = build_artifacts(top, cfg, task_dir)
+            state["artifacts"] = artifacts
+            warnings.extend(w)
+            plan_text = read_text(os.path.join(task_dir, PLAN_FILE))
+            plan_body = split_frontmatter(plan_text)[1] if plan_text is not None else None
+            log_text = read_text(os.path.join(task_dir, LOG_FILE))
+            impl, w = implementation_progress(mode, plan_body, log_text)
+            state["implementation"] = impl
+            warnings.extend(w)
+
+    if with_pr and state["task"] and not state["task"]["archived"]:
+        pr, w = fetch_pr(top, cfg)
+        state["pr"] = pr
+        warnings.extend(w)
+
+    state["next"] = decide_next(state)
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Decision table (LOOM_SPEC.md section 9.12) - pure function
+# ---------------------------------------------------------------------------
+
+
+def _next(command: str, reason: str) -> Dict[str, str]:
+    return {"command": command, "reason": reason}
+
+
+def _phase_notes(arts: Dict[str, Dict[str, Any]], mode: str) -> str:
+    notes = []
+    for phase in ("research-questions", "research"):
+        if phase not in PHASES_BY_MODE.get(mode, []):
+            continue
+        art = arts.get(phase)
+        if art and art.get("status") == "in-review":
+            notes.append("%s not reviewed" % phase)
+    research = arts.get("research")
+    if research and research.get("stale") and "research" in PHASES_BY_MODE.get(mode, []):
+        notes.append("research is stale (referenced files changed on main); consider rerunning /loom:research")
+    return "".join("; note: %s" % n for n in notes)
+
+
+def _route_pr(pr: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    number = pr.get("number")
+    label = "PR #%s" % number if number is not None else "PR"
+    state = str(pr.get("state") or "").upper()
+    if state == "MERGED":
+        return _next("/loom:finish-task", "%s is merged; /loom:finish-task completes the cleanup" % label)
+    if state != "OPEN":
+        return None
+    checks = pr.get("checks")
+    if checks == "failing":
+        return _next("/loom:iterate", "%s has failing checks" % label)
+    if str(pr.get("reviewDecision") or "").upper() == "CHANGES_REQUESTED":
+        return _next("/loom:iterate", "%s has requested changes" % label)
+    behind = pr.get("behindMain")
+    if (isinstance(behind, int) and behind > 0) or str(pr.get("mergeStateStatus") or "").upper() == "BEHIND":
+        return _next("/loom:iterate rebase", "%s branch is behind the main branch" % label)
+    if checks == "pending":
+        return _next("/loom:finish-task", "%s checks are pending; /loom:finish-task watches them" % label)
+    if checks == "none":
+        return _next("/loom:finish-task", "%s reports no checks and no requested changes" % label)
+    return _next("/loom:finish-task", "%s checks are green and no changes are requested" % label)
+
+
+def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
+    """Return the next step for a state dict. First matching row wins.
+
+    Pure function: it reads only `state` (the loom-state JSON without `next`).
+    """
+    branch = state.get("branch")
+    task = state.get("task")
+
+    # Row 1: on the main branch.
+    if state.get("onMain"):
+        return _next(
+            "/loom:start-task #<n>",
+            "on the main branch: pick an issue with /loom:backlog, then start it with /loom:start-task #<n>",
+        )
+
+    # Row 2: no task for this branch, or the task is archived.
+    if not task:
+        m = BRANCH_RE.match(branch or "")
+        if m:
+            n = int(m.group(2))
+            return _next("/loom:start-task #%d" % n, "no task directory for issue #%d" % n)
+        return _next(
+            "/loom:start-task #<n>",
+            "branch %s matches no task" % (branch or "(detached HEAD)"),
+        )
+    number = task.get("number")
+    if task.get("archived"):
+        return _next(
+            "/loom:start-task #%s" % number,
+            "task #%s is archived; /loom:start-task #%s offers to restore it" % (number, number),
+        )
+
+    impl = state.get("implementation") or {}
+    artifacts = state.get("artifacts") or []
+
+    # Row 3: dirty working tree or an implementation phase in progress.
+    if state.get("workingTree") == "dirty":
+        return _next("/loom:implement", "working tree has uncommitted changes (resume flow)")
+    if impl.get("inProgress"):
+        return _next(
+            "/loom:implement",
+            "implementation phase %s is in progress (resume flow)" % impl["inProgress"],
+        )
+
+    # Row 4: anything blocked.
+    for art in artifacts:
+        if art.get("status") == "blocked":
+            return _next("/loom:iterate <fix>", "%s is blocked" % art.get("file"))
+    blocked = impl.get("blocked")
+    if blocked:
+        reason = blocked.get("reason") or "no reason recorded"
+        return _next(
+            "/loom:iterate <fix>",
+            "implementation phase %s is blocked: %s" % (blocked.get("phase"), reason),
+        )
+
+    # Row 5: pull request routing (section 6.2).
+    pr = state.get("pr")
+    if isinstance(pr, dict):
+        routed = _route_pr(pr)
+        if routed:
+            return routed
+    elif task.get("pr"):
+        return _next(
+            "/loom:finish-task",
+            "PR #%s exists but its state was not read (loom-state --pr); "
+            "/loom:finish-task checks it before merging" % task["pr"],
+        )
+
+    # Row 6: all implementation phases done.
+    total = impl.get("total") or 0
+    done = impl.get("done") or 0
+    if total > 0 and done >= total:
+        return _next("/loom:describe-pr", "all %d implementation phases are done" % total)
+
+    mode = task.get("mode")
+    if mode not in MODES:
+        return _next("/loom:iterate", "%s has no valid mode; set it with a mode change" % TICKET_FILE)
+
+    arts = {a.get("phase"): a for a in artifacts}
+    notes = _phase_notes(arts, mode)
+    gates = [arts[p] for p in GATES_BY_MODE[mode] if p in arts]
+
+    # Rows 7 and 8 consider only gates in review: an approved gate is done,
+    # and a draft gate is unfinished, so row 10 reruns its phase.
+    # Row 7: a gate artifact has open questions.
+    for gate in gates:
+        if gate.get("status") == "in-review" and (gate.get("openQuestions") or 0) > 0:
+            return _next(
+                "/loom:iterate <answers>",
+                "%s has %d open questions%s" % (gate.get("phase"), gate["openQuestions"], notes),
+            )
+
+    # Row 8: a gate artifact is in review with no open questions.
+    for gate in gates:
+        if gate.get("status") == "in-review":
+            return _next(
+                "/loom:iterate approve",
+                "%s is in review with no open questions%s" % (gate.get("phase"), notes),
+            )
+
+    # Row 9: plan approved (or oneshot) and implementation phases left.
+    plan = arts.get("plan")
+    if mode == "oneshot" or (plan and plan.get("status") == "approved"):
+        if total == 0 or done < total:
+            if total:
+                reason = "%d of %d implementation phases done" % (done, total)
+            else:
+                reason = "implementation not started"
+            return _next("/loom:implement", reason + notes)
+
+    # Row 10: the next missing phase for the mode. Non-gate artifacts never
+    # block: a later phase that already exists wins over an earlier one.
+    sequence = PHASES_BY_MODE[mode]
+    reached = -1
+    for index, phase in enumerate(sequence):
+        art = arts.get(phase)
+        if art and art.get("status") in REVIEWED_STATUSES:
+            reached = index
+    if reached + 1 < len(sequence):
+        phase = sequence[reached + 1]
+        art = arts.get(phase)
+        if art is None:
+            reason = "%s is missing" % PHASE_FILE[phase]
+        else:
+            reason = "%s is %s (unfinished)" % (PHASE_FILE[phase], art.get("status") or "without status")
+        return _next(PHASE_COMMAND[phase], reason + notes)
+    return _next("/loom:implement", "no missing phase found" + notes)
+
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+
+
+def format_line(state: Optional[Dict[str, Any]]) -> str:
+    """One statusline, e.g. `#42 · full · design:in-review · 3 open Q`."""
+    if not state or not state.get("task"):
+        return ""
+    task = state["task"]
+    parts = ["#%s" % task.get("number")]
+    if task.get("archived"):
+        parts.append("archived")
+        return " · ".join(parts)
+    parts.append(task.get("mode") or "no mode")
+    impl = state.get("implementation") or {}
+    phases = impl.get("phases") or []
+    started = any(p.get("status") != "pending" for p in phases)
+    if started or task.get("mode") == "oneshot":
+        parts.append("impl %d/%d" % (impl.get("done") or 0, impl.get("total") or 0))
+        if impl.get("blocked"):
+            parts.append("blocked")
+        elif impl.get("inProgress"):
+            parts.append("in progress")
+    else:
+        artifacts = state.get("artifacts") or []
+        if artifacts:
+            latest = artifacts[-1]
+            parts.append("%s:%s" % (latest.get("phase"), latest.get("status") or "?"))
+            if latest.get("openQuestions"):
+                parts.append("%d open Q" % latest["openQuestions"])
+        else:
+            parts.append("ticket")
+    pr = state.get("pr")
+    pr_number = pr.get("number") if isinstance(pr, dict) else task.get("pr")
+    if pr_number:
+        parts.append("PR #%s" % pr_number)
+    return " · ".join(parts)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(prog="loom-state", description="Compute the loom task state.")
+    fmt = parser.add_mutually_exclusive_group()
+    fmt.add_argument("--json", action="store_true", help="JSON output (default)")
+    fmt.add_argument("--line", action="store_true", help="one line for the statusline")
+    parser.add_argument("--pr", action="store_true", help="add pull request state (calls gh and the network)")
+    parser.add_argument("--docs", action="store_true", help="docs freshness check (reserved)")
+    args = parser.parse_args(argv)
+
+    cwd = os.getcwd()
+    top = find_toplevel(cwd)
+    if not top or not os.path.isfile(config_path(top)):
+        return 0  # not a loom project: silent no-op
+    if args.docs:
+        sys.stderr.write("loom-state: --docs is not implemented in v1 (planned for v1.1)\n")
+        return 2
+    state = compute_state(cwd, with_pr=args.pr)
+    if state is None:
+        return 0
+    if args.line:
+        line = format_line(state)
+        if line:
+            sys.stdout.write(line + "\n")
+        return 0
+    sys.stdout.write(json.dumps(state, indent=2, ensure_ascii=False) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as exc:  # never show a traceback in the statusline
+        sys.stderr.write("loom-state: unexpected error: %s\n" % exc)
+        sys.exit(1)
