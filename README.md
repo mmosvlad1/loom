@@ -4,7 +4,7 @@ A Claude Code plugin for structured, agent-driven development: **Research → Pl
 
 loom turns a GitHub issue into a merged pull request through explicit phases. Each phase runs in a fresh session and writes a markdown artifact; the next phase reads only those artifacts. You stay in control at the checkpoints that matter: design approval, plan approval, manual verification, push, and merge.
 
-**Status:** early development. The core (state script and safety hooks), the subagents, and the phase skills (`research-questions`, `research`, `design`, `plan`, `iterate`) exist; `implement` and the remaining skills (`setup`, `backlog`, `start-task`, `describe-pr`, `finish-task`, `next`) are not implemented yet. See [LOOM_SPEC.md](LOOM_SPEC.md) for the full specification.
+**Status:** early development. The core (state script, safety hooks, and the hooks that enforce checks), the subagents, and the skills `research-questions`, `research`, `design`, `plan`, `iterate`, `implement`, `describe-pr`, `finish-task`, and `next` exist. Not implemented yet: `setup`, `backlog`, `start-task`, and the eval suite. See [LOOM_SPEC.md](LOOM_SPEC.md) for the full specification.
 
 ## Install
 

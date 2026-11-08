@@ -112,6 +112,7 @@ Reason: …
 - The last heading for an implementation phase wins.
 - A `log.md` entry wins over the plan checkbox of the same implementation phase.
 - In oneshot mode the only implementation phase is `Phase 1`.
+- Every entry form (in-progress, done, fix, blocked, plan change) and the exact grammar that `loom-state` parses: the plugin file `skills/implement/references/log-format.md`.
 
 ## Resolved Decisions
 

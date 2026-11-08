@@ -115,6 +115,9 @@ loom/
 │   │   ├── question-rounds.md      # §12
 │   │   ├── visual-conventions.md   # trees, diff blocks
 │   │   ├── writing-style.md        # §14
+│   │   ├── git-flow.md             # §16: commit format, checks, rebase, push, confirmations
+│   │   ├── implementation-loop.md  # implementer → checks → reviewer → fix attempts (implement, iterate)
+│   │   ├── pr-update.md            # docs refresh, PR body, push after commits on an open PR (iterate, implement)
 │   │   └── final-answer.md         # format of every skill's last message
 │   ├── setup/
 │   │   ├── SKILL.md
@@ -122,14 +125,14 @@ loom/
 │   │       ├── stacks/python-uv.md
 │   │       ├── stacks/node.md
 │   │       └── templates/          # ci.yml, Makefile, CLAUDE.md, docs/*, statusline
-│   ├── backlog/      (SKILL.md, references/issue-format.md)
+│   ├── backlog/      (SKILL.md, references/issue-format.md — also read by describe-pr)
 │   ├── start-task/   (SKILL.md, references/ticket-template.md)
 │   ├── research-questions/  (SKILL.md, references/template.md)
 │   ├── research/     (SKILL.md, references/template.md)
 │   ├── design/       (SKILL.md, references/template.md)
 │   ├── plan/         (SKILL.md, references/template.md)
 │   ├── iterate/      (SKILL.md)
-│   ├── implement/    (SKILL.md, references/log-format.md)
+│   ├── implement/    (SKILL.md, references/log-format.md — also read by iterate and describe-pr)
 │   ├── describe-pr/  (SKILL.md, references/summary-template.md, adr-template.md, pr-template.md)
 │   ├── finish-task/  (SKILL.md)
 │   └── next/         (SKILL.md)
@@ -268,7 +271,7 @@ A mode change is allowed **only before `implement` starts**. After that, a diffe
         │
    CI (GitHub Actions) make check
         │
-/loom:finish-task      branch up to date? CI green? → gh pr merge --squash --delete-branch   (confirmation)
+/loom:finish-task      branch up to date? CI green? → gh pr merge --squash --delete-branch --subject '<PR title>'   (confirmation)
                        git switch main && git pull && git fetch --prune
                        move task directory → .loom/tasks/_archive/
 ```
@@ -279,6 +282,7 @@ A mode change is allowed **only before `implement` starts**. After that, a diffe
 
 | PR state | Route |
 |---|---|
+| Implementation phases left (a plan change after the PR; plan approved, or oneshot) | `/loom:implement`, before every other route below; after its last phase it refreshes the docs and pushes (confirmation) |
 | Checks failing | `/loom:iterate` → reads failed check logs (`gh run view --log-failed`), fixes |
 | Changes requested / review comments | `/loom:iterate` → reads comments (`gh pr view --comments`), fixes |
 | Branch behind `main` | `/loom:iterate rebase` → `git rebase origin/main`, re-runs checks |
@@ -351,12 +355,14 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
   "implementation": { "total": 3, "done": 1, "inProgress": null, "blocked": null,
                       "phases": [ { "number": 1, "status": "done", "commit": "d4e5f6" } ] },
   "workingTree": "clean",
+  "workingTreeDocsOnly": false,
   "pr": null,
   "next": { "command": "/loom:iterate <answers>", "reason": "design has 3 open questions" },
   "warnings": []
 }
 ```
 
+- `workingTreeDocsOnly` is `true` when the tree is `dirty` only below `docsDir` (besides the ignored `workDir` and `.loom/`), else `false`: an interrupted `describe-pr` writes docs before its commit.
 - `today` is the local date (`YYYY-MM-DD`). Skills use it for `updated` instead of injecting a `date` command (§9.0).
 - `task` is `null` when the branch matches no task directory. `artifacts` lists only existing files of 01–04 (the ticket is reported through `task`; `*.superseded.md` files are ignored).
 - `implementation.blocked` is `null` or `{ "phase": N, "reason": "…" }`. Phase status is `pending`, `in-progress`, `done`, or `blocked`.
@@ -390,7 +396,7 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
 
 - All skills set `disable-model-invocation: true`. They run only when invoked as `/loom:<skill>`.
 - Phase skills start by injecting state: `` !`"${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json` `` (verified: `` !`cmd` `` injects command output, and `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SKILL_DIR}` are substituted when the skill loads).
-- Every injected command needs a matching `allowed-tools` rule, or the skill aborts outside auto mode (§24.2). Phase skills set `allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json) Bash(loom-state --json) Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` (`iterate`: the injected command is `… --json --pr`). Only the injection line uses the full path; every Bash call in a skill body uses the bare `loom-state --json` (`bin/` is on the Bash `PATH`), which matches the §19.3 allowlist. The `Read` rule lets the skill read its shared snippets and templates, which lie outside the project's working directory. The grant lasts one turn, so skills read these files before they ask the user anything. Skills inject nothing else; the date comes from `loom-state` → `today`.
+- Every injected command needs a matching `allowed-tools` rule, or the skill aborts outside auto mode (§24.2). Phase skills set `allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json) Bash(loom-state --json) Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` (`iterate`, `implement`, `describe-pr`, `finish-task`, and `next`: the injected command is `… --json --pr`). Only the injection line uses the full path; every Bash call in a skill body uses the bare `loom-state --json` (`bin/` is on the Bash `PATH`), which matches the §19.3 allowlist. The `Read` rule lets the skill read its shared snippets and templates, which lie outside the project's working directory. The grant lasts one turn, so skills read these files before they ask the user anything. Skills inject nothing else; the date comes from `loom-state` → `today`.
 - Skills spawn agents by their namespaced name: `loom:codebase-locator`, etc.
 - Model and effort per skill (values to tune), set as the skill frontmatter fields `model` and `effort` (verified, §24.2). `default` means the `effort` field is omitted, so the session's effort level applies:
 
@@ -399,7 +405,10 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
 | design, plan | inherit | high |
 | research-questions, research, implement, iterate, describe-pr, backlog | inherit | default |
 | setup, start-task | inherit | default |
-| next, finish-task | haiku | low |
+| next | inherit | default |
+| finish-task | haiku | low |
+
+`next` runs a phase skill in its own turn (§9.12), so it keeps the session's model and effort: a phase run through `next` uses the session's effort, not the phase's `effort` field. For `effort: high` on design or plan, invoke `/loom:design` or `/loom:plan` directly.
 
 ### 9.1 `setup`
 
@@ -510,7 +519,8 @@ The single skill for changing anything that already exists. It detects the targe
 | `approve` | Sets `status: approved`. Refuses while open questions remain, unless the user repeats `approve` in the argument (`/loom:iterate approve approve`); the remaining questions then take their recommendations |
 | A blocked implementation phase | Runs the fix loop on it (implementer → checks → reviewer). Not yet committed: commits it as the phase commit and ticks its checkboxes. Already committed: commits a fix commit. Then `done` in `log.md` |
 | Feedback on an implemented phase (before PR) | Runs `loom:implementer` on the fix → checks → reviewer → commit → deviation in `log.md` |
-| Feedback after the plan is approved that changes the plan | Edits the plan (as `draft` while the edit runs, if implementation started; an interrupted edit is finished by the next `iterate`), sets it back to `in-review`, marks affected not-done implementation phases as unchecked; done phases stay done and the change is logged as a deviation |
+| Feedback after the plan is approved that adds, removes, or changes an implementation phase — also with a PR open (this row comes before the post-PR fix path) | Edits the plan (as `draft` while the edit runs, if implementation started; an interrupted edit is finished by the next `iterate`), sets it back to `in-review`, marks affected not-done implementation phases as unchecked; done phases stay done and the change is logged as a deviation |
+| All implementation phases done and uncommitted code changes (before the post-PR fix path) | Shows the changes and asks: keep them as a fix (checks → reviewer in fix mode → fix loop on blocking items → fix commit → `log.md` → `pr-update.md` if the PR is open), or drop them (stash or discard, with confirmation; discard loses the work) |
 | PR open: failing checks or review comments | Post-PR fix path (§6.2) |
 | `rebase` | `git rebase origin/<mainBranch>`, checks, push with `--force-with-lease` (confirmation) |
 | Mode change | §5.3 rules |
@@ -527,45 +537,58 @@ The single skill for changing anything that already exists. It detects the targe
 **Per implementation phase:**
 1. Writes `in-progress` for the phase in `log.md`.
 2. Launches `loom:implementer` with a short prompt: plan path + phase number (oneshot: ticket path). The implementer never commits.
-3. Checks are enforced by the `SubagentStop` hook (§11.4): the implementer cannot finish while `checks.check` fails.
-4. Launches `loom:implementation-reviewer` (oneshot: compares the diff with the ticket). The verdict has the categories of §10.2. Only `blocking` items go back to the implementer. At most 2 fix attempts; then `blocked: <reason>` in `log.md` and stop.
-5. Commits: `<type>(<scope>): <summary> (#<n>)`, body `Phase N: <name>`; in oneshot mode the body is `Phase 1: oneshot`.
-6. Ticks the phase checkboxes in `04-plan.md` and writes `done` with commit hash, checks result, and deviations to `log.md`.
+3. Checks are enforced by the `SubagentStop` hook (§11.4): the implementer cannot finish while `checks.check` fails. The hook lets the implementer stop after `hooks.maxCheckAttempts` failures, so `implement` runs `checks.check` once more itself. Failing checks there mean the phase is `blocked`; `implement` never commits on failing checks.
+4. Launches `loom:implementation-reviewer` (oneshot: compares the diff with the ticket). The verdict has the categories of §10.2. Only `blocking` items go back to the implementer. At most `implement.maxFixAttempts` fix attempts (default 2); then `blocked: <reason>` in `log.md` and stop.
+5. Commits: `<type>(<scope>): <summary> (#<n>)`, body `Phase N: <name>`; in oneshot mode the body is `Phase 1: oneshot`. `<type>` is the branch type; `<scope>` is the module that holds most of the change (`_shared/git-flow.md`).
+6. Ticks the phase checkboxes in `04-plan.md` (Phase Overview and `Automated:` lines; `Manual:` lines stay for the user) and writes `done` with commit hash, checks result, reviewer verdict, deviations, and additions to `log.md` (`implement/references/log-format.md`).
 7. **Auto-advance** if checks pass, no `blocking` items remain, and the phase lists no manual verification. Otherwise stops with a phase summary and the manual steps.
 
 The user can override: "do all phases and stop at the end" or "stop after every phase".
 
+- When all implementation phases are done, `implement` stops with `Next:` from `loom-state`, with a clean or a dirty working tree.
+- Resume: before it rebuilds an `in-progress` phase, `implement` looks for its commit (`git log --grep='^Phase N:'`); a committed phase only gets its plan ticks and `done` entry. A stash never includes the task directory.
+- If the PR is already open (a plan change after the PR added phases), `implement` runs `_shared/pr-update.md` after the last phase: docs refresh, PR body, and push, each with confirmation.
+
+Steps 2–4 are `_shared/implementation-loop.md`; `iterate` runs the same loop for fixes, so both skills decide `done` and `blocked` by the same rules.
+
 ### 9.10 `describe-pr`
 
 **Does:**
-1. Reads all artifacts and `log.md`.
+1. Reads all artifacts and `log.md`. A working tree that is dirty only below `docsDir` is its own earlier partial run: it continues. Code changes stop it.
 2. quick/full: writes `docs/tasks/<n>-<slug>.md` (§13.4).
 3. Creates ADRs for resolved decisions marked `ADR? = yes` (§13.5).
 4. Checks whether the task changed the architecture; if so, proposes an update to `docs/architecture/overview.md`.
 5. Commits `docs(#<n>): record decisions and summary` — only if something changed.
-6. `git rebase origin/<mainBranch>`; re-runs checks if the rebase brought changes.
-7. Drafts the PR body (§13.6), shows it, and after confirmation runs `git push -u origin <branch>` and `gh pr create`.
+6. `git rebase origin/<mainBranch>` after the same guarded `git fetch` as `iterate rebase` (no fetch without a remote `origin`); re-runs checks if the rebase brought changes. Failing checks stop it before the push; `/loom:iterate` fixes them.
+7. Drafts the PR title (Conventional Commits, ending with `(#<n>)`) and body (§13.6) in `<task dir>/pr-body.md`, shows them, and after confirmation runs `git push -u origin <branch>` and `gh pr create`.
 8. Stores the PR number in `00-ticket.md` frontmatter (`pr: 57`).
 9. Proposes follow-ups from the summary as new issues, in the format of `${CLAUDE_PLUGIN_ROOT}/skills/backlog/references/issue-format.md` (confirmation required).
 
 ### 9.11 `finish-task`
 
 **Does:**
-1. Runs from the task branch. Refuses on `main`.
+1. Runs from the task branch. Refuses on `main`, except `/loom:finish-task #<n>` after a merge that stopped before the cleanup (steps 5–7). Refuses while implementation phases are left, and while local commits are not on the PR (it offers the push, with confirmation): the squash merge takes only what the PR has.
 2. Checks the branch is not behind `origin/<mainBranch>`; if it is, routes to `/loom:iterate rebase`.
 3. `gh pr checks --required --watch` (pending ≠ failed). Refuses to merge on failure; "no required checks" is reported separately and needs explicit confirmation.
-4. After confirmation: `gh pr merge --squash --delete-branch` (no number: it selects the PR of the current branch; it deletes the local and remote branch).
+4. After confirmation: `gh pr merge --squash --delete-branch --subject '<PR title>' --match-head-commit <sha>` (no number: it selects the PR of the current branch; it deletes the local and remote branch). `--subject` keeps the Conventional Commits title, which already ends with `(#<n>)`, as the squash commit subject; without it GitHub may append ` (#<PR number>)`. `--match-head-commit` is the head whose checks step 3 watched. The title comes from `gh pr view --json title` and is single-quoted (`_shared/git-flow.md`).
 5. `git switch <mainBranch> && git pull && git fetch --prune`. Deletes the local branch with `git branch -D` only if it still exists.
 6. Moves the task directory to `.loom/tasks/_archive/`.
 7. If the merged task was the setup task and no ruleset exists, offers to enable it (§17.3).
 
-All steps are idempotent: re-running after a partial failure continues where it stopped.
+All steps are idempotent: re-running after a partial failure continues where it stopped. Every stop after the merge ends with `Next: /loom:finish-task #<n>`, which resumes on the main branch.
+
+Dirty working tree: changes only below `docsDir` are an interrupted docs refresh, so `finish-task` runs `_shared/pr-update.md` (docs commit, confirmed push) and continues. Code changes stop it with `Next: /loom:iterate`, which keeps them as a fix or stashes or discards them. With the PR already merged, it offers a stash before the cleanup.
 
 ### 9.12 `next`
 
 **Purpose:** show the task state and **run** the next phase. It replaces the earlier `next-phase` idea.
 
 **Does:** runs `loom-state --pr`, prints a 3–5 line state summary, then reads and follows the next phase's `SKILL.md` from `${CLAUDE_PLUGIN_ROOT}/skills/<phase>/` (same rules as invoking that skill directly). For `iterate`, `describe-pr`, and `finish-task` it only names the command, because those need the user's input or confirmation.
+
+A file read with Read is not loaded as a skill, so `next` compensates (§24.2):
+- **Injection and variables:** Read does not run the phase file's `` !`…` `` line and does not substitute `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SKILL_DIR}`, or `$ARGUMENTS` in it. The model uses the state that `next` injected (or bare `loom-state --json`) instead of the injection, replaces `${CLAUDE_PLUGIN_ROOT}` with the value shown in `next`'s own (substituted) body, replaces `${CLAUDE_SKILL_DIR}` with `<plugin root>/skills/<phase>`, and treats `$ARGUMENTS` as `next`'s arguments. `next`'s prompt names these placeholders without writing them, because its own body is substituted too.
+- **Permissions:** the phase file's `allowed-tools` do not apply. `next` carries the union: its own `… --json --pr` injection rule, bare `loom-state --json`, and the plugin `Read` rule. It reads the phase file and that file's shared files before it asks the user anything.
+- **Model:** the phase file's `model` and `effort` do not apply, so `next` uses `model: inherit` with no `effort` (§9.0).
 
 **Decision table** (first matching row wins):
 
@@ -575,15 +598,17 @@ All steps are idempotent: re-running after a partial failure continues where it 
 | 2 | Branch matches no task, or task archived | suggest `/loom:start-task #n` (restore if archived) |
 | 3 | Any artifact has `blocked`, or an implementation phase is `blocked` and the plan gate holds (`04-plan.md` approved or missing, or oneshot) — also with a dirty tree | show the reason; suggest `/loom:iterate <fix>` |
 | 4 | Implementation started (`log.md` has a phase entry, or a plan phase is ticked), not oneshot, and `04-plan.md` exists and is not `approved` (a plan change) — with or without a blocked phase, also with a dirty tree | `/loom:iterate <feedback>` if the plan is `draft` (plan edit not finished); else `/loom:iterate <answers>` if it has open questions; else `/loom:iterate approve` |
-| 5 | Dirty tree or `log.md` phase `in-progress` | run `implement` (resume flow) |
+| 5 | `log.md` phase `in-progress`, or a dirty tree while implementation phases are left; with all phases done, a dirty tree with code changes (not only below `docsDir`) | run `implement` (resume flow); with all phases done: `/loom:finish-task` if the PR is merged, else `/loom:iterate <feedback>` (keep the changes as a fix, or stash or discard them) |
 | 6 | Gate artifact (design/plan) `in-review` with open questions | `/loom:iterate <answers>` |
 | 7 | Gate artifact `in-review`, no open questions | `/loom:iterate approve` |
-| 8 | PR open | PR routing table §6.2 |
+| 8 | PR open | PR routing table §6.2; phases left and the plan gate holds (approved, or oneshot): run `implement`, before every other open-PR route |
 | 9 | All implementation phases done | `/loom:describe-pr` |
 | 10 | Plan approved (or oneshot), phases left | run `implement` |
 | 11 | Otherwise | run the next missing phase for the mode |
 
 Gate work (rows 6 and 7) comes before PR routing and "all implementation phases done": a design or plan that went back to review, for example after a plan change on an open PR, is never skipped. Before implementation starts, a `draft` gate artifact is unfinished work and falls to row 11, which reruns its phase (`/loom:plan` overwrites a draft plan). After implementation started, a draft or in-review plan is a plan change and row 4 handles it, before the dirty tree, PR routing, and describe-pr. Non-gate artifacts (research-questions, research) never block row 11. If research is `in-review`, `next` prints "research not reviewed" and continues. If research is stale, it warns and offers to rerun research.
+
+Row 5 and a dirty tree: `implement` resumes only while implementation phases are left. With all phases done, a tree that is dirty only below `docsDir` (`workingTreeDocsOnly`) is an interrupted `describe-pr` and falls through to the later rows (row 9, `/loom:describe-pr`, which continues its partial run; with an open PR, the PR routing of row 8, whose skills commit the docs through `_shared/pr-update.md`); code changes go to `/loom:iterate` (or `/loom:finish-task` when the PR is merged). A skill that refuses a dirty tree names the skill that handles the changes, never a `Next:` that leads back to the same refusal.
 
 ---
 
@@ -668,15 +693,18 @@ Known limits:
 
 ### 11.4 `SubagentStop` — enforce checks for the implementer
 
-- Matcher: the `loom:implementer` agent.
-- Runs `checks.check`. On failure, exits with code 2: the subagent cannot finish and receives the failure output.
-- Uses `stop_hook_active` to avoid infinite loops: after the configured number of attempts (`hooks.maxCheckAttempts`, default 3) it lets the subagent stop, and `implement` records `blocked`.
+- Matcher: `^loom:implementer$`. Plugin agents report the plugin-scoped `agent_type` (`loom:implementer`); the colon puts the matcher on the regex path, so it is anchored. The script checks `agent_type` again.
+- Runs `checks.check` at the git top level, with a 540-second timeout (the hook `timeout` in `hooks.json` is 600 seconds, enough for a real `make check`). On failure or timeout, exits with code 2: the subagent cannot finish and receives the tail of the output on stderr.
+- Counts failed attempts in a small file per subagent run, in `<tempdir>/loom-subagent-checks/` (`$TMPDIR`), keyed by a hash of `session_id` and `agent_id`. A pass deletes the file.
+- After `hooks.maxCheckAttempts` failures in a row (default 3) it exits 0, so the subagent can stop, with a `systemMessage` for the user; `implement` runs the checks again and records `blocked`.
+- The counter is always read, also when `stop_hook_active` is `false`; a counter file older than one hour is stale (an interrupted run) and counts as 0. The counter ends the loop: Claude Code's own cap of 8 consecutive stop-hook continuations resets on every tool call. `stop_hook_active` (`true` while the subagent continues because a stop hook blocked it) is recorded in the counter file for debugging only.
+- No `.claude/loom.json`, or another agent: silent no-op.
 
 ### 11.5 `Stop` — quick lint (optional)
 
 - Enabled by `hooks.stopLint` (default `false`).
-- Runs only if the working tree has code changes (not only `.loom/` or `docs/`).
-- Runs `checks.lint`. On failure exits 2 so Claude sees the output; respects `stop_hook_active` to avoid loops.
+- Runs only if the working tree has code changes (not only `.loom/`, `workDir`, or `docsDir`).
+- Runs `checks.lint` (270-second timeout; hook `timeout` 300 seconds). On failure exits 2 so Claude sees the output; respects `stop_hook_active` to avoid loops: while it is `true`, the hook does nothing, so each stop gets at most one lint block.
 
 ---
 
@@ -831,7 +859,7 @@ In `_shared/visual-conventions.md`: proper tree glyphs (`├──`, `└──`
 ## Problem
 ## Outcome
 ## Key Decisions        ← links to ADRs
-## Implementation       ← phases → commits
+## Implementation       ← phases → commit subjects (hashes change on rebase and squash merge)
 ## Deviations from Plan
 ## Verification
 ## Follow-ups
@@ -942,7 +970,7 @@ docs/
 
 - Before push and before merge, the branch is rebased on `origin/<mainBranch>`. After a rebase of an already pushed branch, push uses `--force-with-lease`.
 - **Squash merge:** the main branch stays linear, one commit per task; implementation-phase commits stay visible in the PR.
-- `gh pr merge --squash --delete-branch` deletes the local and remote branch. The repo setting "Automatically delete head branches" is also recommended. A deleted branch can be restored from the PR page.
+- `gh pr merge --squash --delete-branch --subject '<PR title>'` deletes the local and remote branch and keeps the PR title (Conventional Commits, ending with `(#<n>)`) as the squash commit subject. The repo setting "Automatically delete head branches" is also recommended. A deleted branch can be restored from the PR page.
 
 ### 16.4 What needs user confirmation
 
@@ -953,6 +981,10 @@ docs/
 | `gh pr create`, `gh pr edit`, `gh pr merge` | Yes |
 | `gh issue create` | Yes |
 | Repo settings, labels, ruleset (`gh api`, `gh label create`) | Yes |
+| Read-only `gh api` GET (e.g. listing rulesets) | No (the permission system may still ask, §19.3) |
+| `git stash`, discarding changes | Yes. A stash runs `git check-ignore -q <task dir>` first: an ignored task directory takes the plain `git stash push --include-untracked` (a pathspec with an ignored path makes `git stash` exit 1 and leave the changes staged); otherwise the `':(exclude)<task dir>'` pathspec. |
+
+Commit messages are written to `<task dir>/commit-msg.txt` and committed with `git commit -F`; one-line titles (`gh pr create --title`, `gh pr merge --subject`) are single-quoted with every `'` written as `'\''`. Double quotes would expand backticks and `$` from plan headings (`_shared/git-flow.md`).
 
 ### 16.5 Protection
 
@@ -1088,7 +1120,7 @@ Every component reads `mainBranch`, `workDir`, and `docsDir` from this file. Non
 
 ### 20.1 Unit tests
 
-`tests/` covers `loom-state` (task lookup, statuses, decision table, stale research, log parsing) and the hook scripts (guard, output filtering) with fixture directories. Runs in loom's CI.
+`tests/` covers `loom-state` (task lookup, statuses, decision table, stale research, log parsing) and the hook scripts (guard, output filtering, SubagentStop checks, Stop lint) with fixture directories, plus spec-driven lints of skills, agents, shared snippets, and templates (§13.2, §13.4–§13.6). Runs in loom's CI.
 
 ### 20.2 Evals
 
@@ -1181,10 +1213,16 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
 
 Still open:
 
-- `SubagentStop` matcher value for a namespaced plugin agent (`loom:implementer` vs `implementer`) — to confirm in milestone M4.
 - `claude plugin eval` scenario format and available graders.
 - GitHub rulesets availability on the free plan for public repositories.
 - How the `statusLine` in `.claude/settings.json` references `loom-state`: `bin/` is documented on the Bash tool's `PATH` only, and `${CLAUDE_PLUGIN_ROOT}` is not documented for settings.
+
+Resolved (milestone M4):
+
+- **`SubagentStop` for a plugin agent** (https://code.claude.com/docs/en/hooks, SubagentStart and SubagentStop): the input has `stop_hook_active`, `agent_id`, `agent_type`, `agent_transcript_path`, and `last_assistant_message`, plus the common fields. `agent_type` is the matcher value. For a plugin agent it is the plugin-scoped name (`loom:implementer`), not the frontmatter name; the docs recommend the anchored matcher `^my-plugin:reviewer$`. Exit 2 keeps the subagent running and delivers stderr as its next instruction. `stop_hook_active` is `true` while Claude Code continues because of a stop hook; Claude Code also caps consecutive stop-hook continuations at 8, but that count resets on every tool call. The default command hook timeout is 600 seconds.
+  - Verified live (Claude Code 2.1.318, `claude -p --plugin-dir . --model haiku --permission-mode default --setting-sources project,local --allowedTools "Read Edit Write Agent Task"`, fixture repository whose `make check` always fails, plus a project `SubagentStop` hook with matcher `*` that logged its input): the input had `agent_type: "loom:implementer"`; the matcher `^loom:implementer$` fired; `subagent_checks.py` exited 2 twice and the implementer continued each time (the hook output reached it as "Stop hook feedback"); `stop_hook_active` was `false` on the first stop and `true` on the second and third, also after a successful Read call in between; on the third failure the hook exited 0 with its `systemMessage`, and the implementer stopped.
+  - Also seen live: in default permission mode, `make check 2>&1 | tee "${TMPDIR:-/tmp}/loom-check.log"` was refused ("A variable in braces in this command can't be checked before it runs"). Skills and the implementer therefore run checks exactly as configured, with no pipe, redirection, or shell variable (`_shared/git-flow.md`).
+- **`/loom:next` follows a phase file read with Read:** the file is not loaded as a skill. Its `` !`…` `` injection does not run, its `${…}` variables and `$ARGUMENTS` are not substituted, its `allowed-tools` do not apply, and its `model` and `effort` do not apply. Fix (§9.0, §9.12): `next` injects the state itself, tells the model how to fill in the placeholders, carries the union of the permission rules, and runs with `model: inherit` and the session's effort instead of `haiku`/`low`.
 
 Resolved (milestone M3):
 

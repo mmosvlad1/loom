@@ -186,6 +186,47 @@ class DecisionTableTest(unittest.TestCase):
         s = state(artifacts=[art("design", "in-review", 3)], workingTree="dirty")
         self.assertNext(s, "/loom:implement", "uncommitted")
 
+    def test_row5_phases_left_and_dirty(self):
+        s = state(artifacts=FULL_APPROVED, implementation=impl(3, 1), workingTree="dirty")
+        self.assertNext(s, "/loom:implement", "uncommitted")
+
+    def test_row5_all_done_docs_only_dirty_falls_through_to_describe_pr(self):
+        s = state(artifacts=FULL_APPROVED, implementation=impl(2, 2), workingTree="dirty", workingTreeDocsOnly=True)
+        self.assertNext(s, "/loom:describe-pr", "all 2 implementation phases are done")
+
+    def test_row5_all_done_code_dirty_goes_to_iterate(self):
+        s = state(artifacts=FULL_APPROVED, implementation=impl(2, 2), workingTree="dirty", workingTreeDocsOnly=False)
+        self.assertNext(s, "/loom:iterate <feedback>", "uncommitted code changes after all 2 implementation phases")
+
+    def test_row5_all_done_dirty_without_flag_counts_as_code(self):
+        s = state(mode="oneshot", implementation=impl(1, 1), workingTree="dirty")
+        self.assertNext(s, "/loom:iterate <feedback>")
+
+    def test_row5_all_done_docs_only_dirty_with_open_pr_routes_the_pr(self):
+        s = state(artifacts=FULL_APPROVED, implementation=impl(2, 2), workingTree="dirty",
+                  workingTreeDocsOnly=True, pr=open_pr(checks="pending"))
+        self.assertNext(s, "/loom:finish-task")
+
+    def test_row5_all_done_code_dirty_merged_goes_to_finish_task(self):
+        s = state(artifacts=FULL_APPROVED, implementation=impl(2, 2), workingTree="dirty",
+                  workingTreeDocsOnly=False, pr=open_pr(state="MERGED"))
+        self.assertNext(s, "/loom:finish-task", "merged")
+
+    def test_row5_all_done_code_dirty_open_pr_goes_to_iterate(self):
+        for pr in (open_pr(), open_pr(checks="failing"), open_pr(behindMain=2)):
+            with self.subTest(pr=pr):
+                s = state(artifacts=FULL_APPROVED, implementation=impl(2, 2), workingTree="dirty",
+                          workingTreeDocsOnly=False, pr=pr)
+                self.assertNext(s, "/loom:iterate <feedback>", "uncommitted code changes")
+
+    def test_row5_all_done_docs_only_dirty_open_pr_routes_the_pr(self):
+        for pr, command in ((open_pr(checks="failing"), "/loom:iterate"), (open_pr(behindMain=1), "/loom:iterate rebase"),
+                            (open_pr(), "/loom:finish-task")):
+            with self.subTest(pr=pr):
+                s = state(artifacts=FULL_APPROVED, implementation=impl(2, 2), workingTree="dirty",
+                          workingTreeDocsOnly=True, pr=pr)
+                self.assertNext(s, command)
+
     def test_row5_phase_in_progress(self):
         s = state(artifacts=FULL_APPROVED, implementation=impl(3, 1, in_progress=2))
         self.assertNext(s, "/loom:implement", "phase 2 is in progress")
@@ -276,6 +317,26 @@ class DecisionTableTest(unittest.TestCase):
     def test_row8_green(self):
         s = state(artifacts=FULL_APPROVED, implementation=impl(3, 3), pr=open_pr())
         self.assertNext(s, "/loom:finish-task", "green")
+
+    def test_row8_open_pr_with_phases_left_goes_to_implement_first(self):
+        for pr in (open_pr(checks="failing"), open_pr(reviewDecision="CHANGES_REQUESTED"), open_pr(behindMain=3),
+                   open_pr(checks="pending"), open_pr(), open_pr(checks="none")):
+            with self.subTest(pr=pr):
+                s = state(artifacts=FULL_APPROVED, implementation=impl(3, 2), pr=pr)
+                self.assertNext(s, "/loom:implement", "PR #57 is open and 2 of 3")
+
+    def test_row8_open_pr_oneshot_not_done_goes_to_implement(self):
+        s = state(mode="oneshot", implementation=impl(1, 0), pr=open_pr())
+        self.assertNext(s, "/loom:implement", "PR #57 is open")
+
+    def test_row8_merged_pr_with_phases_left_stays_finish_task(self):
+        s = state(artifacts=FULL_APPROVED, implementation=impl(3, 2), pr=open_pr(state="MERGED"))
+        self.assertNext(s, "/loom:finish-task", "merged")
+
+    def test_row8_open_pr_with_reopened_plan_stays_row4(self):
+        arts = FULL_APPROVED[:-1] + [art("plan", "in-review")]
+        s = state(artifacts=arts, implementation=impl(3, 2), pr=open_pr())
+        self.assertNext(s, "/loom:iterate approve")
 
     def test_row8_merged(self):
         s = state(artifacts=FULL_APPROVED, implementation=impl(3, 3), pr=open_pr(state="MERGED"))

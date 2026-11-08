@@ -73,13 +73,16 @@ def run_loom_state(cwd: str, *args: str) -> subprocess.CompletedProcess:
 
 
 def run_hook(
-    script: str, payload: Optional[Dict[str, Any]], raw: Optional[str] = None, cwd: Optional[str] = None
+    script: str, payload: Optional[Dict[str, Any]], raw: Optional[str] = None, cwd: Optional[str] = None,
+    env: Optional[Dict[str, str]] = None,
 ) -> subprocess.CompletedProcess:
-    """Run a hook script the way Claude Code does: JSON on stdin."""
+    """Run a hook script the way Claude Code does: JSON on stdin. `env` adds variables."""
     data = raw if raw is not None else json.dumps(payload)
+    full_env = dict(os.environ)
+    full_env.update(env or {})
     return subprocess.run(
         [sys.executable, os.path.join(HOOKS_DIR, script)],
-        input=data, cwd=cwd or tempfile.gettempdir(),
+        input=data, cwd=cwd or tempfile.gettempdir(), env=full_env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
     )
 
@@ -95,6 +98,21 @@ def bash_payload(command: str, cwd: str) -> Dict[str, Any]:
         "tool_input": {"command": command, "description": "test"},
         "tool_use_id": "toolu_test",
     }
+
+
+def stop_payload(cwd: str, event: str = "Stop", stop_hook_active: bool = False, **extra: Any) -> Dict[str, Any]:
+    """Input of a Stop or SubagentStop hook (fields from the Claude Code hooks docs)."""
+    payload: Dict[str, Any] = {
+        "session_id": "test-session",
+        "transcript_path": "/tmp/transcript.jsonl",
+        "cwd": cwd,
+        "permission_mode": "default",
+        "hook_event_name": event,
+        "stop_hook_active": stop_hook_active,
+        "last_assistant_message": "done",
+    }
+    payload.update(extra)
+    return payload
 
 
 class RepoTestCase(unittest.TestCase):

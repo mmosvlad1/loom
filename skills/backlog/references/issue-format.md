@@ -1,0 +1,50 @@
+# Issue Format
+
+The format of a GitHub issue that loom creates: from `backlog`, from free text in `start-task`, and for follow-ups in `describe-pr`. `start-task` copies the issue into `00-ticket.md`, so a good issue is a good ticket.
+
+## Title
+
+- Imperative mood, at most 70 characters, no issue number, no type prefix: "Add token refresh to the auth client".
+- `start-task` builds the branch slug from the title (at most 5 words), so put the key words first.
+
+## Body
+
+```markdown
+## Context
+
+<Why this work is needed: the problem, who has it, and what exists today. Two to five sentences.
+Link the source: the task summary, PR, ADR, or file (`path:line`) that found it.>
+
+## Acceptance Criteria
+
+- [ ] <An observable result that a check or a person can verify>
+- [ ] <One criterion per line; 1-6 criteria>
+
+## Out of Scope
+
+- <What this issue does not change, if a reader could expect it. Omit the section otherwise.>
+```
+
+- Describe the problem and the expected result, not the implementation. The research and plan phases decide how.
+- A follow-up from `describe-pr` starts its Context with `Follow-up from #<n>` (the task issue) and links the PR.
+- Apply the shared `writing-style.md`.
+
+## Labels
+
+| Label | Values | Rule |
+|---|---|---|
+| `type:` | `feat`, `fix`, `chore`, `docs`, `refactor` | Always one. It becomes the branch type and the commit type. |
+| `size:` | `S`, `M`, `L` | One, if you can estimate it: `S` is a trivial change, `M` a small or medium change with a clear design, `L` a larger feature or unclear behavior. |
+| `mode:` | `oneshot`, `quick`, `full` | Only when the mode is clear and differs from the size default (`S` → oneshot, `M` → quick, `L` → full). |
+
+- Add a label only if it exists in the repository. `gh issue create` fails on an unknown label; then create the issue without that label and add a `Warning:` line.
+- `setup` can create the labels.
+
+## Creating issues
+
+1. Draft every issue first. Show the list: title, labels, and the body of each.
+2. Wait for the user's confirmation. The user may drop or change issues.
+3. Write each body to a file in the task directory (or a temporary file outside the repository when there is no task), then run:
+   `gh issue create --title '<title>' --body-file <file> --label '<type label>' --label '<size label>'`
+   Quote the title with single quotes and write every `'` in it as `'\''` (the shared `git-flow.md`). Double quotes would expand backticks and `$`.
+4. Report the issue numbers and URLs that `gh issue create` prints.

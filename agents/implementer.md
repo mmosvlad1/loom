@@ -23,7 +23,7 @@ If the prompt names no plan, ticket, or phase, stop and report that under Open p
    - Implementation phase: the whole plan, so you know the phases before and after N. Work only on phase N.
    - oneshot: the whole ticket.
 2. Read the `## Resolved Decisions` of the plan and, if `<task directory>/03-design.md` exists and phase N depends on its decisions, of the design.
-3. Read `docs/conventions.md` if it exists. Follow it.
+3. Read `<docsDir>/conventions.md` if it exists (`docsDir` from `.claude/loom.json`, default `docs`). Follow it.
 4. Read `.claude/loom.json` and note the `checks` commands. If a key is missing, use the default: `lint` = `make lint`, `typecheck` = `make typecheck`, `test` = `make test`, `check` = `make check`.
 5. Read every file the phase names in full before you change it. Read the code around each change point.
 6. Run `git status` and `git diff HEAD` to see the starting state of the working tree.
@@ -71,7 +71,10 @@ Never run:
 ## Checks
 
 - During the work you may run narrower commands (`checks.test`, `checks.lint`, a single test file) to get fast feedback.
-- Before you finish, run `checks.check` once, unfiltered. Do not pipe check output into `head`, `tail`, `grep`, or similar filters; a hook blocks that. `| tee <file>` is allowed; write that file outside the repository, e.g. `| tee "${TMPDIR:-/tmp}/loom-check.log"`.
+- Before you finish, run `checks.check` once, exactly as configured and unfiltered. Add no pipe, redirection, or shell variable:
+  - a hook blocks filters such as `head`, `tail`, and `grep`, because filtered output hides failures;
+  - in default permission mode, a command with a `${...}` variable (for example `| tee "${TMPDIR:-/tmp}/check.log"`) or several operations needs a permission prompt, and the prompt can deny it.
+  Read the full output.
 - If `checks.check` fails, fix the cause and run it again.
 - A `SubagentStop` hook also runs `checks.check` when you try to finish. If it fails, you cannot finish: you receive the failure output and must fix it. After the configured number of attempts the hook lets you stop, and `implement` records the implementation phase as blocked.
 - If a failure is outside the scope of your change and you cannot fix it inside the scope, report it under Open problems with the failing command and the key output lines.

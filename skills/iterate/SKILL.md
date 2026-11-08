@@ -30,6 +30,10 @@ Read these files in full before you start:
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/question-rounds.md` (answer forms, Resolved Decisions, round cap)
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/visual-conventions.md` (trees, diff blocks, signatures)
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/writing-style.md` (style of artifacts, commits, and the final message)
+- `${CLAUDE_PLUGIN_ROOT}/skills/_shared/git-flow.md` (confirmations, checks, commit format, staging, rebase, push)
+- `${CLAUDE_PLUGIN_ROOT}/skills/_shared/implementation-loop.md` (implementer, checks, reviewer, fix attempts)
+- `${CLAUDE_PLUGIN_ROOT}/skills/_shared/pr-update.md` (docs refresh, PR body, and push after commits on an open PR)
+- `${CLAUDE_PLUGIN_ROOT}/skills/implement/references/log-format.md` (the exact `log.md` entries)
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/final-answer.md` (format of your last message)
 
 Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission.
@@ -50,11 +54,14 @@ Below, `<main>` is `mainBranch`, `<n>` is `task.number`, `<slug>` is `task.slug`
 
 ### Git rules (all sections)
 
+Follow the shared `git-flow.md`. `implement` follows the same file, so phase commits, fix commits, and `log.md` entries have one form. In short:
+
 - Local commits and rebases need no confirmation.
 - `git push` (also `--force-with-lease`) and `gh pr edit` need the user's confirmation. Show what you will push or change, then wait for "yes".
 - Never push to `<main>`. Never use `--force`; use `--force-with-lease`, and only on the task branch.
-- Commit format: `<type>(<scope>): <summary> (#<n>)`. `<type>` is the branch type (the part of `branch` before `/`). `<scope>` is the main module the change touches.
-- Run checks unfiltered. Do not pipe them into `head`, `tail`, `grep`, or similar filters; a hook blocks that. `| tee "${TMPDIR:-/tmp}/loom-check.log"` is allowed.
+- Commit format: `<type>(<scope>): <summary> (#<n>)`. `<type>` is the branch type (the part of `branch` before `/`). A fix commit takes the `<scope>` of the phase commit it fixes.
+- Write every commit message to `<task dir>/commit-msg.txt` with the Write tool and run `git commit -F <task dir>/commit-msg.txt`. Never pass a message with `-m`.
+- Run `checks.check` exactly as configured and unfiltered: no pipe, redirection, or shell variable.
 
 ### The `Next:` line (all sections)
 
@@ -99,17 +106,21 @@ Take the first matching row:
 | 6 | Open round, and the argument is empty, `ok`, or contains answers | [Answer a round](#answer-a-round) |
 | 7 | Implementation started, the mode is not oneshot, and `04-plan.md` is `draft` (an interrupted plan change) | [Finish a plan change](#finish-a-plan-change) |
 | 8 | `implementation.blocked` is set, `04-plan.md` is `approved` (or the mode is oneshot), and `04-plan.md` has no open round. Any argument adds fix hints. | [Fix a blocked phase](#fix-a-blocked-phase) |
-| 9 | PR open | [Post-PR fix](#post-pr-fix) |
-| 10 | Implementation started, and the feedback is about code of a `done` implementation phase | [Fix an implemented phase](#fix-an-implemented-phase) |
-| 11 | `04-plan.md` is `approved` (or implementation started), and the feedback changes the plan | [Change an approved plan](#change-an-approved-plan) |
-| 12 | The argument is feedback on an artifact | [Feedback on an artifact](#feedback-on-an-artifact) |
-| 13 | The argument is empty | Stop: `Result: nothing to iterate (<next.reason>)`, `Next:` from `next.command` |
+| 9 | `04-plan.md` is `approved` (or implementation started), and the feedback adds, removes, or changes an implementation phase of the plan. This applies also with a PR open. | [Change an approved plan](#change-an-approved-plan) |
+| 10 | All implementation phases are done (`implementation.total` > 0 and `implementation.done` equals it), `workingTree` is `dirty`, and `workingTreeDocsOnly` is `false` (code changes) | [Uncommitted changes after implementation](#uncommitted-changes-after-implementation) |
+| 11 | PR open | [Post-PR fix](#post-pr-fix) |
+| 12 | Implementation started, and the feedback is about code of a `done` implementation phase | [Fix an implemented phase](#fix-an-implemented-phase) |
+| 13 | The argument is feedback on an artifact | [Feedback on an artifact](#feedback-on-an-artifact) |
+| 14 | The argument is empty | Stop: `Result: nothing to iterate (<next.reason>)`, `Next:` from `next.command` |
 
-- Gate work comes before PR routing: approval (row 2), an open round (row 6), and an unfinished plan change (row 7) win over a blocked phase (row 8) and an open PR (row 9). `loom-state` matches this: after implementation started, a plan that is not approved routes to `/loom:iterate <feedback>` (draft), `<answers>`, or `approve`, before the dirty tree, PR routing, and `/loom:describe-pr`.
+- Gate work comes before PR routing: approval (row 2), an open round (row 6), and an unfinished plan change (row 7) win over a blocked phase (row 8) and an open PR (row 11).
+- A plan change comes before the open PR (row 9 before row 11): feedback that adds, removes, or changes an implementation phase changes the plan, also with a PR open. After `/loom:iterate approve`, `loom-state` routes the new phases to `/loom:implement`, which updates the PR at the end. `loom-state` matches this: after implementation started, a plan that is not approved routes to `/loom:iterate <feedback>` (draft), `<answers>`, or `approve`, before the dirty tree, PR routing, and `/loom:describe-pr`.
 - An open round (row 6) is always an `in-review` artifact. A `draft` plan never has a round to answer; row 7 finishes it first.
-- A blocked implementation phase is handled by row 8, also when the working tree is dirty, but only while the plan gate holds. If the plan changed and is not approved again, rows 2 (approve), 6 (answers), 7 (unfinished plan change), and 12 (feedback) apply first.
-- In an open round, free text that clearly answers a question is an answer. Other free text is feedback: apply both in one pass (row 6, then row 12 for the rest).
-- Code feedback versus plan feedback: a bug, or code that differs from the plan, is code feedback (row 10). New behavior, a different scope, or a different implementation phase structure changes the plan (row 11). If you cannot tell, ask the user one question before you change anything.
+- A blocked implementation phase is handled by row 8, also when the working tree is dirty, but only while the plan gate holds. If the plan changed and is not approved again, rows 2 (approve), 6 (answers), 7 (unfinished plan change), and 13 (feedback) apply first.
+- In an open round, free text that clearly answers a question is an answer. Other free text is feedback: apply both in one pass (row 6, then row 13 for the rest).
+- Uncommitted code changes after the last implementation phase (row 10) are the user's input, not an error: the user keeps them as a fix, or stashes or discards them. `loom-state` routes this state to `/loom:iterate <feedback>`; a merged PR goes to `/loom:finish-task` instead.
+- A refusal because of a dirty working tree never names a `Next:` that comes back to the same refusal. It names the skill that handles the changes.
+- Code feedback versus plan feedback: a bug, a failing check, a review comment on existing code, or code that differs from the plan is code feedback (row 11 with a PR open, else row 12). Feedback that adds, removes, or changes an implementation phase (new behavior, a different scope, a different implementation phase structure) changes the plan (row 9). If you cannot tell, ask the user one question before you change anything.
 
 ---
 
@@ -245,7 +256,7 @@ The feedback is about code of an implementation phase that is `done`, and no PR 
 | Check | `Result:` line | `Next:` |
 |---|---|---|
 | `implementation.inProgress` is set | `implementation phase <k> is in progress` | `/loom:implement` |
-| `workingTree` is `dirty` | `working tree has uncommitted changes` | from `next.command` |
+| `workingTree` is `dirty` | `working tree has uncommitted changes` | `/loom:implement` (resume flow) if implementation phases are left; otherwise `/loom:iterate` with no argument (it keeps the changes as a fix, or stashes or discards them) |
 
 A blocked implementation phase never reaches this section: row 8 sends it to [Fix a blocked phase](#fix-a-blocked-phase).
 
@@ -261,28 +272,23 @@ A blocked implementation phase never reaches this section: row 8 sends it to [Fi
 5. Commit:
    - Stage only the files the implementer listed under Files changed: `git add -- <paths>`.
    - Run `git status --porcelain`. Nothing else outside `<task dir>` may be left unstaged or untracked. If something is, ask the user.
-   - Message: `<type>(<scope>): <summary of the fix> (#<n>)`. Body: first line `Phase N: <name>` (oneshot: `Phase 1: oneshot`), then a blank line, then one `Fix: <item>` line per fix item.
-6. Append to `<task dir>/log.md` (the last heading of an implementation phase wins, so the phase stays `done`):
-   ```markdown
-   ## Phase N — done — <fix commit short hash>
-   Fix: <one line per fix item>
-   Checks: <one line, e.g. lint ✓ typecheck ✓ test ✓ (42 passed)>
-   Reviewer: <pass, or pass with nits>
-   Deviations: <how the code now differs from the plan, and why; or None>
-   ```
+   - Message: the fix commit of `git-flow.md`: `<type>(<scope>): <summary of the fix> (#<n>)`. Body: first line `Phase N: <name>` (oneshot: `Phase 1: oneshot`), then a blank line, then one `Fix: <item>` line per fix item. Write it to `<task dir>/commit-msg.txt` and run `git commit -F <task dir>/commit-msg.txt`.
+6. Append the fix entry of `log-format.md` to `<task dir>/log.md`: `## Phase N — done — <fix commit short hash>`, then the `Fix:`, `Checks:`, `Reviewer:`, and `Deviations:` lines. The last heading of an implementation phase wins, so the phase stays `done`.
 7. Final message: `Artifact: <task dir>/log.md`, `Status: implementation phase N of <total> done (<hash>), fix committed`, `Open questions: 0`, `Manual verification:` with the phase's `Manual:` steps if the fix touches them, and `Next:` from `loom-state`.
 
 ### The fix loop
 
 Used by this section, [Fix a blocked phase](#fix-a-blocked-phase), [Post-PR fix](#post-pr-fix), and [Rebase](#rebase).
 
+Run the shared `implementation-loop.md` in Fix mode. `implement` runs the same loop in phase mode, so both skills mark a phase done or blocked by the same rules:
+
 1. Launch `loom:implementer` with a short prompt: the plan path `<task dir>/04-plan.md` and the phase number N (oneshot: the ticket path `<task dir>/00-ticket.md`), the word `Fix`, and the fix items. The implementer never commits.
-2. Run `checks.check` yourself, unfiltered. If it fails, add the key failure lines as a fix item and go back to step 1.
+2. Run `checks.check` yourself, once. The `SubagentStop` hook already enforced it on the implementer, so a failure here means the hook gave up: the result is blocked.
 3. Launch `loom:implementation-reviewer` in fix mode: the same plan path and phase number (or ticket path), the fix items, and the implementer's report.
-4. If the verdict has `blocking` items, send only those back to `loom:implementer` (step 1). Record `nit` items, deviations, and additions for `log.md`.
-5. At most `implement.maxFixAttempts` attempts (default 2) after the first run. If blocking items or failing checks remain:
+4. If the verdict has `blocking` items, send only those back to `loom:implementer` in Fix mode, at most `implement.maxFixAttempts` times (default 2). Record `nit` items, deviations, and additions for `log.md`.
+5. If the result is blocked (failing checks, an open problem that needs a decision, or blocking items after the last attempt):
    - Do not commit. Leave the change in the working tree.
-   - Append `## Phase N — blocked` and `Reason: <remaining items>` to `log.md`.
+   - Append `## Phase N — blocked` and `Reason: <one line>` to `log.md`.
    - Run `loom-state --json`. Stop with `Status: implementation phase N blocked: <reason>` and the `Next:` line computed from it (normally `/loom:iterate <fix>`).
 
 ---
@@ -314,24 +320,17 @@ Used by this section, [Fix a blocked phase](#fix-a-blocked-phase), [Post-PR fix]
    - Case (a) with a clean working tree (the user stashed or discarded the phase work): the first `loom:implementer` run gets the plan path and phase N in normal phase mode, not `Fix`. Add the fix items as context ("an earlier run was blocked by: …"). Later attempts send only the reviewer's blocking items, in `Fix` mode.
 6. Commit:
    - Stage the files of phase N: the implementer's Files changed of every run, checked against `git status --porcelain`. Use `git add -- <paths>`. Nothing else outside `<task dir>` may be left unstaged or untracked.
-   - **(a)**: the normal phase commit, in the same form as `implement` uses: `<type>(<scope>): <summary of phase N> (#<n>)`, body `Phase N: <name>` (oneshot: `Phase 1: oneshot`). Then tick the phase's Phase Overview checkbox and its `Automated:` checkboxes in `04-plan.md`. Leave `Manual:` checkboxes for the user.
+   - **(a)**: the phase commit of `git-flow.md`, in the same form as `implement` uses: `<type>(<scope>): <summary of phase N> (#<n>)`, body `Phase N: <name>` (oneshot: `Phase 1: oneshot`), written to `<task dir>/commit-msg.txt` and committed with `git commit -F <task dir>/commit-msg.txt`. Then tick the phase's Phase Overview checkbox and its `Automated:` checkboxes in `04-plan.md`. Leave `Manual:` checkboxes for the user.
    - **(b)**: a fix commit, as in step 5 of [Fix an implemented phase](#fix-an-implemented-phase).
-7. Append to `<task dir>/log.md`:
-   ```markdown
-   ## Phase N — done — <commit short hash>
-   Checks: <one line, e.g. lint ✓ typecheck ✓ test ✓ (42 passed)>
-   Reviewer: <pass, or pass with nits>
-   Deviations: <how the code differs from the plan, and why; or None>
-   ```
-   In case (b), add one `Fix: <item>` line per fix item after the heading.
-8. If a PR is open, continue with steps 3 and 4 of [Post-PR fix → Fix](#fix) (docs refresh, push with confirmation).
+7. Append the `done` entry of `log-format.md` to `<task dir>/log.md`: `## Phase N — done — <commit short hash>`, then the `Checks:`, `Reviewer:`, `Deviations:`, and `Additions:` lines. In case (b), use the fix entry: add one `Fix: <item>` line per fix item after the heading.
+8. If a PR is open, run the shared `pr-update.md` (docs refresh, PR body, push with confirmation).
 9. Run `loom-state --json`. Final message: `Artifact: <task dir>/log.md`, `Status: implementation phase N of <total> done (<hash>)`, `Open questions: 0`, `Manual verification:` with the `Manual:` steps of phase N (case a, if any), and the `Next:` line computed from `loom-state`.
 
 ---
 
 ## Change an approved plan
 
-The feedback changes `04-plan.md` after it was approved, or after implementation started.
+The feedback changes `04-plan.md` after it was approved, or after implementation started, also with a PR open. New implementation phases go through `/loom:implement` after `/loom:iterate approve`; `implement` then updates the open PR.
 
 1. Read `04-plan.md`, `03-design.md` (if it exists), `00-ticket.md`, `02-research.md`, and `log.md` (if it exists). Never read `01-research-questions.md`.
 2. Verify the feedback against the code, as in [Feedback on an artifact](#feedback-on-an-artifact).
@@ -365,13 +364,36 @@ An earlier [Change an approved plan](#change-an-approved-plan) set `04-plan.md` 
 
 ---
 
+## Uncommitted changes after implementation
+
+Every implementation phase is done, and the working tree has code changes: the user edited code after `implement`, or an earlier run stopped before its commit. The changes are the user's input. Ask what to do with them.
+
+### Steps
+
+1. Show the changes: `git status --short` and `git diff --stat HEAD`. List untracked files too.
+2. Ask the user one question: keep these changes as a fix of the task, or drop them? The argument may already answer it (for example `keep: <what the change fixes>`).
+3. **Keep:**
+   1. Phase N is the last `done` implementation phase, unless the user names another one (oneshot: 1).
+   2. Fix items: the user's argument, one item per stated fix; without an argument, one item `user edits: <file>` per changed file.
+   3. Run `checks.check`, as `git-flow.md` describes.
+   4. Launch `loom:implementation-reviewer` in fix mode: the plan path `<task dir>/04-plan.md` and phase N (oneshot: the ticket path), the fix items, and the diff.
+   5. If the checks fail or the verdict has `blocking` items, run [the fix loop](#the-fix-loop) with the failing lines and the `blocking` items as the fix items. A blocked result stops here, as the fix loop describes.
+   6. Commit a fix commit, as step 5 of [Fix an implemented phase](#fix-an-implemented-phase) describes (`<task dir>/commit-msg.txt`, `git commit -F`). Stage the changed files from step 1 that the user kept, plus the `Files changed` of every fix-loop run. If no implementer ran, there is no `Files changed` list; the step 1 files are the whole set.
+   7. Append the fix entry of `log-format.md` to `log.md`, as step 6 of [Fix an implemented phase](#fix-an-implemented-phase) describes.
+   8. If `pr.state` is `OPEN`, run the shared `pr-update.md`.
+4. **Drop:** offer stash or discard. Follow "Stash and discard" in `git-flow.md`, with confirmation. For discard, say plainly that the work is lost and cannot be recovered. Without "yes", stop with `Result: nothing changed` and `Next: commit or stash the changes yourself, then /loom:next`.
+5. Run `loom-state --json`. Final message: `Artifact: <task dir>/log.md` and `Status: implementation phase N of <total> done (<hash>), fix committed` (keep), or `Result: changes stashed | changes discarded` (drop), then `Next:` from `loom-state`.
+
+---
+
 ## Post-PR fix
 
 The PR is open. Fix failing checks and review comments, then update the PR.
 
 ### Preconditions
 
-- `workingTree` must be `clean`. Otherwise stop: `Result: working tree has uncommitted changes`, `Next:` from `next.command`.
+- If `workingTreeDocsOnly` is `true`, the docs changes are an interrupted earlier run of `pr-update.md`: run its step 1 (commit the docs) first, then continue.
+- With code changes, stop: `Result: working tree has uncommitted code changes`, `Next: /loom:implement` (resume flow) if implementation phases are left; otherwise `/loom:iterate` with no argument (it keeps the changes as a fix, or stashes or discards them).
 - If `pr.behindMain` > 0 and the argument has no fix request, run [Rebase](#rebase) first.
 
 ### Collect the fix items
@@ -389,28 +411,19 @@ The PR is open. Fix failing checks and review comments, then update the PR.
 
 1. Group the fix items by the implementation phase whose code they touch. If unclear, use the last done implementation phase. In oneshot mode there is one group.
 2. For each group, run [the fix loop](#the-fix-loop), commit, and append the `log.md` entry, exactly as steps 4-6 of [Fix an implemented phase](#fix-an-implemented-phase).
-3. Refresh the docs if affected:
-   - If `<docsDir>/tasks/<n>-<slug>.md` exists and the fix changes what it states (Implementation, Deviations from Plan, Verification), update it. Commit `docs(#<n>): update task summary`.
-   - If the fix changes what the PR body states (Summary, Changes, Verification, or the attached plan), draft the new body in `${TMPDIR:-/tmp}/loom-pr-body.md`. Show the changed parts. After confirmation, run `gh pr edit <number> --body-file "${TMPDIR:-/tmp}/loom-pr-body.md"`.
-4. Push:
-   - Show `git log --oneline @{u}..HEAD`.
-   - Ask for confirmation.
-   - Run `git push`. If the branch history was rewritten (a rebase in this run), run `git push --force-with-lease` instead.
-5. Final message: `Artifact: <task dir>/log.md`, `Status: fixes pushed to PR #<number> (<hashes>)`, `Open questions: 0`, `Warning:` lines, and `Next:` from `loom-state` (normally `/clear, then /loom:finish-task`).
+3. Run the shared `pr-update.md`: refresh the task summary (`docs(#<n>): update task summary`), update the body with `gh pr edit` after confirmation, then push after confirmation (`git push`, or `git push --force-with-lease` after a rebase in this run).
+4. Final message: `Artifact: <task dir>/log.md`, `Status: fixes pushed to PR #<number> (<hashes>)`, `Open questions: 0`, `Warning:` lines, and `Next:` from `loom-state` (normally `/clear, then /loom:finish-task`).
 
 ---
 
 ## Rebase
 
-Rebase the task branch on `origin/<main>`, run the checks, and push.
+Rebase the task branch on `origin/<main>`, run the checks, and push. Steps 1-4 are the Rebase rules of `git-flow.md`; `describe-pr` uses the same rules.
 
-1. `workingTree` must be `clean`. Otherwise stop: `Result: working tree has uncommitted changes`.
+1. `workingTree` must be `clean`. If `workingTreeDocsOnly` is `true`, run step 1 of `pr-update.md` first (commit the docs). With code changes, stop: `Result: working tree has uncommitted code changes`, `Next: /loom:iterate` with no argument (keep or drop the changes), then `/loom:iterate rebase`.
 2. Choose the base. If the remote `origin` exists (`git remote get-url origin` succeeds), run `git fetch origin <main>`; the base is `origin/<main>`. Otherwise do not fetch; the base is `<main>`. Note `git rev-parse HEAD`.
 3. Run `git rebase <base>` (normally `git rebase origin/<main>`).
-4. On conflicts:
-   - List the files: `git diff --name-only --diff-filter=U`.
-   - Resolve a conflict only when the intent of both sides is clear from the code, the plan, and the main branch commit. Then `git add -- <file>` and `git rebase --continue`.
-   - Otherwise stop. Show the conflicts. Ask the user: resolve them together, or abort with `git rebase --abort`. Never pick a side blindly.
+4. On conflicts, follow `git-flow.md`: resolve a conflict only when the intent of both sides is clear; otherwise show the conflicts and ask the user (resolve together, or `git rebase --abort`). Never pick a side blindly.
 5. If `HEAD` changed, run `checks.check` unfiltered. If it fails, run [the fix loop](#the-fix-loop) with the failure output as the fix item. Use the last `done` implementation phase as phase N (oneshot: 1). Commit as in step 5 of [Fix an implemented phase](#fix-an-implemented-phase), with `Phase N: <name>` of that phase as the first body line, and append its `log.md` entry (step 6).
 6. Push only if the branch has an upstream (`git rev-parse --abbrev-ref --symbolic-full-name @{u}` succeeds):
    - Show `git log --oneline @{u}..HEAD` and say that the push rewrites the remote branch.

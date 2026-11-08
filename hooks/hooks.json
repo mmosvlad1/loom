@@ -28,6 +28,29 @@
           }
         ]
       }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^loom:implementer$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/subagent_checks.py\"",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/stop_lint.py\"",
+            "timeout": 300
+          }
+        ]
+      }
     ]
   }
 }
