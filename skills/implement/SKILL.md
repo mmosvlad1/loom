@@ -138,7 +138,7 @@ For implementation phase N:
    - Stage the implementer's `Files changed` of every run with `git add -- <paths>`, then check `git status --porcelain`.
    - Subject: `<type>(<scope>): <summary of phase N> (#<n>)`. `<type>` is the branch type; `<scope>` and `<summary>` follow `git-flow.md`.
    - Body: `Phase N: <name>`, with `<name>` exactly as in `## Phase N: <name>`. oneshot: `Phase 1: oneshot`.
-   - Write the message (subject, blank line, body) to `<task dir>/commit-msg.txt` with the Write tool. Run `git commit -F <task dir>/commit-msg.txt`.
+   - Write the message (subject, blank line, body) to `<task dir>/commit-msg.txt` with the Write tool; if the file exists, Read it first (`git-flow.md`). Run `git commit -F <task dir>/commit-msg.txt`.
 5. **Tick the plan** (quick and full):
    - In `## Phase Overview`, change `- [ ] N.` to `- [x] N.`.
    - In `## Phase N:` → `### Verification`, tick every `Automated:` checkbox.

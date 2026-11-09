@@ -26,6 +26,7 @@ Link the source: the task summary, PR, ADR, or file (`path:line`) that found it.
 ```
 
 - Describe the problem and the expected result, not the implementation. The research and plan phases decide how.
+- Dependencies: if the issue needs another open issue done first, end the Context with one line per dependency: `Depends on #<k>`. `backlog` reads these lines to prioritize.
 - A follow-up from `describe-pr` starts its Context with `Follow-up from #<n>` (the task issue) and links the PR.
 - Apply the shared `writing-style.md`.
 
@@ -44,7 +45,7 @@ Link the source: the task summary, PR, ADR, or file (`path:line`) that found it.
 
 1. Draft every issue first. Show the list: title, labels, and the body of each.
 2. Wait for the user's confirmation. The user may drop or change issues.
-3. Write each body to a file in the task directory (or a temporary file outside the repository when there is no task), then run:
+3. Write each body to a file in `<workDir>/_drafts/` (`workDir` from `.claude/loom.json`; git ignores the work directory), also when a task is active. If the file already exists, Read it before you Write it. Then run:
    `gh issue create --title '<title>' --body-file <file> --label '<type label>' --label '<size label>'`
    Quote the title with single quotes and write every `'` in it as `'\''` (the shared `git-flow.md`). Double quotes would expand backticks and `$`.
 4. Report the issue numbers and URLs that `gh issue create` prints.

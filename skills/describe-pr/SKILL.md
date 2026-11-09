@@ -131,7 +131,7 @@ For each row of `## Resolved Decisions` in `03-design.md` and `04-plan.md` with 
    - oneshot: commit only if `<docs>/architecture/overview.md` changed.
    - quick and full: commit if any file under `<docs>` changed.
 2. If nothing changed, make no commit.
-3. Otherwise stage the changed docs files (`git add -- <paths>`). Write `docs(#<n>): record decisions and summary` to `<task dir>/commit-msg.txt` and run `git commit -F <task dir>/commit-msg.txt`.
+3. Otherwise stage the changed docs files (`git add -- <paths>`). Write `docs(#<n>): record decisions and summary` to `<task dir>/commit-msg.txt` and run `git commit -F <task dir>/commit-msg.txt`. If `commit-msg.txt` exists, Read it before you Write it (`git-flow.md`).
 
 ## 7. Rebase
 
@@ -145,7 +145,7 @@ Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`,
 ### Draft
 
 1. **Title**: Conventional Commits, `<type>(<scope>): <summary of the task> (#<n>)`. `<type>` is the branch type. `<scope>` and `<summary>` follow `git-flow.md`. This title becomes the squash commit on `<main>`.
-2. **Body**: write `<task dir>/pr-body.md` from `pr-template.md`:
+2. **Body**: write `<task dir>/pr-body.md` from `pr-template.md`. A re-run finds the file of the earlier run: Read it before you Write it (`git-flow.md`).
    - quick and full: `Closes #<n>`, Summary, Changes, Verification, Decisions, then the body of `04-plan.md` (without frontmatter) inside `<details><summary>Implementation plan</summary>`.
    - oneshot: only `Closes #<n>`, Summary, and Verification. Keep it short.
    - Decisions links the new ADRs and the task summary by their repository paths.

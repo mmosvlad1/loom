@@ -2,7 +2,7 @@
 
 > A Claude Code plugin for structured, agent-driven development: **Research → Plan → Implement**, with GitHub Issues as the backlog, artifacts as the hand-off between phases, and a full git flow from issue to squash merge.
 
-Status: **Draft, revision 2** · Last updated: 2026-11-08 · Describes plugin release **v1**
+Status: **Draft, revision 2** · Last updated: 2026-11-09 · Describes plugin release **v1**
 
 Changes in revision 2: fixes from the spec review (finish-task commands, agent `tools`, namespacing, versioning, config use, hook exit codes, oneshot conditions), decisions on the post-PR flow, setup bootstrap, approval gates, mode changes and resume, and new features: `loom-state`, `/loom:next`, enforced checks, harness evals, shared snippets, writing style.
 
@@ -124,7 +124,8 @@ loom/
 │   │   └── references/
 │   │       ├── stacks/python-uv.md
 │   │       ├── stacks/node.md
-│   │       └── templates/          # ci.yml, Makefile, CLAUDE.md, docs/*, statusline
+│   │       └── templates/          # loom.json, Makefile, ci.*.yml, settings.json, loom-statusline.py,
+│   │                               # CLAUDE.md, docs/*, setup-issue.md
 │   ├── backlog/      (SKILL.md, references/issue-format.md — also read by describe-pr)
 │   ├── start-task/   (SKILL.md, references/ticket-template.md)
 │   ├── research-questions/  (SKILL.md, references/template.md)
@@ -335,6 +336,7 @@ One deterministic script computes the task state. Every component that needs "wh
 ### 8.2 Interface
 
 `${CLAUDE_PLUGIN_ROOT}/bin/loom-state [--json | --line] [--pr] [--docs]`
+`${CLAUDE_PLUGIN_ROOT}/bin/loom-state --slug '<issue title>'`
 
 The script is a silent no-op (exit 0, no output) outside a git repository and in a repository without `.claude/loom.json`.
 
@@ -371,6 +373,7 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 - `--line`: one line for the statusline, e.g. `#42 · full · design:in-review · 3 open Q`, `#42 · full · impl 1/3`, or `#42 · archived`. Empty output when there is no task.
 - `--pr`: adds PR state from `gh pr view --json number,state,reviewDecision,statusCheckRollup,mergeStateStatus` as `{ number, state, reviewDecision, checks: passing|failing|pending|none, mergeStateStatus, behindMain }`; `behindMain` is computed with git after `git fetch origin <mainBranch>`. This calls `gh` and the network, so it is not used by the `SessionStart` hook. If `gh` is missing or unauthenticated, or the branch has no PR, `pr` is `null` and a warning is added.
 - `--docs`: reserved for the docs freshness check (§23). In v1 it prints "not implemented in v1" to stderr and exits 2.
+- `--slug '<issue title>'`: prints the branch slug of §9.3 step 5 and exits 0. It is a pure string function, so it also works outside a loom project. A title that starts with `-` is taken as the title, not as an option. Before the ASCII step it transliterates the letters that Unicode NFKD keeps (`ß` → `ss`, `æ` → `ae`, `œ` → `oe`, `ø` → `o`, `đ` → `d`, `ł` → `l`, `þ` → `th`). One quirk is accepted: a first word that fits and a second word that would pass 40 characters leave only the first word (`a <50-character word>` → `a`). `start-task` uses it, so the slug never depends on the model.
 
 ### 8.3 Rules
 
@@ -396,7 +399,7 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
 
 - All skills set `disable-model-invocation: true`. They run only when invoked as `/loom:<skill>`.
 - Phase skills start by injecting state: `` !`"${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json` `` (verified: `` !`cmd` `` injects command output, and `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SKILL_DIR}` are substituted when the skill loads).
-- Every injected command needs a matching `allowed-tools` rule, or the skill aborts outside auto mode (§24.2). Phase skills set `allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json) Bash(loom-state --json) Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` (`iterate`, `implement`, `describe-pr`, `finish-task`, and `next`: the injected command is `… --json --pr`). Only the injection line uses the full path; every Bash call in a skill body uses the bare `loom-state --json` (`bin/` is on the Bash `PATH`), which matches the §19.3 allowlist. The `Read` rule lets the skill read its shared snippets and templates, which lie outside the project's working directory. The grant lasts one turn, so skills read these files before they ask the user anything. Skills inject nothing else; the date comes from `loom-state` → `today`.
+- Every injected command needs a matching `allowed-tools` rule, or the skill aborts outside auto mode (§24.2). Phase skills set `allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json) Bash(loom-state --json) Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` (`iterate`, `implement`, `describe-pr`, `finish-task`, and `next`: the injected command is `… --json --pr`). Only the injection line uses the full path; every Bash call in a skill body uses the bare `loom-state --json` (`bin/` is on the Bash `PATH`), which matches the §19.3 allowlist. `setup`, `backlog`, and `start-task` inject `--json`; `start-task` also allows `Bash(loom-state --slug *)`. The `Read` rule lets the skill read its shared snippets and templates, which lie outside the project's working directory. The grant lasts one turn, so skills read these files before they ask the user anything. Skills inject nothing else; the date comes from `loom-state` → `today`.
 - Skills spawn agents by their namespaced name: `loom:codebase-locator`, etc.
 - Model and effort per skill (values to tune), set as the skill frontmatter fields `model` and `effort` (verified, §24.2). `default` means the `effort` field is omitted, so the session's effort level applies:
 
@@ -422,21 +425,25 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
       - `.claude/loom.json`
       - `Makefile` (or stack-native scripts) with `lint`, `typecheck`, `test`, `check`
       - `.github/workflows/ci.yml`
-      - `.claude/settings.json`: `extraKnownMarketplaces`, `enabledPlugins`, permission allowlist (§19.3), `statusLine` calling `loom-state --line`
+      - `.claude/settings.json`: `extraKnownMarketplaces`, `enabledPlugins`, permission allowlist (§19.3), `statusLine` calling `loom-state --line` through `.claude/loom-statusline.py` (optional, §19.3); merged into an existing file, never replaced
       - `docs/` skeleton: `product/vision.md`, `architecture/overview.md`, `architecture/decisions/`, `conventions.md`, `tasks/`
       - short `CLAUDE.md` pointing to `docs/`
       - `.loom/` entry in `.gitignore`
-   3. Optionally creates the labels `type:*`, `size:*`, `mode:*`.
-   4. Commits, then hands over to `/loom:describe-pr` (oneshot-style PR).
+   3. Optionally creates the labels `type:*`, `size:*`, `mode:*` (`gh label create`, confirmation). The issue gets `type:chore`, `size:S`, `mode:oneshot` if they exist.
+   4. Runs `checks.check`, then commits, then hands over to `/loom:describe-pr` (oneshot-style PR). The handover is a normal oneshot task, so `loom-state` routes it: the task directory `<workDir>/<n>-loom-setup/` with `00-ticket.md` (`mode: oneshot`, `size: S`), the commit `chore(loom): set up loom (#<n>)` with the body `Phase 1: oneshot`, and the `log.md` entry `## Phase 1 — done — <hash>`. `next` is then `/loom:describe-pr`.
 3. **Ruleset:** offered by `finish-task` after the setup PR is merged, so the required CI check already exists on `main` (§17.3).
 
-**Rules:** existing files are never overwritten silently. Existing commands and CI are reused, not replaced. On an empty repository with no `main` yet, the first commit (only `.gitignore` and `README.md`) is allowed on `main` once; the guard allows it when `main` has no commits.
+**Rules:** existing files are never overwritten silently: setup shows one plan (new files in full, changed files as a diff, and every command that changes something outside the working tree) and acts after one confirmation. Existing commands and CI are reused, not replaced. A re-run continues where the last run stopped: from the main branch it first switches to an existing `chore/<n>-loom-setup` branch. On the setup branch the setup commit is every path that differs from the main branch, so a re-run after failing checks still commits; a `done` entry in `log.md` means nothing is left but `/loom:describe-pr`. Only on the main branch does a run with nothing to change report that and stop.
+
+**Main branch and origin:** `mainBranch` comes from GitHub's default branch (`gh repo view --json defaultBranchRef`), then `origin/HEAD`, then the user. The setup branch is cut from an up-to-date main branch (`git pull --ff-only`). A repository with commits whose main branch is not on `origin` stops setup: the user pushes it (the guard allows only the one-commit bootstrap push). An empty repository whose unborn branch has another name is renamed with `git branch -m <mainBranch>` before the first commit. On an empty repository with no `main` yet, the first commit (only `.gitignore` and `README.md`) is allowed on `main` once; the guard allows it when `main` has no commits.
 
 **Empty repository order:** on an empty repository, setup works in this order:
 1. Make the first commit on the main branch (only `.gitignore` and `README.md`).
 2. Run `git push -u origin <mainBranch>` (allowed by the guard exception in §11.2).
 3. Create the chore branch (step 2.1 above).
-4. Write `loom.json` and the other files (step 2.2 above).
+4. Write `loom.json` and the other files (step 2.2 above). `loom.json` comes first: `loom-state` and the hooks see nothing without it.
+
+Other untracked files of the empty repository (e.g. the files of `uv init`) go into the setup commit after confirmation.
 
 ### 9.2 `backlog`
 
@@ -448,7 +455,9 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
 - **Discuss ideas:** reads `docs/product/vision.md`, open issues (`gh issue list`), and the code state; discusses options.
 - **Create issues** in the format of `references/issue-format.md`: title, context, acceptance criteria, labels. Shows the list and waits for confirmation before `gh issue create`.
 - **Prioritize:** answers "what next?" from issue dependencies and what is done.
-- Helps fill `vision.md` when it is still a skeleton.
+- Helps fill `vision.md` when it is still a skeleton. The main branch takes no commits, so with an active task and a clean working tree it commits the vision on the task branch (`docs(#<n>): update product vision`); otherwise it offers a `type:docs` oneshot issue that carries the agreed text.
+- Issue bodies are written to `<workDir>/_drafts/` (ignored by git), never elsewhere in the repository tree.
+- Without `.claude/loom.json` it points to `/loom:setup`. With an active task it says so; new issues do not change the task.
 
 ### 9.3 `start-task`
 
@@ -459,12 +468,12 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
 2. Reads the issue: `gh issue view <n> --json title,body,labels,url`.
 3. Determines the mode (§5.2).
 4. Determines the branch type from the `type:*` label; if missing, proposes one and confirms.
-5. Builds the slug: issue title → lowercase ASCII, non-alphanumerics → `-`, at most 5 words / 40 characters.
+5. Builds the slug with `loom-state --slug '<title>'` (§8.2): issue title → lowercase ASCII, non-alphanumerics → `-`, at most 5 words / 40 characters (words are dropped from the end until it fits; a longer single word is cut; an empty result is `task`).
 6. Refuses if the working tree is dirty (offers stash). Then `git switch <mainBranch> && git pull`, then `git switch -c <type>/<n>-<slug>`.
-7. Creates `.loom/tasks/<n>-<slug>/00-ticket.md`.
+7. Creates `.loom/tasks/<n>-<slug>/00-ticket.md` from `references/ticket-template.md`: the §13.1 ticket frontmatter and a verbatim copy of the issue (title as the `# ` heading, labels, URL, body).
 8. Ends with `Next: /clear, then /loom:next`.
 
-If the issue already has an archived task directory, offers to restore it from `_archive/` instead.
+If the issue already has an archived task directory, offers to restore it from `_archive/` instead. The setup issue ("Set up loom") is refused with `Next: /loom:setup`.
 
 ### 9.4 `research-questions` (full mode)
 
@@ -776,7 +785,7 @@ updated: 2026-11-08
 ---
 ```
 
-The ticket frontmatter has instead: `mode`, `size` (`S`|`M`|`L`, optional, copied from the `size:*` label by start-task), `issue`, `url`, `pr` (after describe-pr).
+The ticket frontmatter has instead: `mode`, `size` (`S`|`M`|`L`, optional, copied from the `size:*` label by start-task), `issue`, `url`, `pr` (after describe-pr). The ticket has no `status`, `based_on`, `git_commit`, or `updated`.
 
 | Artifact | Statuses | Set by | Gate for |
 |---|---|---|---|
@@ -981,7 +990,7 @@ docs/
 | `gh pr create`, `gh pr edit`, `gh pr merge` | Yes |
 | `gh issue create` | Yes |
 | Repo settings, labels, ruleset (`gh api`, `gh label create`) | Yes |
-| Read-only `gh api` GET (e.g. listing rulesets) | No (the permission system may still ask, §19.3) |
+| Read-only `gh api` GET (e.g. listing rulesets) | No question from the skill; the permission system always asks (the `Bash(gh api *)` ask rule of §19.3), also in auto mode, by intent |
 | `git stash`, discarding changes | Yes. A stash runs `git check-ignore -q <task dir>` first: an ignored task directory takes the plain `git stash push --include-untracked` (a pathspec with an ignored path makes `git stash` exit 1 and leave the changes staged); otherwise the `':(exclude)<task dir>'` pathspec. |
 
 Commit messages are written to `<task dir>/commit-msg.txt` and committed with `git commit -F`; one-line titles (`gh pr create --title`, `gh pr merge --subject`) are single-quoted with every `'` written as `'\''`. Double quotes would expand backticks and `$` from plan headings (`_shared/git-flow.md`).
@@ -1000,13 +1009,20 @@ Commit messages are written to `<task dir>/commit-msg.txt` and committed with `g
 Checks run in four places — the implementer, the `SubagentStop` hook, the optional `Stop` hook, and CI — and must never diverge. The project exposes them through one entry point (Python: `Makefile`):
 
 ```makefile
-lint:       ; uv run ruff check . && uv run ruff format --check .
-typecheck:  ; uv run pyright
-test:       ; uv run pytest
+lint:
+	uv run ruff check .
+	uv run ruff format --check .
+
+typecheck:
+	uv run pyright
+
+test:
+	uv run pytest || [ $$? -eq 5 ]
+
 check: lint typecheck test
 ```
 
-`loom.json` references these targets; CI runs `make check`.
+`loom.json` references these targets; CI runs `make check`. Recipe lines start with a tab. `pytest` exits with 5 when it collects no tests; a new project has none, so the `test` target accepts exit status 5 and no other failure. Node projects use the `lint`, `typecheck`, `test`, and `check` scripts of `package.json` instead (`setup/references/stacks/node.md`).
 
 ### 17.2 CI workflow (v1)
 
@@ -1020,7 +1036,7 @@ check: lint typecheck test
 | Types | `pyright` | type errors |
 | Tests | `pytest` | broken logic |
 
-Single Python version. Action versions are pinned when `setup` generates the file.
+CI runs the steps through the single entry point (`make check`, or the `check` script for Node), so CI and the hooks never diverge. Single Python version. Action versions are pinned to exact release tags when `setup` generates the file: `actions/checkout@v7.0.1`, `astral-sh/setup-uv@v10.3.3` (it publishes no major tag), `actions/setup-node@v7.1.0`, `pnpm/action-setup@v6.1.1`, `oven-sh/setup-bun@v2.2.0` (latest releases, checked on 2026-11-09). The workflow sets `permissions: contents: read`.
 
 ### 17.3 Ruleset
 
@@ -1030,7 +1046,7 @@ Offered by `finish-task` after the setup PR is merged, created with `gh api` aft
 - Required approvals: **0** (a solo developer cannot approve their own PR).
 - Block force pushes and deletion.
 
-Availability: rulesets work on public repositories on the free plan; private repositories need a paid plan (to verify, §24). If unavailable, loom relies on the guard hook only.
+Availability (verified, §24.2): rulesets work on public repositories on GitHub Free; private repositories need GitHub Pro, Team, or Enterprise Cloud. If unavailable, loom relies on the guard hook only.
 
 Project-specific testing strategy (e.g. recorded LLM responses, evals of the product) is **not** part of loom. It belongs in the project's `conventions.md`.
 
@@ -1104,15 +1120,18 @@ Every component reads `mainBranch`, `workDir`, and `docsDir` from this file. Non
 
 ### 19.3 `.claude/settings.json` (committed, written by `setup`)
 
-- `extraKnownMarketplaces` + `enabledPlugins`: anyone who clones and trusts the project is offered loom.
-- `statusLine`: runs `loom-state --line`.
-- Permission allowlist (routine, reversible):
-  - `git status`, `git diff`, `git log`, `git add`, `git commit`, `git switch`, `git pull`, `git fetch`, `git rebase`, `git stash`, `git branch`
+Template: `skills/setup/references/templates/settings.json`. `setup` merges it into an existing file: it adds missing keys and rules and never removes or replaces one.
+
+- `extraKnownMarketplaces` + `enabledPlugins`: anyone who clones and trusts the project is offered loom: `"extraKnownMarketplaces": {"loom": {"source": {"source": "github", "repo": "mmosvlad1/loom"}}}` and `"enabledPlugins": {"loom@loom": true}`. Claude Code honors `extraKnownMarketplaces` from a project file only after the workspace trust dialog. The marketplace entry has a relative-path source (`./`), so a project-enabled loom loads without a per-user install.
+- `statusLine` (optional; `setup` asks): `{"type": "command", "command": "python3 \"$(git rev-parse --show-toplevel 2>/dev/null)/.claude/loom-statusline.py\" 2>/dev/null"}`. A settings file cannot name the plugin directory, so the committed script `.claude/loom-statusline.py` finds the installed plugin (`installed_plugins.json`, then the `loom` marketplace, then the plugin cache below the plugins root) and runs its `bin/loom-state --line` in the session's directory (`workspace.current_dir` from the status line input). It prints nothing on any failure. `LOOM_PLUGIN_ROOT` overrides the lookup (for `--plugin-dir` development). A project `statusLine` replaces each collaborator's personal status line in this project.
+- Rule syntax: `Bash(<command> *)`. A trailing ` *` also matches the bare command; the older `:*` suffix is equivalent.
+- Permission allowlist (`permissions.allow`; routine, reversible):
+  - `git status`, `git diff`, `git log`, `git add`, `git commit`, `git switch`, `git pull`, `git fetch`, `git rebase`, `git stash push`, `git stash list`, `git stash show`, `git stash pop`, `git branch` (stash `drop` and `clear` stay out: they lose work)
   - `make *` (or the stack's check commands)
   - `gh issue view`, `gh issue list`, `gh pr view`, `gh pr checks`, `gh run view`
-  - `loom-state --json`, `loom-state --json --pr` (the skills' `allowed-tools` grant lasts only one turn, §24.2; this keeps the `Next:` call from asking after the user answered a question)
-  - `mv` inside `.loom/`
-- **Not** allowlisted (always asked): `git push`, `gh pr create`, `gh pr edit`, `gh pr merge`, `gh issue create`, `gh label create`, `gh api`.
+  - `loom-state --json`, `loom-state --json --pr` (the skills' `allowed-tools` grant lasts only one turn, §24.2; this keeps the `Next:` call from asking after the user answered a question), `loom-state --slug *`
+  - `mv` inside `.loom/`: `mkdir -p <workDir>/_archive`, `mv <workDir>/* <workDir>/_archive/` (finish-task), `mv <workDir>/_archive/* <workDir>/` (start-task restore)
+- **Not** allowlisted (always asked): `git push`, `gh pr create`, `gh pr edit`, `gh pr merge`, `gh issue create`, `gh label create`, `gh api`. `setup` writes them as `permissions.ask` rules, so a broader allow rule elsewhere (e.g. `Bash(git *)` in user settings) cannot skip the prompt.
 
 ---
 
@@ -1214,8 +1233,16 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
 Still open:
 
 - `claude plugin eval` scenario format and available graders.
-- GitHub rulesets availability on the free plan for public repositories.
-- How the `statusLine` in `.claude/settings.json` references `loom-state`: `bin/` is documented on the Bash tool's `PATH` only, and `${CLAUDE_PLUGIN_ROOT}` is not documented for settings.
+- The working directory of the `statusLine` command is not documented. The command finds the script through `git rev-parse --show-toplevel`, and the script runs `loom-state` in `workspace.current_dir` from its input, so it does not depend on it. Only a unit test against a fake plugins root covers the script; an M6 live check must show the line in an interactive session.
+
+Resolved (milestone M5):
+
+- **Settings schema** (https://code.claude.com/docs/en/settings-reference, entries `extraKnownMarketplaces`, `enabledPlugins`, `statusLine`; https://code.claude.com/docs/en/settings): all three keys and `permissions.allow`/`ask` are honored in the project `.claude/settings.json` ("Any file"). `extraKnownMarketplaces` maps a marketplace name to `{"source": {"source": "github", "repo": "owner/repo"}}` plus an optional `autoUpdate`; Claude Code honors it from a project file only after the workspace trust dialog. `enabledPlugins` maps `plugin@marketplace` to a Boolean. `statusLine` is `{"type": "command", "command": "…"}` with optional `padding`, `refreshInterval`, `hideVimModeIndicator`. Permission lists merge across settings files. `$schema`: `https://json.schemastore.org/claude-code-settings.json`. A project-enabled plugin from an external source is not installed for other users, unless its marketplace entry has a relative-path source; loom's has `./`.
+- **Permission rule syntax** (https://code.claude.com/docs/en/permissions, "Wildcard patterns"): the current form is `Bash(git status *)`; a trailing ` *` also matches the bare command (`Bash(git log *)` matches `git log`); `:*` at the end is an equivalent older form. `ask` rules beat `allow` rules from any file. Project `allow` rules apply only after the workspace trust dialog.
+- **statusLine** (https://code.claude.com/docs/en/statusline, https://code.claude.com/docs/en/plugins-reference, https://code.claude.com/docs/en/plugins/loading): a plugin cannot ship a `statusLine`: a plugin `settings.json` applies only `agent` and `subagentStatusLine`. `${CLAUDE_PLUGIN_ROOT}` resolves in hook, monitor, MCP, LSP, and skill content, not in settings; the status line command gets the session JSON on stdin (`workspace.current_dir`, `workspace.project_dir`) and runs only after workspace trust; empty output or a non-zero exit blanks the line. Plugins live in `<plugins root>/cache/<marketplace>/<plugin>/<version>/` (plugins root: `CLAUDE_CODE_PLUGIN_CACHE_DIR`, default `~/.claude/plugins`), `installed_plugins.json` records each install's `installPath`, and an old version gets an `.orphaned_at` marker. Decision: the committed script `.claude/loom-statusline.py` (§19.3), optional in `setup`.
+- **Rulesets on the free plan** (https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets, "Who can use this feature?"): "Rulesets are available in public repositories with GitHub Free and GitHub Free for organizations, and in public and private repositories with GitHub Pro, GitHub Team, and GitHub Enterprise Cloud."
+- **CI action versions** (GitHub releases, checked on 2026-11-09): `actions/checkout` v7.0.1, `astral-sh/setup-uv` v10.3.3 (no floating major tag), `actions/setup-node` v7.1.0, `pnpm/action-setup` v6.1.1, `oven-sh/setup-bun` v2.2.0. The CI templates pin these exact tags.
+- **Empty python-uv project** (checked locally with uv 0.10.5): `ruff check`, `ruff format --check`, and `pyright` exit 0 without source files; `pytest` exits 5 ("no tests ran"), hence the `test` target of §17.1.
 
 Resolved (milestone M4):
 

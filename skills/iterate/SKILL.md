@@ -60,7 +60,7 @@ Follow the shared `git-flow.md`. `implement` follows the same file, so phase com
 - `git push` (also `--force-with-lease`) and `gh pr edit` need the user's confirmation. Show what you will push or change, then wait for "yes".
 - Never push to `<main>`. Never use `--force`; use `--force-with-lease`, and only on the task branch.
 - Commit format: `<type>(<scope>): <summary> (#<n>)`. `<type>` is the branch type (the part of `branch` before `/`). A fix commit takes the `<scope>` of the phase commit it fixes.
-- Write every commit message to `<task dir>/commit-msg.txt` with the Write tool and run `git commit -F <task dir>/commit-msg.txt`. Never pass a message with `-m`.
+- Write every commit message to `<task dir>/commit-msg.txt` with the Write tool and run `git commit -F <task dir>/commit-msg.txt`. If the file exists, Read it before you Write it (`git-flow.md`). Never pass a message with `-m`.
 - Run `checks.check` exactly as configured and unfiltered: no pipe, redirection, or shell variable.
 
 ### The `Next:` line (all sections)
@@ -272,7 +272,7 @@ A blocked implementation phase never reaches this section: row 8 sends it to [Fi
 5. Commit:
    - Stage only the files the implementer listed under Files changed: `git add -- <paths>`.
    - Run `git status --porcelain`. Nothing else outside `<task dir>` may be left unstaged or untracked. If something is, ask the user.
-   - Message: the fix commit of `git-flow.md`: `<type>(<scope>): <summary of the fix> (#<n>)`. Body: first line `Phase N: <name>` (oneshot: `Phase 1: oneshot`), then a blank line, then one `Fix: <item>` line per fix item. Write it to `<task dir>/commit-msg.txt` and run `git commit -F <task dir>/commit-msg.txt`.
+   - Message: the fix commit of `git-flow.md`: `<type>(<scope>): <summary of the fix> (#<n>)`. Body: first line `Phase N: <name>` (oneshot: `Phase 1: oneshot`), then a blank line, then one `Fix: <item>` line per fix item. Write it to `<task dir>/commit-msg.txt` (Read the file first: it exists from earlier commits) and run `git commit -F <task dir>/commit-msg.txt`.
 6. Append the fix entry of `log-format.md` to `<task dir>/log.md`: `## Phase N — done — <fix commit short hash>`, then the `Fix:`, `Checks:`, `Reviewer:`, and `Deviations:` lines. The last heading of an implementation phase wins, so the phase stays `done`.
 7. Final message: `Artifact: <task dir>/log.md`, `Status: implementation phase N of <total> done (<hash>), fix committed`, `Open questions: 0`, `Manual verification:` with the phase's `Manual:` steps if the fix touches them, and `Next:` from `loom-state`.
 
@@ -320,7 +320,7 @@ Run the shared `implementation-loop.md` in Fix mode. `implement` runs the same l
    - Case (a) with a clean working tree (the user stashed or discarded the phase work): the first `loom:implementer` run gets the plan path and phase N in normal phase mode, not `Fix`. Add the fix items as context ("an earlier run was blocked by: …"). Later attempts send only the reviewer's blocking items, in `Fix` mode.
 6. Commit:
    - Stage the files of phase N: the implementer's Files changed of every run, checked against `git status --porcelain`. Use `git add -- <paths>`. Nothing else outside `<task dir>` may be left unstaged or untracked.
-   - **(a)**: the phase commit of `git-flow.md`, in the same form as `implement` uses: `<type>(<scope>): <summary of phase N> (#<n>)`, body `Phase N: <name>` (oneshot: `Phase 1: oneshot`), written to `<task dir>/commit-msg.txt` and committed with `git commit -F <task dir>/commit-msg.txt`. Then tick the phase's Phase Overview checkbox and its `Automated:` checkboxes in `04-plan.md`. Leave `Manual:` checkboxes for the user.
+   - **(a)**: the phase commit of `git-flow.md`, in the same form as `implement` uses: `<type>(<scope>): <summary of phase N> (#<n>)`, body `Phase N: <name>` (oneshot: `Phase 1: oneshot`), written to `<task dir>/commit-msg.txt` (Read the file first if it exists) and committed with `git commit -F <task dir>/commit-msg.txt`. Then tick the phase's Phase Overview checkbox and its `Automated:` checkboxes in `04-plan.md`. Leave `Manual:` checkboxes for the user.
    - **(b)**: a fix commit, as in step 5 of [Fix an implemented phase](#fix-an-implemented-phase).
 7. Append the `done` entry of `log-format.md` to `<task dir>/log.md`: `## Phase N — done — <commit short hash>`, then the `Checks:`, `Reviewer:`, `Deviations:`, and `Additions:` lines. In case (b), use the fix entry: add one `Fix: <item>` line per fix item after the heading.
 8. If a PR is open, run the shared `pr-update.md` (docs refresh, PR body, push with confirmation).
@@ -378,7 +378,7 @@ Every implementation phase is done, and the working tree has code changes: the u
    3. Run `checks.check`, as `git-flow.md` describes.
    4. Launch `loom:implementation-reviewer` in fix mode: the plan path `<task dir>/04-plan.md` and phase N (oneshot: the ticket path), the fix items, and the diff.
    5. If the checks fail or the verdict has `blocking` items, run [the fix loop](#the-fix-loop) with the failing lines and the `blocking` items as the fix items. A blocked result stops here, as the fix loop describes.
-   6. Commit a fix commit, as step 5 of [Fix an implemented phase](#fix-an-implemented-phase) describes (`<task dir>/commit-msg.txt`, `git commit -F`). Stage the changed files from step 1 that the user kept, plus the `Files changed` of every fix-loop run. If no implementer ran, there is no `Files changed` list; the step 1 files are the whole set.
+   6. Commit a fix commit, as step 5 of [Fix an implemented phase](#fix-an-implemented-phase) describes (`<task dir>/commit-msg.txt`, Read before Write, `git commit -F`). Stage the changed files from step 1 that the user kept, plus the `Files changed` of every fix-loop run. If no implementer ran, there is no `Files changed` list; the step 1 files are the whole set.
    7. Append the fix entry of `log-format.md` to `log.md`, as step 6 of [Fix an implemented phase](#fix-an-implemented-phase) describes.
    8. If `pr.state` is `OPEN`, run the shared `pr-update.md`.
 4. **Drop:** offer stash or discard. Follow "Stash and discard" in `git-flow.md`, with confirmation. For discard, say plainly that the work is lost and cannot be recovered. Without "yes", stop with `Result: nothing changed` and `Next: commit or stash the changes yourself, then /loom:next`.

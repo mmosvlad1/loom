@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "tracker": "github",
+  "mainBranch": "main",
+  "workDir": ".loom/tasks",
+  "docsDir": "docs",
+  "checks": {
+    "lint": "make lint",
+    "typecheck": "make typecheck",
+    "test": "make test",
+    "check": "make check"
+  },
+  "hooks": {
+    "stopLint": false,
+    "maxCheckAttempts": 3
+  },
+  "rounds": {
+    "cap": { "S": 2, "M": 3, "L": 5 }
+  },
+  "implement": {
+    "maxFixAttempts": 2,
+    "autoAdvance": true
+  }
+}

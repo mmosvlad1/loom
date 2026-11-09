@@ -111,14 +111,14 @@ Run each command; each one is safe when its work is already done:
 
 Only for the setup task: `<branch>` is `chore/<n>-loom-setup`, or the first `# ` heading of `00-ticket.md` is `Set up loom`. Otherwise skip this step.
 
-1. Read the rules that apply to `<main>`: `gh api repos/{owner}/{repo}/rules/branches/<main>`. This GET is read-only and needs no confirmation. (The list endpoint `…/rulesets` has no `conditions`, so it cannot tell which branch a ruleset targets.) If the result has any rule with a `ruleset_id`, a ruleset already protects `<main>`: skip this step.
+1. Read the rules that apply to `<main>`: `gh api repos/{owner}/{repo}/rules/branches/<main>`. This GET is read-only and needs no confirmation. The permission system still asks for it (the `Bash(gh api *)` ask rule); that is intended. (The list endpoint `…/rulesets` has no `conditions`, so it cannot tell which branch a ruleset targets.) If the result has any rule with a `ruleset_id`, a ruleset already protects `<main>`: skip this step.
 2. Read the default branch: `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` (read-only). If it is `<main>`, the ref is `~DEFAULT_BRANCH`; otherwise it is `refs/heads/<main>`.
 3. Offer the ruleset and ask for confirmation. It protects `<main>`:
    - changes reach `<main>` only through a PR, with 0 required approvals
    - the required status check is `check` (the CI job)
    - force pushes and deletion are blocked
    - there are no bypass actors: nobody, also no admin, can bypass it
-4. After "yes", write this JSON to `<workDir>/_archive/<task dir name>/ruleset.json`, with `<main>` and `<ref>` replaced:
+4. After "yes", write this JSON to `<workDir>/_archive/<task dir name>/ruleset.json`, with `<main>` and `<ref>` replaced. If the file exists (a re-run), Read it before you Write it:
    ```json
    {
      "name": "loom: protect <main>",
