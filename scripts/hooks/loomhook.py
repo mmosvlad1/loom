@@ -2,7 +2,8 @@
 
 - reading the hook input from stdin,
 - loading the loom-state module from bin/loom-state (one source of truth),
-- splitting a Bash command into pipelines and simple commands with shlex.
+- splitting a Bash command into pipelines and simple commands with shlex,
+- running a check command with a timeout (Stop and SubagentStop hooks).
 
 Standard library only; runs on Python 3.9.
 """
@@ -14,8 +15,10 @@ import json
 import os
 import re
 import shlex
+import signal
+import subprocess
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LOOM_STATE_PATH = os.path.join(PLUGIN_ROOT, "bin", "loom-state")
@@ -79,12 +82,71 @@ def deny(reason: str) -> None:
 
 
 def run_safely(main, name: str) -> None:
-    """Run a hook main(); on any unexpected error, warn on stderr and exit 0."""
+    """Run a hook main(); on any unexpected error, warn on stderr and exit 0.
+
+    A main() that calls sys.exit(2) on purpose (Stop, SubagentStop) still exits
+    2: SystemExit is not an Exception.
+    """
     try:
         main()
     except Exception as exc:  # a hook must never break the session
         sys.stderr.write("loom %s hook: skipped after error: %s\n" % (name, exc))
     sys.exit(0)
+
+
+def system_message(text: str) -> None:
+    """Show a warning to the user (JSON `systemMessage`, exit code 0)."""
+    sys.stdout.write(json.dumps({"systemMessage": text}) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Running check commands (Stop and SubagentStop hooks)
+# ---------------------------------------------------------------------------
+
+
+def run_check(command: str, cwd: str, timeout: int) -> Tuple[Optional[int], str]:
+    """Run a loom.json check command with the shell, stdout and stderr merged.
+
+    Returns (exit code, output); exit code None means the command timed out.
+    The command runs in its own process group, so a timeout also stops the
+    processes it started (make, test runners).
+    """
+    try:
+        proc = subprocess.Popen(
+            command, shell=True, cwd=cwd, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
+        )
+    except OSError as exc:
+        return 127, "cannot run %r: %s" % (command, exc)
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            proc.kill()
+        try:
+            out, _ = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            # A grandchild left the process group and still holds the pipe: give up on its output.
+            out = b""
+        return None, out.decode("utf-8", "replace")
+    return proc.returncode, out.decode("utf-8", "replace")
+
+
+def output_tail(text: str, max_lines: int = 80, max_chars: int = 6000) -> str:
+    """The last lines of a command output, for a hook message."""
+    lines = text.rstrip("\n").splitlines()
+    shortened = len(lines) > max_lines
+    result = "\n".join(lines[-max_lines:])
+    if len(result) > max_chars:
+        shortened = True
+        result = result[-max_chars:]
+        if "\n" in result:
+            result = result.split("\n", 1)[1]  # drop the cut first line
+    if shortened:
+        result = "[... output shortened; last lines follow ...]\n" + result
+    return result
 
 
 # ---------------------------------------------------------------------------

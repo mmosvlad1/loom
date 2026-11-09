@@ -371,6 +371,21 @@ class WorkingTreeTest(RepoTestCase):
         write(self.path("README.md"), "changed\n")
         self.assertEqual(self.state()["workingTree"], "dirty")
 
+    def test_docs_only_flag(self):
+        self.assertFalse(self.state()["workingTreeDocsOnly"])
+        write(self.path("docs", "tasks", "42-x.md"), "# summary\n")
+        s = self.state()
+        self.assertEqual((s["workingTree"], s["workingTreeDocsOnly"]), ("dirty", True))
+        write(self.path("src", "app.py"), "x = 1\n")
+        self.assertEqual(self.state()["workingTreeDocsOnly"], False)
+
+    def test_all_done_docs_only_dirty_routes_to_describe_pr(self):
+        write(os.path.join(self.dir, "log.md"), "## Phase 1 — done — abc1234\n")
+        write(self.path("docs", "tasks", "42-x.md"), "# summary\n")
+        self.assertEqual(self.state()["next"]["command"], "/loom:describe-pr")
+        write(self.path("src", "app.py"), "x = 1\n")
+        self.assertEqual(self.state()["next"]["command"], "/loom:iterate <feedback>")
+
     def test_oneshot_next(self):
         s = self.state()
         self.assertEqual(s["next"]["command"], "/loom:implement")

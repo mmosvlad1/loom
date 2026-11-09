@@ -54,6 +54,7 @@ LOG_FILE = "log.md"
 PLAN_FILE = "04-plan.md"
 RESEARCH_FILE = "02-research.md"
 ARCHIVE_DIR = "_archive"
+LOOM_DIR = ".loom"
 
 # Artifact files in phase order (the ticket and log.md are handled separately).
 ARTIFACT_FILES: List[Tuple[str, str]] = [
@@ -621,12 +622,19 @@ def _is_under(path: str, prefix: str) -> bool:
     return path == prefix or path.startswith(prefix + "/")
 
 
-def working_tree_status(top: str, cfg: Dict[str, Any]) -> Tuple[Optional[str], List[str]]:
-    """Return ("clean" | "dirty", warnings). Files under workDir are ignored."""
+def working_tree_status(
+    top: str, cfg: Dict[str, Any], extra_ignore: Tuple[str, ...] = ()
+) -> Tuple[Optional[str], List[str]]:
+    """Return ("clean" | "dirty", warnings). Files under workDir are ignored.
+
+    extra_ignore: more directories (relative to top) whose changes do not count,
+    e.g. the Stop hook ignores `.loom/` and docsDir.
+    """
     rc, out, err = git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], top)
     if rc != 0:
         return None, ["git status failed: %s" % (err.strip().splitlines() or ["?"])[0]]
-    work_rel = rel_to(top, work_dir_abs(top, cfg))
+    ignored = [rel_to(top, work_dir_abs(top, cfg))]
+    ignored += [rel_to(top, os.path.normpath(os.path.join(top, d))) for d in extra_ignore]
     entries = out.split("\0")
     i = 0
     while i < len(entries):
@@ -640,7 +648,7 @@ def working_tree_status(top: str, cfg: Dict[str, Any]) -> Tuple[Optional[str], L
             if i < len(entries):
                 paths.append(entries[i])
             i += 1
-        if not all(_is_under(p, work_rel) for p in paths):
+        if not all(any(_is_under(p, d) for d in ignored) for p in paths):
             return "dirty", []
     return "clean", []
 
@@ -860,6 +868,7 @@ def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
         "artifacts": [],
         "implementation": None,
         "workingTree": None,
+        "workingTreeDocsOnly": False,
         "pr": None,
         "next": None,
         "warnings": warnings,
@@ -867,6 +876,10 @@ def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
     tree, w = working_tree_status(top, cfg)
     state["workingTree"] = tree
     warnings.extend(w)
+    if tree == "dirty":
+        # Dirty only below docsDir (an interrupted describe-pr writes docs before its commit).
+        docs_tree, _ = working_tree_status(top, cfg, extra_ignore=(LOOM_DIR, cfg["docsDir"]))
+        state["workingTreeDocsOnly"] = docs_tree == "clean"
 
     m = BRANCH_RE.match(branch or "")
     if m and not state["onMain"]:
@@ -1049,14 +1062,32 @@ def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
             prefix + "04-plan.md is %s and must be approved first" % (plan.get("status") or "without status"),
         )
 
-    # Row 5: dirty working tree or an implementation phase in progress.
-    if state.get("workingTree") == "dirty":
-        return _next("/loom:implement", "working tree has uncommitted changes (resume flow)")
+    # Row 5: an implementation phase in progress, or a dirty working tree
+    # while implementation phases are left (resume flow). With all phases
+    # done, a dirty tree is not implement's work: changes only below docsDir
+    # are an interrupted describe-pr (fall through, normally to row 9), and
+    # code changes go to /loom:iterate.
+    total = impl.get("total") or 0
+    done = impl.get("done") or 0
+    all_done = total > 0 and done >= total
     if impl.get("inProgress"):
         return _next(
             "/loom:implement",
             "implementation phase %s is in progress (resume flow)" % impl["inProgress"],
         )
+    if state.get("workingTree") == "dirty":
+        if not all_done:
+            return _next("/loom:implement", "working tree has uncommitted changes (resume flow)")
+        pr_state = state.get("pr")
+        if isinstance(pr_state, dict) and str(pr_state.get("state") or "").upper() == "MERGED":
+            # The work is merged: /loom:finish-task cleans up (it offers a stash first).
+            return _route_pr(pr_state)
+        if not state.get("workingTreeDocsOnly"):
+            return _next(
+                "/loom:iterate <feedback>",
+                "uncommitted code changes after all %d implementation phases are done; "
+                "/loom:iterate keeps them as a fix or stashes or discards them" % total,
+            )
 
     mode = task.get("mode")
     valid_mode = mode in MODES
@@ -1085,8 +1116,19 @@ def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
                 "%s is in review with no open questions%s" % (gate.get("phase"), notes),
             )
 
-    # Row 8: pull request routing (section 6.2).
+    # Row 8: pull request routing (section 6.2). An open PR with
+    # implementation phases left (a plan change after the PR) goes to
+    # implement first, before every OPEN sub-route; row 4 already holds the
+    # plan gate, so the plan is approved here (or the mode is oneshot).
     pr = state.get("pr")
+    if isinstance(pr, dict) and str(pr.get("state") or "").upper() == "OPEN" and not all_done:
+        if task.get("mode") == "oneshot" or any(
+            a.get("phase") == "plan" and a.get("status") == "approved" for a in artifacts
+        ):
+            return _next(
+                "/loom:implement",
+                "PR #%s is open and %d of %d implementation phases are done" % (pr.get("number"), done, total),
+            )
     if isinstance(pr, dict):
         routed = _route_pr(pr)
         if routed:
@@ -1099,9 +1141,7 @@ def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
         )
 
     # Row 9: all implementation phases done.
-    total = impl.get("total") or 0
-    done = impl.get("done") or 0
-    if total > 0 and done >= total:
+    if all_done:
         return _next("/loom:describe-pr", "all %d implementation phases are done" % total)
 
     if not valid_mode:

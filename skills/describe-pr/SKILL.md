@@ -1,0 +1,187 @@
+---
+name: describe-pr
+description: After the last implementation phase - writes the task summary and ADRs into the docs directory, proposes an architecture overview update, commits the docs, rebases on the main branch, drafts the PR body with the plan attached, and after confirmation pushes and opens the PR. Then proposes follow-up issues.
+disable-model-invocation: true
+argument-hint: "[notes for the PR]"
+model: inherit
+allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json --pr) Bash(loom-state --json) Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)
+---
+
+# Describe PR
+
+You turn the finished task into durable docs and a pull request. You distill the working artifacts of the task directory into the committed docs directory, then open the PR.
+
+## State
+
+Current task state from `loom-state`, with the pull request state:
+
+!`"${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json --pr`
+
+Arguments: $ARGUMENTS
+
+"Today" below means `today` from the state. If the state is empty, use the session's current date.
+`task.dir` is relative to the project's git top level (your working directory), never to the plugin directory.
+
+## Shared rules
+
+Read these files in full before you start:
+
+- `${CLAUDE_SKILL_DIR}/references/summary-template.md` (the task summary)
+- `${CLAUDE_SKILL_DIR}/references/adr-template.md` (one ADR)
+- `${CLAUDE_SKILL_DIR}/references/pr-template.md` (the PR body)
+- `${CLAUDE_PLUGIN_ROOT}/skills/backlog/references/issue-format.md` (follow-up issues)
+- `${CLAUDE_PLUGIN_ROOT}/skills/implement/references/log-format.md` (how to read `log.md`)
+- `${CLAUDE_PLUGIN_ROOT}/skills/_shared/git-flow.md` (checks, docs commit, rebase, push, confirmations)
+- `${CLAUDE_PLUGIN_ROOT}/skills/_shared/visual-conventions.md` (trees and diff blocks in docs and the PR)
+- `${CLAUDE_PLUGIN_ROOT}/skills/_shared/writing-style.md` (style of docs, ADRs, and the PR)
+- `${CLAUDE_PLUGIN_ROOT}/skills/_shared/final-answer.md` (format of your last message)
+
+Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission.
+
+### Configuration
+
+Read `.claude/loom.json` at the git top level. If a key is missing, use the default: `docsDir` = `docs`, `checks.check` = `make check`. `mainBranch` is in the state.
+
+Below, `<main>` is `mainBranch`, `<n>` is `task.number`, `<slug>` is `task.slug`, `<task dir>` is `task.dir`, and `<docs>` is `docsDir`.
+
+### Mode differences
+
+| | oneshot | quick, full |
+|---|---|---|
+| Task summary `<docs>/tasks/<n>-<slug>.md` | no | yes |
+| ADRs | no | for resolved decisions with `ADR? = yes` |
+| `overview.md` update | proposed if the architecture changed | proposed if the architecture changed |
+| Docs commit | only if `overview.md` changed | if any docs file changed |
+| PR body | short: `Closes`, Summary, Verification | full, with the plan attached |
+
+## 1. Check preconditions
+
+Read the state above. Stop at the first failed check. Report it in the `final-answer.md` format, with a `Result:` line instead of `Artifact` and `Status`.
+
+| Check | Stop message (`Result:` line) | `Next:` |
+|---|---|---|
+| The state is empty | `not a loom project (no .claude/loom.json)` | `/loom:setup` |
+| `onMain` is `true` | `on the main branch; no task` | `/loom:start-task #<n>` |
+| `task` is `null` | `branch <branch> matches no task` | `/loom:start-task #<n>` |
+| `task.archived` is `true` | `task #<n> is archived` | `/loom:start-task #<n>` (offers a restore) |
+| `pr.state` is `MERGED` | `PR #<number> is merged` | `/loom:finish-task` |
+| `pr.state` is `OPEN` | `PR #<number> is already open; change it with /loom:iterate` | from `next.command` |
+| `implementation.blocked` or `implementation.inProgress` is set | `implementation is not finished` | from `next.command` |
+| `implementation.total` is `0`, or `implementation.done` is less than `implementation.total` | `implementation is not finished (<done> of <total> phases done)` | from `next.command` |
+| Not oneshot, and `04-plan.md` is not `approved` | `04-plan.md changed and is not approved again` | from `next.command` |
+| `workingTree` is `dirty` and `workingTreeDocsOnly` is `false` (code changes) | `working tree has uncommitted code changes` | `/loom:iterate` with no argument (it keeps the changes as a fix, or stashes or discards them) |
+| `warnings` says `gh` is not installed | `gh is not installed; the PR needs it` | — |
+
+- If `pr.state` is `OPEN` and `task.pr` is not set, an earlier run created the PR but stopped. Write `pr: <number>` into the `00-ticket.md` frontmatter (step 8), then stop with the `PR #<number> is already open` row.
+- Re-running after a partial failure is safe: every step below checks what already exists.
+- A working tree that is dirty only below `<docs>` (`workingTreeDocsOnly` is `true`) is an earlier partial run of this skill: it wrote docs and stopped before the docs commit. Continue. Steps 3-5 update those files in place; step 6 commits them. Show `git status --porcelain -- <docs>` in a `Warning:` line so the user sees what the earlier run left.
+
+## 2. Read the task
+
+Read in full, without offset or limit:
+
+- `<task dir>/00-ticket.md`, `<task dir>/log.md`.
+- quick and full: `<task dir>/04-plan.md`, `<task dir>/02-research.md`, and `<task dir>/03-design.md` if it exists. Do not read `*.superseded.md` files.
+- `<docs>/architecture/overview.md` if it exists. List `<docs>/architecture/decisions/`.
+
+Read the code history:
+
+- The base is `origin/<main>` if `git remote get-url origin` succeeds, else `<main>`.
+- `git log --format='%h %s%n%b' <base>..HEAD`: the phase commits and fix commits.
+- `git diff --stat <base>...HEAD`, and `git diff <base>...HEAD` where you need detail.
+
+Take the issue title from the first `# ` heading of `00-ticket.md`.
+
+## 3. Task summary (quick and full)
+
+Write `<docs>/tasks/<n>-<slug>.md` from `summary-template.md`:
+
+- If the file exists (a re-run), update it in place. Keep text that is still true.
+- **Key Decisions**: the resolved decisions of `03-design.md` and `04-plan.md` that matter after the merge, with links to their ADRs (step 4).
+- **Implementation**: one line per implementation phase with its commit subject. Do not write hashes; the rebase and the squash merge change them.
+- **Deviations from Plan**: from `log.md` (`Deviations:`, `Additions:`, `Fix:` lines, and `## Plan change` entries).
+- **Verification**: the checks and the manual steps. Mark a manual step as passed only if the user confirmed it.
+- **Follow-ups**: out-of-scope items, worthwhile nits, and open risks. Step 9 proposes them as issues.
+- Remove every guidance comment.
+
+## 4. ADRs (quick and full)
+
+For each row of `## Resolved Decisions` in `03-design.md` and `04-plan.md` with `ADR?` = `yes`:
+
+1. Skip it if an ADR for it exists: an ADR in `<docs>/architecture/decisions/` with `Task: #<n>` and the same decision.
+2. Number: the highest `NNNN` of the files named `NNNN-*.md` in the directory, plus 1, with four digits. Start at `0001`. Create the directory if it is missing.
+3. Write `<docs>/architecture/decisions/NNNN-<slug>.md` from `adr-template.md`. `Status: Accepted · Task: #<n> · Date: <today>`.
+4. Context, Alternatives Considered, and Consequences come from the question, its options, the design, and the research. A decision taken by the round cap ("accepted by default") gets that fact in its Context.
+5. Link the ADR from the task summary's Key Decisions.
+
+## 5. Architecture overview
+
+1. Compare the change (the diff, the design, and the ADRs) with `<docs>/architecture/overview.md`. The architecture changed if the task:
+   - adds, removes, or renames a component, module, or service
+   - changes the data flow or a protocol between components
+   - adds a major library or an external dependency
+2. If it changed, propose an update:
+   - Show the change as a `diff` block of `overview.md`.
+   - Ask the user to accept, change, or skip it. Apply it only after "yes".
+3. If `overview.md` does not exist, do not create it. Add `Warning: <docs>/architecture/overview.md is missing (/loom:setup creates it)`.
+
+## 6. Docs commit
+
+1. Run `git status --porcelain -- <docs>`.
+   - oneshot: commit only if `<docs>/architecture/overview.md` changed.
+   - quick and full: commit if any file under `<docs>` changed.
+2. If nothing changed, make no commit.
+3. Otherwise stage the changed docs files (`git add -- <paths>`). Write `docs(#<n>): record decisions and summary` to `<task dir>/commit-msg.txt` and run `git commit -F <task dir>/commit-msg.txt`.
+
+## 7. Rebase
+
+Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`, then `git rebase origin/<main>` (or `<main>` without a remote `origin`), and the conflict rules.
+
+- If the rebase brought changes (`HEAD` changed), run `checks.check` again.
+- If the checks fail: do not push. Stop with `Result: checks fail after the rebase on <base>` and `Next: /loom:iterate <the failing check and its key lines>`. `/loom:iterate` fixes it as code feedback.
+
+## 8. Pull request
+
+### Draft
+
+1. **Title**: Conventional Commits, `<type>(<scope>): <summary of the task> (#<n>)`. `<type>` is the branch type. `<scope>` and `<summary>` follow `git-flow.md`. This title becomes the squash commit on `<main>`.
+2. **Body**: write `<task dir>/pr-body.md` from `pr-template.md`:
+   - quick and full: `Closes #<n>`, Summary, Changes, Verification, Decisions, then the body of `04-plan.md` (without frontmatter) inside `<details><summary>Implementation plan</summary>`.
+   - oneshot: only `Closes #<n>`, Summary, and Verification. Keep it short.
+   - Decisions links the new ADRs and the task summary by their repository paths.
+   - Remove every guidance comment. Add the user's notes from the argument where they fit.
+3. **Size**: count the characters of the body. If it is longer than 60,000, replace the plan inside `<details>` with its `## Phase Overview` section and the line `The full plan is longer than the PR body allows; only its Phase Overview is attached.`
+
+### Confirm, push, create
+
+1. Show the title, the body, and the commits to push (`git log --oneline <base>..HEAD`).
+2. Ask for one confirmation for both actions: push the branch and open the PR.
+3. After "yes":
+   - Push as `git-flow.md` describes. Normally the branch has no upstream yet: `git push -u origin <branch>`. If an upstream exists and the rebase rewrote its commits, use `git push --force-with-lease`.
+   - `gh pr create --base <main> --title '<title>' --body-file <task dir>/pr-body.md`. Quote the title with the single-quote rule of `git-flow.md` (every `'` becomes `'\''`).
+4. If `git remote get-url origin` fails, or `gh pr create` fails (for example `gh auth login` is missing), stop with `Result: <the error>`. The docs commit stays; a re-run continues.
+
+### Record
+
+- Take the PR number from the URL that `gh pr create` prints (`…/pull/57` → `57`).
+- Write `pr: <number>` into the `00-ticket.md` frontmatter: replace an existing `pr:` line, or add it before the closing `---`. Change nothing else in the ticket.
+
+## 9. Follow-up issues
+
+1. Collect follow-ups: the task summary's Follow-ups (oneshot: worthwhile nits and open problems from `log.md`).
+2. If there are none, skip this step.
+3. Draft each follow-up as an issue in the format of `issue-format.md`: Context starts with `Follow-up from #<n>` and links the PR.
+4. Show the drafts. Ask the user which ones to create. Create only confirmed issues, with `gh issue create` as `issue-format.md` describes.
+
+## 10. Final message
+
+Run `loom-state --json`. Use the `final-answer.md` format:
+
+```text
+Result: PR #<number> opened: <url>
+Warning: <one line per warning, if any>
+Next: /clear, then /loom:finish-task
+```
+
+- Add `Docs: <the files written or changed>` and `Issues: <#k, #m>` (created follow-ups) after `Result:`, one line each, when they exist.
+- `Next:` comes from `loom-state` (`next.command` is normally `/loom:finish-task`; it watches the checks).

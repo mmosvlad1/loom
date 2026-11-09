@@ -16,6 +16,12 @@ SPEC = os.path.join(ROOT, "LOOM_SPEC.md")
 # Skills of milestone M3. Later milestones add more skill directories; the
 # generic checks below cover every directory that exists.
 M3_SKILLS = {"research-questions", "research", "design", "plan", "iterate"}
+M4_SKILLS = {"implement", "describe-pr", "finish-task", "next"}
+STATE_SKILLS = M3_SKILLS | M4_SKILLS
+# Skills that `next` runs by reading their SKILL.md (§9.12).
+NEXT_RUNS = {"research-questions", "research", "design", "plan", "implement"}
+# Skill directories that only hold reference files until a later milestone (M5: backlog/SKILL.md).
+REFERENCE_ONLY_DIRS = {"backlog": ["references/issue-format.md"]}
 PHASE_SKILLS = {"research-questions", "research", "design", "plan"}
 # Artifact file -> skill that writes it from references/template.md.
 ARTIFACT_SKILL = {
@@ -164,9 +170,10 @@ def spec_h2_headings(block: List[str]) -> List[str]:
 
 
 def skill_dirs() -> List[str]:
+    """Skill directories with a SKILL.md (reference-only directories are checked separately)."""
     return sorted(
         d for d in os.listdir(SKILLS_DIR)
-        if d != "_shared" and os.path.isdir(os.path.join(SKILLS_DIR, d))
+        if d != "_shared" and os.path.isfile(os.path.join(SKILLS_DIR, d, "SKILL.md"))
     )
 
 
@@ -224,7 +231,8 @@ class SpecParsingTest(unittest.TestCase):
         table = spec_model_effort()
         self.assertLessEqual(M3_SKILLS, set(table))
         self.assertEqual(table["design"], ("inherit", "high"))
-        self.assertEqual(table["next"], ("haiku", "low"))
+        self.assertEqual(table["next"], ("inherit", "default"))
+        self.assertEqual(table["finish-task"], ("haiku", "low"))
 
     def test_no_fork_list(self):
         self.assertEqual(set(spec_no_fork_skills()), {"research", "design", "plan", "implement"})
@@ -244,6 +252,22 @@ class SpecParsingTest(unittest.TestCase):
 class SkillFrontmatterTest(unittest.TestCase):
     def test_m3_skills_exist(self):
         self.assertLessEqual(M3_SKILLS, set(skill_dirs()))
+
+    def test_m4_skills_exist(self):
+        self.assertLessEqual(M4_SKILLS, set(skill_dirs()))
+
+    def test_every_directory_is_a_skill_or_reference_only(self):
+        dirs = {d for d in os.listdir(SKILLS_DIR) if os.path.isdir(os.path.join(SKILLS_DIR, d))} - {"_shared"}
+        self.assertEqual(dirs - set(skill_dirs()), set(REFERENCE_ONLY_DIRS) - set(skill_dirs()))
+        for name, files in REFERENCE_ONLY_DIRS.items():
+            if name in skill_dirs():
+                continue  # the later milestone added SKILL.md
+            with self.subTest(dir=name):
+                found = sorted(
+                    os.path.relpath(os.path.join(r, f), os.path.join(SKILLS_DIR, name))
+                    for r, _, fs in os.walk(os.path.join(SKILLS_DIR, name)) for f in fs
+                )
+                self.assertEqual(found, files)
 
     def test_every_skill_dir_is_in_the_spec_layout(self):
         layout = set(spec_layout_skills())
@@ -279,7 +303,7 @@ class SkillFrontmatterTest(unittest.TestCase):
                 self.assertTrue(hint.startswith('"') and hint.endswith('"'), hint)
 
     def test_m3_skills_take_arguments(self):
-        for name in M3_SKILLS:
+        for name in STATE_SKILLS:
             with self.subTest(skill=name):
                 fm, body = split_frontmatter(skill_md(name))
                 self.assertIn("argument-hint", fm)
@@ -292,13 +316,13 @@ class SkillFrontmatterTest(unittest.TestCase):
                 fm = split_frontmatter(skill_md(name))[0]
                 self.assertIn(name, table, "skill missing from the §9.0 table")
                 model, effort = table[name]
-                if "model" in fm or name in M3_SKILLS:
+                if "model" in fm or name in STATE_SKILLS:
                     self.assertEqual(fm.get("model"), model)
                 if effort == "default":
                     self.assertNotIn("effort", fm, "'default' effort means: omit the field")
                 else:
                     self.assertIn(effort, EFFORT_VALUES)
-                    if "effort" in fm or name in M3_SKILLS:
+                    if "effort" in fm or name in STATE_SKILLS:
                         self.assertEqual(fm.get("effort"), effort)
 
     def test_no_fork_for_agent_spawning_skills(self):
@@ -321,7 +345,7 @@ class PermissionTest(unittest.TestCase):
             for command in commands:
                 with self.subTest(skill=name, command=command):
                     self.assertTrue(any(rule_allows(r, "Bash", command) for r in rules), rules)
-            if name in M3_SKILLS:
+            if name in STATE_SKILLS:
                 self.assertTrue(commands, "%s injects no state" % name)
 
     def test_only_loom_state_is_injected(self):
@@ -332,7 +356,7 @@ class PermissionTest(unittest.TestCase):
                     self.assertNotIn("date", command)
 
     def test_loom_state_calls_in_the_body_are_allowed(self):
-        for name in M3_SKILLS:
+        for name in STATE_SKILLS:
             body = split_frontmatter(skill_md(name))[1]
             calls = set(re.findall(r"`(loom-state --[^`]*)`", body))
             calls.add("loom-state --json")  # final-answer.md runs the bare form (bin/ is on PATH)
@@ -353,7 +377,7 @@ class PermissionTest(unittest.TestCase):
                 for call in calls:
                     if call.startswith("loom-state --"):
                         self.assertTrue(any(rule_allows(r, "Bash", call) for r in skill_rules(name)), call)
-            if name in M3_SKILLS:
+            if name in STATE_SKILLS:
                 self.assertIn("`loom-state --json`", body)
 
     def test_full_path_rules_match_only_injections(self):
@@ -394,7 +418,7 @@ class PermissionTest(unittest.TestCase):
         self.assertIn("`loom-state --json`, `loom-state --json --pr`", section)
 
     def test_skills_take_the_date_from_loom_state(self):
-        for name in M3_SKILLS:
+        for name in M3_SKILLS | {"implement", "describe-pr"}:
             with self.subTest(skill=name):
                 self.assertIn('"Today" below means `today` from the state.', skill_md(name))
 
@@ -481,7 +505,13 @@ class SkillBodyTest(unittest.TestCase):
             "research": ["frontmatter.md", "writing-style.md", "visual-conventions.md", "final-answer.md"],
             "design": ["frontmatter.md", "question-rounds.md", "visual-conventions.md", "writing-style.md", "final-answer.md"],
             "plan": ["frontmatter.md", "question-rounds.md", "visual-conventions.md", "writing-style.md", "final-answer.md"],
-            "iterate": ["frontmatter.md", "question-rounds.md", "visual-conventions.md", "writing-style.md", "final-answer.md"],
+            "iterate": ["frontmatter.md", "question-rounds.md", "visual-conventions.md", "writing-style.md",
+                        "final-answer.md", "git-flow.md", "implementation-loop.md", "pr-update.md"],
+            "implement": ["implementation-loop.md", "git-flow.md", "pr-update.md", "frontmatter.md", "writing-style.md",
+                          "final-answer.md"],
+            "describe-pr": ["git-flow.md", "visual-conventions.md", "writing-style.md", "final-answer.md"],
+            "finish-task": ["git-flow.md", "writing-style.md", "final-answer.md"],
+            "next": ["final-answer.md", "writing-style.md"],
         }
         for name, snippets in expected.items():
             for snippet in snippets:
@@ -629,6 +659,36 @@ class IterateTest(unittest.TestCase):
                 self.assertLess(index(gate), index("Post-PR fix"))
                 self.assertLess(index(gate), index("Fix a blocked phase"))
 
+    def test_plan_change_row_comes_before_the_open_pr_row(self):
+        rows = self.detection_rows()
+        order = [section for _, _, section in rows]
+        plan = next(i for i, s in enumerate(order) if "Change an approved plan" in s)
+        pr = next(i for i, s in enumerate(order) if "Post-PR fix" in s)
+        self.assertLess(plan, pr)
+        between = [s for s in order[plan + 1:pr]]
+        self.assertEqual(between, ["[Uncommitted changes after implementation](#uncommitted-changes-after-implementation)"])
+        self.assertIn("adds, removes, or changes an implementation phase", rows[plan][1])
+        self.assertIn("also with a PR open", rows[plan][1])
+        self.assertGreater(plan, next(i for i, s in enumerate(order) if "Fix a blocked phase" in s))
+
+    def test_uncommitted_changes_row(self):
+        rows = self.detection_rows()
+        order = [section for _, _, section in rows]
+        def index(fragment: str) -> int:
+            return next(i for i, s in enumerate(order) if fragment in s)
+        row = index("Uncommitted changes after implementation")
+        self.assertGreater(row, index("Change an approved plan"))
+        self.assertGreater(row, index("Fix a blocked phase"))
+        self.assertLess(row, index("Post-PR fix"))
+        self.assertLess(row, index("Fix an implemented phase"))
+        self.assertIn("`workingTreeDocsOnly` is `false`", rows[row][1])
+        section = skill_md("iterate").split("## Uncommitted changes after implementation", 1)[1].split("\n---\n", 1)[0]
+        for needle in ("git status --short", "git diff --stat HEAD", "keep these changes as a fix", "`loom:implementation-reviewer` in fix mode",
+                       "[the fix loop](#the-fix-loop)", "git commit -F", "`log-format.md`", "`pr-update.md`",
+                       '"Stash and discard" in `git-flow.md`', "lost and cannot be recovered", "`Next:` from `loom-state`"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
     def test_finish_plan_change_row_position(self):
         rows = self.detection_rows()
         order = [section for _, _, section in rows]
@@ -685,7 +745,9 @@ class IterateTest(unittest.TestCase):
         body = skill_md("iterate")
         self.assertIn("### The `Next:` line (all sections)", body)
         # Only stop tables and the refusal example may name a fixed command after "Next:".
-        fixed = re.findall(r"`Next: (/loom:[a-z-]+)", body)
+        # Dirty-tree refusals name the handling skill on purpose (a computed `next.command` could loop).
+        computed = "\n".join(l for l in body.splitlines() if "uncommitted" not in l)
+        fixed = re.findall(r"`Next: (/loom:[a-z-]+)", computed)
         self.assertLessEqual(set(fixed), {"/loom:setup", "/loom:start-task"}, fixed)
 
     def test_plan_change_log_heading_is_not_a_phase_entry(self):
@@ -829,6 +891,511 @@ class LoomStateRoundTripTest(unittest.TestCase):
             with self.subTest(artifact=artifact):
                 fm = ls.parse_frontmatter(template(name))
                 self.assertEqual(fm.get("status"), "draft")
+
+
+
+def reference(skill: str, name: str) -> str:
+    return read(os.path.join(SKILLS_DIR, skill, "references", name))
+
+
+def shared(name: str) -> str:
+    return read(os.path.join(SKILLS_DIR, "_shared", name))
+
+
+def spec_markdown_block(start: str, end: str) -> List[str]:
+    section = spec_section(start, end)
+    return re.search(r"```markdown\n(.*?)\n```", section, re.DOTALL).group(1).splitlines()
+
+
+def strip_comments(text: str) -> str:
+    """Drop HTML guidance comments, as the skills do before they write the file."""
+    return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+
+
+def section(body: str, start: str) -> str:
+    return body.split(start, 1)[1].split("\n## ", 1)[0]
+
+
+class DocsTemplateTest(unittest.TestCase):
+    """describe-pr templates match §13.4, §13.5, and §13.6."""
+
+    def test_summary_template_matches_13_4(self):
+        block = spec_markdown_block("### 13.4 Task summary", "### 13.5 ADR")
+        text = reference("describe-pr", "summary-template.md")
+        lines = strip_comments(text).splitlines()
+        self.assertEqual(h2_headings(lines), spec_h2_headings(block))
+        h1 = [l for l in lines if l.startswith("# ")]
+        self.assertRegex(block[0], r"^# #\d+ \S")
+        self.assertEqual(len(h1), 1)
+        self.assertRegex(h1[0], r"^# #<n> \S")
+        self.assertIn("commit subject", text)  # hashes change on rebase and squash merge
+
+    def test_adr_template_matches_13_5(self):
+        block = spec_markdown_block("### 13.5 ADR", "### 13.6 PR body")
+        status_re = r"^Status: Accepted · Task: #\S+ · Date: \S+$"
+        self.assertRegex(block[0], r"^# NNNN\. \S")
+        self.assertRegex(block[1], status_re)
+        lines = [l for l in strip_comments(reference("describe-pr", "adr-template.md")).splitlines() if l.strip()]
+        self.assertRegex(lines[0], r"^# NNNN\. \S")
+        self.assertRegex(lines[1], status_re)
+        self.assertEqual(h2_headings(lines), spec_h2_headings(block))
+
+    def test_pr_template_matches_13_6(self):
+        block = spec_markdown_block("### 13.6 PR body", "## 14. Writing Style")
+        text = reference("describe-pr", "pr-template.md")
+        lines = [l for l in strip_comments(text).splitlines() if l.strip()]
+        self.assertRegex(block[0], r"^Closes #\d+$")
+        self.assertEqual(lines[0], "Closes #<n>")
+        self.assertEqual(h2_headings(lines), spec_h2_headings(block))
+        details = [l for l in block if l.startswith("<details>") or l.startswith("</details>")]
+        self.assertEqual(details, ["<details><summary>Implementation plan</summary>", "</details>"])
+        for line in details:
+            with self.subTest(line=line):
+                self.assertIn(line, lines)
+        self.assertLess(lines.index(details[0]), lines.index(details[1]))
+
+    def test_pr_size_limit_and_oneshot_rules(self):
+        spec = spec_section("### 13.6 PR body", "## 14. Writing Style")
+        self.assertIn("60,000 characters", spec)
+        self.assertIn("oneshot PRs contain only `Closes`, Summary, and Verification", spec)
+        template = reference("describe-pr", "pr-template.md")
+        body = skill_md("describe-pr")
+        for text in (template, body):
+            self.assertIn("60,000", text)
+            self.assertIn("Phase Overview", text)
+        self.assertIn("oneshot: only `Closes #<n>`, Summary, and Verification", body)
+
+    def test_templates_have_no_unclosed_fence(self):
+        for name in ("summary-template.md", "adr-template.md", "pr-template.md"):
+            with self.subTest(template=name):
+                self.assertFalse(ls.has_unclosed_fence(reference("describe-pr", name)))
+
+    def test_issue_format(self):
+        text = reference("backlog", "issue-format.md")
+        for needle in ("## Title", "## Body", "## Labels", "## Context", "## Acceptance Criteria",
+                       "Follow-up from #<n>", "gh issue create", "confirmation"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+        spec_labels = spec_section("### 19.2 Issue labels", "### 19.3")
+        for label in re.findall(r"^\| `(\w+:)` \|", spec_labels, re.MULTILINE):
+            with self.subTest(label=label):
+                self.assertIn("`%s`" % label, text)
+
+
+class LogFormatTest(unittest.TestCase):
+    """implement/references/log-format.md is consistent with loom-state's parser."""
+
+    def text(self) -> str:
+        return reference("implement", "log-format.md")
+
+    def examples(self) -> List[str]:
+        entries = self.text().split("## Grammar", 1)[0]
+        return re.findall(r"```markdown\n(.*?)```", entries, re.DOTALL)
+
+    def fill(self, block: str) -> str:
+        return (block.replace("Phase N", "Phase 2").replace("<commit short hash>", "abc1234")
+                .replace("<fix commit short hash>", "def5678"))
+
+    def test_every_example_parses(self):
+        examples = [self.fill(b) for b in self.examples()]
+        self.assertEqual(len(examples), 5)
+        parsed = [ls.parse_log(b) for b in examples]
+        self.assertEqual(parsed[0], {2: {"status": "in-progress", "commit": None, "reason": None}})
+        self.assertEqual(parsed[1], {2: {"status": "done", "commit": "abc1234", "reason": None}})
+        self.assertEqual(parsed[2], {2: {"status": "done", "commit": "def5678", "reason": None}})
+        self.assertEqual(parsed[3][2]["status"], "blocked")
+        self.assertTrue(parsed[3][2]["reason"].startswith("<one line"))
+        self.assertEqual(parsed[4], {}, "a plan change is not a phase entry")
+
+    def test_whole_log_sequence(self):
+        log = "\n".join(self.fill(b) for b in self.examples())
+        progress, warnings = ls.implementation_progress("quick", "## Phase Overview\n- [ ] 1. a\n- [ ] 2. b\n", log)
+        self.assertEqual(warnings, [])
+        self.assertEqual(progress["blocked"]["phase"], 2, "the last entry of phase 2 is blocked")
+        self.assertEqual(ls.parse_log(self.fill(self.examples()[0]) + "\n" + self.fill(self.examples()[1]))[2]["status"], "done")
+
+    def test_grammar_statements_hold(self):
+        cases = {
+            "## Phase 3 - done - 1a2b3c4 extra": ("done", "1a2b3c4", None),
+            "## Phase 3 – DONE – 1a2b3c4": ("done", "1a2b3c4", None),
+            "## phase 3 — blocked — tests fail": ("blocked", None, "tests fail"),
+            "## Phase 3 — blocked\n### Details\nReason: first\nReason: second": ("blocked", None, "first"),
+            "## Phase 3 — in-progress — ignored": ("in-progress", None, None),
+        }
+        for log, (status, commit, reason) in cases.items():
+            with self.subTest(log=log):
+                self.assertEqual(ls.parse_log(log)[3], {"status": status, "commit": commit, "reason": reason})
+        for log in ("### Phase 3 — done — abc", "# Phase 3 — done — abc", "  ## Phase 3 — done — abc",
+                    "```\n## Phase 3 — done — abc\n```", "## Plan change — 2026-11-08"):
+            with self.subTest(log=log):
+                self.assertEqual(ls.parse_log(log), {})
+        self.assertIsNone(ls.parse_log("## Phase 3 — blocked\n## Other\nReason: late")[3]["reason"])
+
+    def test_documented_separator_and_statuses(self):
+        text = self.text()
+        for needle in ("`in-progress`, `done`, or `blocked`", "**Last entry wins.**", "**Append only.**",
+                       "`Reason: <text>`", "`## Plan change — <date>`", "case-insensitive"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+
+    def test_spec_example_matches(self):
+        block = spec_section("### 13.2 Working artifacts", "### 13.3 Visual conventions")
+        example = block.split("**`log.md`**", 1)[1]
+        example = re.search(r"```markdown\n(.*?)```", example, re.DOTALL).group(1)
+        for line in ("## Phase 1 — done — d4e5f6", "## Phase 2 — blocked"):
+            self.assertIn(line, example)
+        for prefix in ("Checks:", "Reviewer:", "Deviations:"):
+            with self.subTest(prefix=prefix):
+                self.assertIn("\n" + prefix, self.text())
+
+    def test_users_read_the_log_format(self):
+        for name in ("implement", "iterate", "describe-pr"):
+            with self.subTest(skill=name):
+                self.assertRegex(skill_md(name), r"\$\{CLAUDE_(SKILL_DIR|PLUGIN_ROOT\}/skills/implement)\}?/references/log-format\.md")
+        self.assertIn("skills/implement/references/log-format.md", shared("frontmatter.md"))
+
+
+class GitFlowConsistencyTest(unittest.TestCase):
+    """implement, iterate, and describe-pr share one commit and loop definition."""
+
+    def test_commit_forms(self):
+        flow = shared("git-flow.md")
+        for needle in ("`<type>(<scope>): <summary> (#<n>)`", "`Phase N: <name>`", "`Phase 1: oneshot`",
+                       "`docs(#<n>): record decisions and summary`", "`docs(#<n>): update task summary`",
+                       "`Fix: <item>`", "git add -- <paths>", "--force-with-lease", "git remote get-url origin",
+                       "git fetch origin <main>"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, flow)
+        spec = spec_section("### 16.2 Commits", "### 16.3")
+        self.assertIn("`docs(#42): record decisions and summary`", spec)
+
+    def test_skills_use_the_same_forms(self):
+        for name in ("implement", "iterate"):
+            body = skill_md(name)
+            with self.subTest(skill=name):
+                self.assertIn("`<type>(<scope>): <summary of phase N> (#<n>)`", body)
+                self.assertIn("`Phase N: <name>`", body)
+                self.assertIn("`Phase 1: oneshot`", body)
+                self.assertIn("${CLAUDE_PLUGIN_ROOT}/skills/_shared/implementation-loop.md", body)
+                self.assertIn("${CLAUDE_PLUGIN_ROOT}/skills/_shared/git-flow.md", body)
+        self.assertIn("Write `docs(#<n>): record decisions and summary` to `<task dir>/commit-msg.txt`", skill_md("describe-pr"))
+
+    def test_commit_messages_go_through_a_file(self):
+        for name in ("implement", "iterate", "describe-pr"):
+            with self.subTest(skill=name):
+                self.assertIn("git commit -F <task dir>/commit-msg.txt", skill_md(name))
+        for snippet in ("git-flow.md", "pr-update.md"):
+            with self.subTest(snippet=snippet):
+                self.assertIn("git commit -F <task dir>/commit-msg.txt", shared(snippet))
+        self.assertIn("Write every `'` of the text as `'\\''`", shared("git-flow.md"))
+
+    def test_no_double_quoted_messages_or_titles(self):
+        # Double quotes expand backticks and `$` from plan headings, and need a permission prompt.
+        paths = glob.glob(os.path.join(SKILLS_DIR, "*", "SKILL.md")) + glob.glob(os.path.join(SKILLS_DIR, "_shared", "*.md"))
+        paths += glob.glob(os.path.join(SKILLS_DIR, "*", "references", "*.md"))
+        for path in paths:
+            text = read(path)
+            for bad in ('git commit -m "', '--title "', '--subject "', "git commit -m '", '--label "', '-m "'):
+                with self.subTest(file=os.path.relpath(path, ROOT), bad=bad):
+                    self.assertNotIn(bad, text)
+
+    def test_loop_rules(self):
+        loop = shared("implementation-loop.md")
+        for needle in ("`loom:implementer`", "`loom:implementation-reviewer`", "`implement.maxFixAttempts`",
+                       "`hooks.maxCheckAttempts`", "**only** the `blocking` items", "Never commit while the checks fail.",
+                       "## Phase N — blocked", "fix mode"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, loop)
+
+    def test_stash_rule(self):
+        flow = shared("git-flow.md")
+        stash = flow.split("### Stash", 1)[1].split("### Discard", 1)[0]
+        for needle in ("git check-ignore -q <task dir>", "Exit status 0", "`git stash push --include-untracked -m '<message>'`",
+                       "Exit status 1", "-- . ':(exclude)<task dir>'", "Check the exit status of `git stash`",
+                       "git stash pop"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, stash)
+        self.assertIn("cannot be recovered", flow.split("### Discard", 1)[1])
+        for name in ("implement", "iterate"):
+            with self.subTest(skill=name):
+                self.assertIn('"Stash and discard" in `git-flow.md`', skill_md(name))
+                self.assertNotIn("git stash push", skill_md(name).replace("`git stash push --include-untracked`", ""))
+
+    def test_dirty_tree_refusals_never_loop(self):
+        # A stop because of uncommitted changes must name the skill that handles them, not `next.command`
+        # (which can route back to the refusing skill).
+        paths = glob.glob(os.path.join(SKILLS_DIR, "*", "SKILL.md")) + glob.glob(os.path.join(SKILLS_DIR, "_shared", "*.md"))
+        found = 0
+        for path in paths:
+            for line in read(path).splitlines():
+                if "uncommitted" in line and ("Result:" in line or line.startswith("| `workingTree`")):
+                    found += 1
+                    with self.subTest(file=os.path.relpath(path, ROOT), line=line[:90]):
+                        self.assertNotIn("from `next.command`", line)
+                        self.assertRegex(line, r"Next:|`/loom:")
+        self.assertGreaterEqual(found, 6)
+
+    def test_docs_only_dirty_tree_is_handled_by_docs_writers(self):
+        self.assertIn("is an interrupted earlier run of these steps", shared("pr-update.md"))
+        self.assertIn("| `workingTree` is `dirty` and `workingTreeDocsOnly` is `true` | The docs changes are an interrupted docs refresh. Run the shared `pr-update.md`", skill_md("finish-task"))
+        iterate = skill_md("iterate")
+        for section in ("## Post-PR fix", "## Rebase"):
+            with self.subTest(section=section):
+                self.assertIn("workingTreeDocsOnly", iterate.split(section, 1)[1].split("\n---\n", 1)[0])
+
+    def test_no_shell_variables_outside_plugin_paths(self):
+        # Live (§24.2): a `${...}` variable in a Bash command needs a permission prompt; Read does
+        # not substitute variables in snippets. Allowed: plugin paths, the injection line, frontmatter.
+        allowed = re.compile(
+            r"\$\{CLAUDE_PLUGIN_ROOT\}/skills/|\$\{CLAUDE_SKILL_DIR\}/references/|\$\{CLAUDE_PLUGIN_ROOT\}`$"
+        )
+        for name in skill_dirs():
+            body = split_frontmatter(skill_md(name))[1]
+            for line in body.splitlines():
+                if line.startswith("!`") or "${" not in line:
+                    continue
+                rest = allowed.sub("", line)
+                with self.subTest(skill=name, line=line):
+                    self.assertNotIn("${", rest)
+        for path in glob.glob(os.path.join(SKILLS_DIR, "_shared", "*.md")):
+            with self.subTest(snippet=os.path.basename(path)):
+                self.assertNotIn("${", read(path))
+
+
+class ImplementTest(unittest.TestCase):
+    def body(self) -> str:
+        return split_frontmatter(skill_md("implement"))[1]
+
+    def test_frontmatter(self):
+        fm = split_frontmatter(skill_md("implement"))[0]
+        self.assertEqual(fm.get("model"), "inherit")
+        self.assertNotIn("effort", fm)
+        self.assertNotIn("context", fm)
+        self.assertIn(STATE_INJECTION_PR, skill_md("implement"))
+
+    def test_resume_flow(self):
+        body = self.body()
+        resume = body.split("## 2. Resume flow", 1)[1].split("## 3.", 1)[0]
+        for needle in ("**resume**", "**stash**", "**discard**", "cannot be recovered", "Confirm them before you run anything",
+                       "git check-ignore -q <task dir>", "Check the exit status", "Never touch `<task dir>`",
+                       "implementation.inProgress", "--grep='^Phase N:' <base>..HEAD", "do not implement phase N again"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, resume)
+
+    def test_blocked_phase_goes_to_iterate(self):
+        body = self.body()
+        pre = body.split("## 1. Check preconditions", 1)[1].split("## 2.", 1)[0]
+        self.assertIn("| `implementation.blocked` is set | `implementation phase <k> is blocked: <reason>` | `/loom:iterate <fix>` |", pre)
+        self.assertIn("A blocked implementation phase is never resumed here", pre)
+
+    def test_all_done_stops_also_with_a_dirty_tree(self):
+        pre = self.body().split("## 1. Check preconditions", 1)[1].split("## 2.", 1)[0]
+        self.assertIn("`implementation.done` equals `implementation.total` (clean or dirty working tree)", pre)
+
+    def test_open_pr_is_updated_after_the_last_phase(self):
+        body = self.body()
+        self.assertIn("${CLAUDE_PLUGIN_ROOT}/skills/_shared/pr-update.md", body)
+        self.assertIn("If `pr.state` is `OPEN`, first run the shared `pr-update.md`", body)
+
+    def test_plan_gate_and_oneshot(self):
+        body = self.body()
+        self.assertIn("`04-plan.md` is missing or not `approved`", body)
+        self.assertIn("the reviewer compares the diff with the ticket", body)
+        self.assertIn("`<task dir>/00-ticket.md`", body)
+
+    def test_per_phase_steps(self):
+        body = self.body()
+        phase = body.split("## 4. Run one implementation phase", 1)[1].split("## 5.", 1)[0]
+        order = ["`## Phase N — in-progress`", "implementation-loop.md", "## Phase N — blocked", "git add -- <paths>",
+                 "`- [x] N.`", "`done` entry"]
+        positions = [phase.index(n) for n in order]
+        self.assertEqual(positions, sorted(positions))
+        for needle in ("`implement.maxFixAttempts`", "`hooks.maxCheckAttempts`", "you run `checks.check` once more",
+                       "Leave `Manual:` checkboxes unchecked", "Do not commit."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, phase)
+
+    def test_auto_advance_and_overrides(self):
+        body = self.body()
+        for needle in ("`implement.autoAdvance`", "do all phases and stop at the end", "stop after every phase",
+                       "`Manual:` line", "fresh `loom:implementer`", "A blocked phase always stops the run"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, body)
+
+    def test_last_phase_next_comes_from_loom_state(self):
+        body = self.body()
+        final = body.split("## 6. Final message", 1)[1]
+        self.assertIn("`/clear, then /loom:describe-pr`", final)
+        self.assertIn("Run `loom-state --json` after your last write", final)
+
+
+class DescribePrTest(unittest.TestCase):
+    def body(self) -> str:
+        return split_frontmatter(skill_md("describe-pr"))[1]
+
+    def test_reads_templates_and_issue_format_first(self):
+        before = self.body().split("## 1. Check preconditions", 1)[0]
+        for path in ("${CLAUDE_SKILL_DIR}/references/summary-template.md", "${CLAUDE_SKILL_DIR}/references/adr-template.md",
+                     "${CLAUDE_SKILL_DIR}/references/pr-template.md",
+                     "${CLAUDE_PLUGIN_ROOT}/skills/backlog/references/issue-format.md"):
+            with self.subTest(path=path):
+                self.assertIn(path, before)
+
+    def test_steps_in_order(self):
+        body = self.body()
+        steps = ["## 3. Task summary", "## 4. ADRs", "## 5. Architecture overview", "## 6. Docs commit",
+                 "## 7. Rebase", "## 8. Pull request", "## 9. Follow-up issues"]
+        positions = [body.index(s) for s in steps]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_key_rules(self):
+        body = self.body()
+        for needle in ("`<docs>/tasks/<n>-<slug>.md`", "`<docs>/architecture/decisions/`", "`ADR?` = `yes`",
+                       "plus 1, with four digits", "`0001`", "`<docs>/architecture/overview.md`",
+                       "only if `<docs>/architecture/overview.md` changed", "git fetch origin <main>",
+                       "run `checks.check` again", "`git push -u origin <branch>`", "gh pr create --base <main>",
+                       "`<type>(<scope>): <summary of the task> (#<n>)`", "`pr: <number>`", "Ask for one confirmation",
+                       "Create only confirmed issues"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, body)
+
+    def test_docs_only_dirty_tree_is_a_partial_run(self):
+        body = self.body()
+        self.assertIn("| `workingTree` is `dirty` and `workingTreeDocsOnly` is `false` (code changes) |", body)
+        self.assertIn("is an earlier partial run of this skill", body)
+        self.assertIn("--title '<title>'", body)
+
+    def test_mode_table_matches_5_4(self):
+        spec = spec_section("### 5.4 Mode differences", "## 6. End-to-End Lifecycle")
+        self.assertIn("| Docs commit in describe-pr | only if `overview.md` changed | ✓ | ✓ |", spec)
+        self.assertIn("| PR description | short | full | full |", spec)
+        body = self.body()
+        self.assertIn("| Docs commit | only if `overview.md` changed | if any docs file changed |", body)
+        self.assertIn("| Task summary `<docs>/tasks/<n>-<slug>.md` | no | yes |", body)
+
+
+class FinishTaskTest(unittest.TestCase):
+    def body(self) -> str:
+        return split_frontmatter(skill_md("finish-task"))[1]
+
+    def test_frontmatter(self):
+        fm = split_frontmatter(skill_md("finish-task"))[0]
+        self.assertEqual((fm.get("model"), fm.get("effort")), ("haiku", "low"))
+        self.assertIn(STATE_INJECTION_PR, skill_md("finish-task"))
+
+    def test_commands(self):
+        body = self.body()
+        for needle in ("gh pr checks --required --watch", "600000 ms", "Pending is not failed", "no required checks",
+                       "`gh pr merge --squash --delete-branch --subject '<title>' --match-head-commit <head sha>`",
+                       "gh pr view --json headRefOid,title", "Give no PR number", "git fetch --prune",
+                       "refs/heads/<branch>", "git branch -D <branch>", "<workDir>/_archive", "Ask for confirmation.",
+                       "`chore/<n>-loom-setup`", "`Set up loom`", "gh api repos/{owner}/{repo}/rules/branches/<main>",
+                       "read-only and needs no confirmation", "`~DEFAULT_BRANCH`", "no bypass actors",
+                       "gh api --method POST repos/{owner}/{repo}/rulesets",
+                       '"required_approving_review_count": 0', '"context": "check"', "non_fast_forward", "deletion"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, body)
+        self.assertNotRegex(body, r"gh pr merge \d")
+
+    def test_stops_after_the_merge_resume_with_the_issue(self):
+        body = self.body()
+        after = body.split("## 4. Merge", 1)[1].split("## Resume on the main branch", 1)[0]
+        self.assertIn("**From here on, every stop ends with `Next: /loom:finish-task #<n>`.**", after)
+        for stop in re.findall(r"stop[^\n]*`Result:[^\n]*", after.split("## 5.", 1)[1]):
+            with self.subTest(stop=stop):
+                self.assertIn("Next: /loom:finish-task #<n>", stop)
+        self.assertIn("resumes with /loom:finish-task #<n>", body.split("## 2.", 1)[0])
+
+    def test_idempotent_steps(self):
+        body = self.body()
+        for needle in ("`pr.state` is `MERGED` | The merge already happened.", "offer the stash of `git-flow.md`",
+                       "the archive is done. Skip this step", "a ruleset already protects `<main>`: skip this step",
+                       "## Resume on the main branch"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, body)
+
+    def test_ruleset_json_is_valid(self):
+        import json
+        block = re.search(r"```json\n(.*?)```", self.body(), re.DOTALL).group(1)
+        data = json.loads(re.sub(r"^ {3}", "", block, flags=re.MULTILINE))
+        self.assertEqual(data["conditions"]["ref_name"]["include"], ["<ref>"])
+        self.assertEqual(data["bypass_actors"], [])
+        self.assertEqual({r["type"] for r in data["rules"]},
+                         {"deletion", "non_fast_forward", "pull_request", "required_status_checks"})
+
+
+class NextTest(unittest.TestCase):
+    def raw(self) -> str:
+        return skill_md("next")
+
+    def body(self) -> str:
+        return split_frontmatter(self.raw())[1]
+
+    def test_frontmatter_runs_phases_on_the_session_model(self):
+        fm = split_frontmatter(self.raw())[0]
+        self.assertEqual(fm.get("model"), "inherit")
+        self.assertNotIn("effort", fm)
+        self.assertNotIn("context", fm)
+
+    def test_permissions_are_the_union_of_the_phase_skills(self):
+        own = set(skill_rules("next"))
+        self.assertIn('Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json --pr)', own)
+        for name in NEXT_RUNS:
+            for rule in skill_rules(name):
+                if rule.startswith('Bash("${CLAUDE_PLUGIN_ROOT}"'):
+                    continue  # next replaces the phase's injection with its own
+                with self.subTest(skill=name, rule=rule):
+                    self.assertIn(rule, own)
+
+    def test_substituted_variables_appear_only_where_intended(self):
+        # Claude Code substitutes these in next's own body, so the prompt must not name them literally.
+        body = self.body()
+        self.assertNotIn("${CLAUDE_SKILL_DIR}", body)
+        self.assertEqual(body.count("$ARGUMENTS"), 1)
+        self.assertIn("Arguments: $ARGUMENTS", body)
+        for line in body.splitlines():
+            if "${CLAUDE_PLUGIN_ROOT}" not in line:
+                continue
+            with self.subTest(line=line):
+                ok = (line.startswith("!`") or line.startswith("Plugin root")
+                      or all(m.startswith("/skills/") for m in re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}(\S*)", line)))
+                self.assertTrue(ok, line)
+
+    def test_placeholders_are_named(self):
+        body = self.body()
+        for needle in ("Do not run its state injection", "`CLAUDE_PLUGIN_ROOT` in dollar-brace form",
+                       "`CLAUDE_SKILL_DIR` in dollar-brace form", "`<plugin root>/skills/<phase>`",
+                       "`ARGUMENTS` after a dollar sign", "Ignore its frontmatter", "session's model and effort",
+                       "`/loom:design` or `/loom:plan` directly"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, body)
+
+    def test_every_next_command_is_routed(self):
+        commands = set(re.findall(r'"(/loom:[a-z-]+)', read(os.path.join(ROOT, "bin", "loom-state"))))
+        self.assertTrue(commands)
+        table = self.body().split("## 3. Run or name the next command", 1)[1]
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIn("`%s" % command, table)
+        run_row = next(l for l in table.splitlines() if "**Run**" in l)
+        for phase in NEXT_RUNS:
+            with self.subTest(phase=phase):
+                self.assertIn("`/loom:%s`" % phase, run_row)
+        for named in ("/loom:iterate", "/loom:describe-pr", "/loom:finish-task"):
+            with self.subTest(named=named):
+                self.assertNotIn(named, run_row)
+
+    def test_summary_and_research_warnings(self):
+        body = self.body()
+        for needle in ("3-5 lines", "Warning: research not reviewed", "Warning: research is stale", "Offer a rerun"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, body)
+
+    def test_spec_documents_the_fix(self):
+        spec = spec_section("### 9.12 `next`", "## 10. Subagents")
+        for needle in ("does not run the phase file's", "union", "`model: inherit`"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, spec)
 
 
 if __name__ == "__main__":

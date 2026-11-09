@@ -48,6 +48,12 @@ SHARED_SECTIONS = {
     ],
     "writing-style.md": ["## Rules", "## Where the rules apply", "## Glossary"],
     "final-answer.md": ["## Format", "## Fields", "## Rules", "## Examples"],
+    "git-flow.md": [
+        "## What needs confirmation", "## Checks", "## Commits", "### Subject", "### Body", "### Staging",
+        "## Rebase", "## Push",
+    ],
+    "implementation-loop.md": ["## Inputs", "## Steps", "## Results", "## Rules"],
+    "pr-update.md": ["## Steps"],
 }
 # HumanLayer-specific leftovers that must not appear in ported prompts.
 FORBIDDEN = [
@@ -183,11 +189,11 @@ class AgentPromptTest(unittest.TestCase):
     def test_implementer_rules(self):
         body = self.body("implementer")
         for needle in (
-            "exactly ONE", "04-plan.md", "00-ticket.md", "docs/conventions.md",
+            "exactly ONE", "04-plan.md", "00-ticket.md", "`<docsDir>/conventions.md`", "`docsDir` from `.claude/loom.json`",
             ".claude/loom.json", "checks.check", "SubagentStop", "git commit", "git push",
             "git switch", "### Files changed", "### Checks", "### Deviations from the plan",
             "### Manual verification needed", "### Open problems", "## Ownership",
-            "${TMPDIR:-/tmp}/loom-check.log", "Run no other git command", "Use `rm` and `mv`", "continue from it",
+            "exactly as configured and unfiltered", "Run no other git command", "Use `rm` and `mv`", "continue from it",
             "Resolved Decisions",
         ):
             with self.subTest(needle=needle):
@@ -223,7 +229,7 @@ class AgentPromptTest(unittest.TestCase):
 
 
 class SharedSnippetsTest(unittest.TestCase):
-    def test_five_snippets_exist(self):
+    def test_snippets_exist(self):
         names = {os.path.basename(p) for p in glob.glob(os.path.join(SHARED_DIR, "*.md"))}
         self.assertEqual(names, set(SHARED_SECTIONS))
 
