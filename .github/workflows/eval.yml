@@ -21,6 +21,11 @@ on:
         description: Hard cost ceiling for the whole run, in USD
         required: false
         default: "10"
+      runner:
+        description: Runner image
+        type: choice
+        options: [macos-latest, ubuntu-24.04]
+        default: macos-latest
       claude_version:
         description: Claude Code version to install (empty uses the pinned one)
         required: false
@@ -31,7 +36,7 @@ permissions:
 
 jobs:
   eval:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7.0.1
@@ -39,20 +44,13 @@ jobs:
         with:
           node-version: "22"
       - name: Install the sandbox dependencies
+        if: runner.os == 'Linux'
         # The eval runs Bash under the OS sandbox; on Linux it needs bubblewrap and socat.
         # Ubuntu 24.04 restricts the unprivileged user namespaces that bubblewrap uses.
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap socat
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: Allow sandbox writes to /tmp
-        # Claude Code 2.1.318-2.1.322 on Linux: the eval sandbox keeps the run's TMPDIR
-        # (/tmp/claude-eval-*/tmp) read-only, so every Bash call fails writing its cwd file
-        # and every skill's !`loom-state` injection aborts. Eval runs still apply managed
-        # settings, so this ephemeral runner grants /tmp through them (LOOM_SPEC.md 24.2).
-        run: |
-          sudo mkdir -p /etc/claude-code
-          echo '{"sandbox": {"filesystem": {"allowWrite": ["/tmp"]}}}' | sudo tee /etc/claude-code/managed-settings.json
       - name: Install Claude Code
         env:
           VERSION: ${{ inputs.claude_version }}
@@ -74,7 +72,7 @@ jobs:
           args="--json evals/results/eval.json --runs $RUNS --keep-temp"
           if [ -n "$CASE" ]; then args="$args --case '$CASE'"; fi
           if [ -n "$MODEL" ]; then args="$args --model $MODEL"; fi
-          make eval EVAL_MAX_COST="$MAX_COST" EVAL_ARGS="$args"
+          make eval EVAL_FILTER= EVAL_MAX_COST="$MAX_COST" EVAL_ARGS="$args"
       - name: Collect the run outputs
         # --keep-temp leaves each run's out/ dir (trace.jsonl, logs) in the temp dir; copy only
         # out/ (never the run's home or config) next to the results to debug a failing run.
