@@ -1,5 +1,8 @@
 # loom's eval suite (LOOM_SPEC.md 20.2) on demand. Evals call the model and cost tokens,
 # so they never run on a schedule or on every PR. Needs the repository secret ANTHROPIC_API_KEY.
+# It runs on macOS: on Linux the bubblewrap sandbox keeps the run's TMPDIR read-only, so every
+# sandboxed Bash call (also a skill's `!` injection) fails; this looks like an upstream Claude Code bug
+# (LOOM_SPEC.md 24.2). The macOS runner (full Xcode) passes every case, implement-manual included.
 name: Evals
 
 on:
@@ -21,13 +24,8 @@ on:
         description: Hard cost ceiling for the whole run, in USD
         required: false
         default: "10"
-      runner:
-        description: Runner image
-        type: choice
-        options: [macos-latest, ubuntu-24.04]
-        default: macos-latest
       claude_version:
-        description: Claude Code version to install (empty uses the pinned one)
+        description: Claude Code version to install, e.g. to retest a newer release (empty uses the pinned one)
         required: false
         default: ""
 
@@ -36,21 +34,14 @@ permissions:
 
 jobs:
   eval:
-    runs-on: ${{ inputs.runner }}
+    # Pinned image: *-latest labels move to new macOS versions.
+    runs-on: macos-26
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: "22"
-      - name: Install the sandbox dependencies
-        if: runner.os == 'Linux'
-        # The eval runs Bash under the OS sandbox; on Linux it needs bubblewrap and socat.
-        # Ubuntu 24.04 restricts the unprivileged user namespaces that bubblewrap uses.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap socat
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Install Claude Code
         env:
           VERSION: ${{ inputs.claude_version }}
@@ -72,10 +63,12 @@ jobs:
           args="--json evals/results/eval.json --runs $RUNS --keep-temp"
           if [ -n "$CASE" ]; then args="$args --case '$CASE'"; fi
           if [ -n "$MODEL" ]; then args="$args --model $MODEL"; fi
+          # EVAL_FILTER= runs every case: the runner's git works inside the eval sandbox.
           make eval EVAL_FILTER= EVAL_MAX_COST="$MAX_COST" EVAL_ARGS="$args"
       - name: Collect the run outputs
         # --keep-temp leaves each run's out/ dir (trace.jsonl, logs) in the temp dir; copy only
         # out/ (never the run's home or config) next to the results to debug a failing run.
+        # jq ships on the GitHub macOS images; case names and temp paths have no spaces.
         if: always()
         run: |
           [ -f evals/results/eval.json ] || exit 0

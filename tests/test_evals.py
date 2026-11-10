@@ -640,11 +640,38 @@ class WorkflowTest(unittest.TestCase):
         for trigger in ("schedule", "push", "pull_request"):
             self.assertNotIn(trigger, on)
         self.assertIn("secrets.ANTHROPIC_API_KEY", text)
-        self.assertIn("bubblewrap socat", text)
-        self.assertIn("make eval", text)
+        self.assertIn("make eval EVAL_FILTER= ", text)
         self.assertIn("--json", text)
+        self.assertIn("--keep-temp", text)
         self.assertIn("actions/upload-artifact@", text)
 
+    def test_evals_run_on_a_pinned_macos_runner(self):
+        """Linux is blocked upstream (read-only TMPDIR in the eval sandbox, LOOM_SPEC.md 24.2)."""
+        text = self.workflow("eval.yml")
+        self.assertEqual(re.findall(r"(?m)^\s*runs-on:\s*(\S+)\s*$", text), ["macos-26"])
+        code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+        for linux in ("ubuntu", "apt-get", "bubblewrap", "sysctl", "inputs.runner"):
+            self.assertNotIn(linux, code)
+        self.assertNotIn("runner:", text.split("\non:\n", 1)[1].split("\npermissions:", 1)[0])
+
+    def test_inputs_are_validated_before_use(self):
+        """Inputs reach shell and make only through env, after a whitelist check."""
+        text = self.workflow("eval.yml")
+        inputs = re.findall(r"^      (\w+):\n        description:", text, re.M)
+        self.assertEqual(set(inputs), {"case", "runs", "model", "max_cost_usd", "claude_version"})
+        for line in text.splitlines():
+            if re.search(r"\$\{\{\s*(github\.event\.)?inputs\.", line):
+                with self.subTest(line=line.strip()):
+                    self.assertRegex(line, r"^\s+[A-Z_]+: \$\{\{ inputs\.\w+ \}\}$")
+        steps = text.split("      - name: ")
+        for var, check in (("VERSION", 'case "$VERSION" in'), ("RUNS", 'case "$RUNS" in'),
+                           ("MAX_COST", 'case "$MAX_COST" in'), ("CASE", 'case "$CASE$MODEL" in')):
+            with self.subTest(var=var):
+                step = [st for st in steps if ": ${{ inputs." in st and ("%s:" % var) in st][0]
+                run = step.split("run: |", 1)[1]
+                first_use = min(i for i in (run.find("$%s" % var), run.find("${%s" % var)) if i >= 0)
+                self.assertLess(run.index(check), first_use + 1)
+        self.assertIn("--case '$CASE'", text)
 
 if __name__ == "__main__":
     unittest.main()

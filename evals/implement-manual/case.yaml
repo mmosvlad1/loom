@@ -4,8 +4,8 @@ description: >-
   Quick mode, plan approved; implementation phase 1 lists a Manual verification step.
   /loom:implement commits phase 1, ticks it, logs it as done, and stops for manual
   verification before phase 2 (LOOM_SPEC.md 9.9 step 7, 20.2). Needs Bash git inside the
-  eval sandbox: fails on macOS; expected to pass under the Linux bubblewrap sandbox,
-  unverified until the first eval.yml run (LOOM_SPEC.md 24.2). Not tagged local.
+  eval sandbox, which failed on a Mac with only the Command Line Tools, so it is not tagged
+  local. It passes in the Evals workflow on the macOS runner (LOOM_SPEC.md 24.2).
 tags: [implement, quick, git]
 runs: 1
 context:
