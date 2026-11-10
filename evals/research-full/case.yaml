@@ -1,0 +1,15 @@
+schema_version: "1.1"
+name: research-full
+description: >-
+  Full mode, research questions approved. /loom:research writes 02-research.md in review,
+  with file:line references to the fixture code, and never reads 00-ticket.md (LOOM_SPEC.md 9.5, 20.2).
+tags: [research, full, local]
+runs: 1
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: haiku
+  max_turns: 60
+  timeout_seconds: 1200
+  allowed_tools: [Read, Glob, Grep, Skill, Agent]
+  prompt: /loom:research

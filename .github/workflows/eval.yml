@@ -1,0 +1,68 @@
+# loom's eval suite (LOOM_SPEC.md 20.2) on demand. Evals call the model and cost tokens,
+# so they never run on a schedule or on every PR. Needs the repository secret ANTHROPIC_API_KEY.
+name: Evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      case:
+        description: Case name glob (empty runs every case)
+        required: false
+        default: ""
+      runs:
+        description: Runs per case
+        required: false
+        default: "1"
+      model:
+        description: Model for every case (empty keeps each case's model)
+        required: false
+        default: ""
+      max_cost_usd:
+        description: Hard cost ceiling for the whole run, in USD
+        required: false
+        default: "10"
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: "22"
+      - name: Install the sandbox dependencies
+        # The eval runs Bash under the OS sandbox; on Linux it needs bubblewrap and socat.
+        # Ubuntu 24.04 restricts the unprivileged user namespaces that bubblewrap uses.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@2.1.318
+      - name: Run the evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CASE: ${{ inputs.case }}
+          RUNS: ${{ inputs.runs }}
+          MODEL: ${{ inputs.model }}
+          MAX_COST: ${{ inputs.max_cost_usd }}
+        run: |
+          # The inputs reach a make recipe, so allow only plain values.
+          case "$RUNS" in ''|*[!0-9]*) echo "runs must be a number"; exit 1;; esac
+          case "$MAX_COST" in ''|*[!0-9.]*) echo "max_cost_usd must be a number"; exit 1;; esac
+          case "$CASE$MODEL" in *[!A-Za-z0-9._*?-]*) echo "case and model allow only [A-Za-z0-9._*?-]"; exit 1;; esac
+          args="--json evals/results/eval.json --runs $RUNS"
+          if [ -n "$CASE" ]; then args="$args --case '$CASE'"; fi
+          if [ -n "$MODEL" ]; then args="$args --model $MODEL"; fi
+          make eval EVAL_MAX_COST="$MAX_COST" EVAL_ARGS="$args"
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: eval-results
+          path: evals/results/
+          if-no-files-found: warn
