@@ -9,7 +9,7 @@ Below, `<n>` is `task.number`, `<slug>` is `task.slug`, `<task dir>` is `task.di
 A working tree that is dirty only below `<docs>` (`workingTreeDocsOnly` is `true` in the `loom-state` output) is an interrupted earlier run of these steps. Treat those changes as yours: check them against the new commits in step 1, and commit them there. With code changes in the tree, do not run these steps; the skill that called them says what to do.
 
 1. **Task summary.** If `<docs>/tasks/<n>-<slug>.md` exists and the new commits change what it states (Implementation, Deviations from Plan, Verification), update it.
-   - Write the message `docs(#<n>): update task summary` to `<task dir>/commit-msg.txt`.
+   - Write the message `docs(#<n>): update task summary` to `<task dir>/commit-msg.txt` (Read the file first if it exists, as `git-flow.md` says).
    - Stage the file (`git add -- <path>`), and every other changed file below `<docs>`. Run `git commit -F <task dir>/commit-msg.txt`, as the shared `git-flow.md` describes.
 2. **PR body.** If the new commits change what the PR body states (Summary, Changes, Verification, or the attached plan):
    - Update `<task dir>/pr-body.md`. `describe-pr` wrote it; if it is missing, start from `gh pr view --json body`.

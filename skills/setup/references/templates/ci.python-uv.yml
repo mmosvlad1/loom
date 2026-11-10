@@ -1,0 +1,28 @@
+# CI for a python-uv project. Written by /loom:setup.
+# One job named `check`: the main branch ruleset requires this name.
+# It runs the same entry point as the loom hooks: `make check`.
+# Action versions pinned by /loom:setup; latest releases checked on 2026-11-09.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [<main>]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          python-version: "<python version>"
+      - name: Install
+        run: uv sync --locked
+      - name: Check
+        run: make check

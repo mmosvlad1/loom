@@ -17,11 +17,12 @@ SPEC = os.path.join(ROOT, "LOOM_SPEC.md")
 # generic checks below cover every directory that exists.
 M3_SKILLS = {"research-questions", "research", "design", "plan", "iterate"}
 M4_SKILLS = {"implement", "describe-pr", "finish-task", "next"}
-STATE_SKILLS = M3_SKILLS | M4_SKILLS
+M5_SKILLS = {"setup", "backlog", "start-task"}
+STATE_SKILLS = M3_SKILLS | M4_SKILLS | M5_SKILLS
 # Skills that `next` runs by reading their SKILL.md (§9.12).
 NEXT_RUNS = {"research-questions", "research", "design", "plan", "implement"}
-# Skill directories that only hold reference files until a later milestone (M5: backlog/SKILL.md).
-REFERENCE_ONLY_DIRS = {"backlog": ["references/issue-format.md"]}
+# Skill directories that only hold reference files until a later milestone (none since M5).
+REFERENCE_ONLY_DIRS: Dict[str, List[str]] = {}
 PHASE_SKILLS = {"research-questions", "research", "design", "plan"}
 # Artifact file -> skill that writes it from references/template.md.
 ARTIFACT_SKILL = {
@@ -43,6 +44,14 @@ FORBIDDEN = [
 _YAML_UNSAFE_START = tuple("!&*[]{}|>'\"%@`#,?:-")
 
 ls = loom_state()
+
+
+def reference_files(pattern: str = "*") -> List[str]:
+    """Every file below skills/*/references/ (recursive), matching a glob pattern."""
+    return sorted(
+        p for p in glob.glob(os.path.join(SKILLS_DIR, "*", "references", "**", pattern), recursive=True)
+        if os.path.isfile(p)
+    )
 
 
 def read(path: str) -> str:
@@ -256,6 +265,12 @@ class SkillFrontmatterTest(unittest.TestCase):
     def test_m4_skills_exist(self):
         self.assertLessEqual(M4_SKILLS, set(skill_dirs()))
 
+    def test_m5_skills_exist(self):
+        self.assertLessEqual(M5_SKILLS, set(skill_dirs()))
+
+    def test_spec_layout_has_a_skill_for_every_directory(self):
+        self.assertEqual(set(spec_layout_skills()), set(skill_dirs()))
+
     def test_every_directory_is_a_skill_or_reference_only(self):
         dirs = {d for d in os.listdir(SKILLS_DIR) if os.path.isdir(os.path.join(SKILLS_DIR, d))} - {"_shared"}
         self.assertEqual(dirs - set(skill_dirs()), set(REFERENCE_ONLY_DIRS) - set(skill_dirs()))
@@ -416,9 +431,10 @@ class PermissionTest(unittest.TestCase):
     def test_spec_allowlists_loom_state(self):
         section = spec_section("### 19.3 `.claude/settings.json`", "## 20. Testing the Harness")
         self.assertIn("`loom-state --json`, `loom-state --json --pr`", section)
+        self.assertIn("`loom-state --slug *`", section)
 
     def test_skills_take_the_date_from_loom_state(self):
-        for name in M3_SKILLS | {"implement", "describe-pr"}:
+        for name in M3_SKILLS | M5_SKILLS | {"implement", "describe-pr"}:
             with self.subTest(skill=name):
                 self.assertIn('"Today" below means `today` from the state.', skill_md(name))
 
@@ -434,7 +450,7 @@ class SnippetVariableTest(unittest.TestCase):
 
     def test_shared_snippets_and_templates_have_no_variables(self):
         paths = glob.glob(os.path.join(SKILLS_DIR, "_shared", "*.md"))
-        paths += glob.glob(os.path.join(SKILLS_DIR, "*", "references", "*.md"))
+        paths += reference_files()  # also templates/ and stacks/ of setup, and non-markdown templates
         self.assertTrue(paths)
         for path in paths:
             with self.subTest(file=os.path.relpath(path, ROOT)):
@@ -533,7 +549,7 @@ class SkillBodyTest(unittest.TestCase):
 
     def test_no_forbidden_strings(self):
         paths = glob.glob(os.path.join(SKILLS_DIR, "*", "SKILL.md"))
-        paths += glob.glob(os.path.join(SKILLS_DIR, "*", "references", "*.md"))
+        paths += reference_files()
         for path in paths:
             text = read(path)
             for pattern in FORBIDDEN:
@@ -1092,7 +1108,7 @@ class GitFlowConsistencyTest(unittest.TestCase):
     def test_no_double_quoted_messages_or_titles(self):
         # Double quotes expand backticks and `$` from plan headings, and need a permission prompt.
         paths = glob.glob(os.path.join(SKILLS_DIR, "*", "SKILL.md")) + glob.glob(os.path.join(SKILLS_DIR, "_shared", "*.md"))
-        paths += glob.glob(os.path.join(SKILLS_DIR, "*", "references", "*.md"))
+        paths += reference_files()
         for path in paths:
             text = read(path)
             for bad in ('git commit -m "', '--title "', '--subject "', "git commit -m '", '--label "', '-m "'):
@@ -1106,6 +1122,23 @@ class GitFlowConsistencyTest(unittest.TestCase):
                        "## Phase N — blocked", "fix mode"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, loop)
+
+    def test_reused_files_are_read_before_write(self):
+        self.assertIn("**if `commit-msg.txt` exists, Read it first, then Write the new message.**", shared("git-flow.md"))
+        for name in ("implement", "iterate", "describe-pr", "setup", "backlog", "start-task", "finish-task"):
+            with self.subTest(skill=name):
+                self.assertRegex(skill_md(name), r"Read it (first|before you Write it)|Read the file first|Read before Write")
+        self.assertIn("pr-body.md` from `pr-template.md`. A re-run finds the file of the earlier run: Read it before you Write it",
+                      skill_md("describe-pr"))
+        self.assertIn("If the file exists (a re-run), Read it before you Write it", skill_md("finish-task"))
+        self.assertEqual(skill_md("iterate").count("Read the file first") + skill_md("iterate").count("Read before Write"), 3)
+        self.assertIn("Read the file first if it exists", shared("pr-update.md"))
+        self.assertIn("Read it before you Write it", reference("backlog", "issue-format.md"))
+
+    def test_gh_api_reads_always_ask(self):
+        self.assertIn("always asks", shared("git-flow.md"))
+        self.assertIn("The permission system still asks for it", skill_md("finish-task"))
+        self.assertNotIn("may still ask", spec_section("### 16.4 What needs user confirmation", "### 16.5"))
 
     def test_stash_rule(self):
         flow = shared("git-flow.md")
@@ -1396,6 +1429,265 @@ class NextTest(unittest.TestCase):
         for needle in ("does not run the phase file's", "union", "`model: inherit`"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, spec)
+
+
+
+class SetupSkillTest(unittest.TestCase):
+    """setup (§9.1): bootstrap order, confirmations, and the describe-pr handover."""
+
+    def body(self) -> str:
+        return split_frontmatter(skill_md("setup"))[1]
+
+    def test_frontmatter(self):
+        fm = split_frontmatter(skill_md("setup"))[0]
+        self.assertEqual(fm.get("model"), "inherit")
+        self.assertNotIn("effort", fm)
+        self.assertIn(STATE_INJECTION, skill_md("setup"))
+        self.assertEqual(skill_rules("setup"), [
+            'Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json)', "Bash(loom-state --json)",
+            "Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)",
+        ])
+
+    def test_reads_every_template_before_any_question(self):
+        before = self.body().split("## 1. Check preconditions", 1)[0]
+        templates = os.path.join(SKILLS_DIR, "setup", "references", "templates")
+        for path in reference_files():
+            rel = os.path.relpath(path, os.path.join(SKILLS_DIR, "setup"))
+            if not rel.startswith("references/") or os.path.basename(path) == ".gitkeep":
+                continue
+            with self.subTest(file=rel):
+                self.assertIn("${CLAUDE_SKILL_DIR}/%s" % rel, before)
+        self.assertTrue(os.path.isdir(templates))
+        for shared_file in ("git-flow.md", "frontmatter.md", "writing-style.md", "final-answer.md"):
+            with self.subTest(shared=shared_file):
+                self.assertIn("${CLAUDE_PLUGIN_ROOT}/skills/_shared/%s" % shared_file, before)
+        for path in ("${CLAUDE_PLUGIN_ROOT}/skills/start-task/references/ticket-template.md",
+                     "${CLAUDE_PLUGIN_ROOT}/skills/implement/references/log-format.md"):
+            with self.subTest(path=path):
+                self.assertIn(path, before)
+
+    def test_bootstrap_order(self):
+        body = self.body()
+        steps = ["## 3. Plan and confirm", "## 4. Bootstrap", "## 5. Issue", "## 6. Branch",
+                 "## 7. Write the files", "## 8. Checks", "## 9. Task directory and commit", "## 10. Final message"]
+        positions = [body.index(s) for s in steps]
+        self.assertEqual(positions, sorted(positions))
+        boot = section(body, "## 4. Bootstrap")
+        order = ["Ignore the work directory", "git add -- .gitignore README.md", "git commit -F <drafts>/commit-msg.txt",
+                 "git push -u origin <main>", "gh label create"]
+        self.assertEqual([boot.index(n) for n in order], sorted(boot.index(n) for n in order))
+        write = section(body, "## 7. Write the files")
+        self.assertIn("`.claude/loom.json` first", write)
+
+    def test_handover_matches_loom_state_and_finish_task(self):
+        body = self.body()
+        for needle in ("`chore/<n>-loom-setup`", "`<workDir>/<n>-loom-setup`", "--title 'Set up loom'",
+                       "`mode: oneshot`", "`size: S`", "`chore(loom): set up loom (#<n>)`", "`Phase 1: oneshot`",
+                       "## Phase 1 — done — <commit short hash>", "## Phase 1 — in-progress",
+                       "git commit -F <task dir>/commit-msg.txt", "`/loom:describe-pr`",
+                       "--label 'type:chore' --label 'size:S' --label 'mode:oneshot'"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, body)
+        finish = skill_md("finish-task")
+        self.assertIn("`<branch>` is `chore/<n>-loom-setup`, or the first `# ` heading of `00-ticket.md` is `Set up loom`", finish)
+        self.assertTrue(ls.BRANCH_RE.match("chore/7-loom-setup"))
+        self.assertIn("The title is `Set up loom`", skill_md("start-task"))
+
+    def test_confirmations(self):
+        plan = section(self.body(), "## 3. Plan and confirm")
+        for needle in ("git push -u origin <main>", "gh label create", "gh issue create", "uv add --dev",
+                       "`diff` block", "Never write a file the plan does not show", "ask for confirmation once"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, plan)
+
+    def test_settings_are_merged_not_replaced(self):
+        body = self.body()
+        self.assertIn("### Merge settings.json", body)
+        merge = body.split("### Merge settings.json", 1)[1].split("## 8.", 1)[0]
+        for needle in ("Never replace the file and never remove a key", "`permissions.allow` and `permissions.ask`",
+                       "`enabledPlugins[\"loom@loom\"]`", "`extraKnownMarketplaces.loom`"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, merge)
+
+    def test_checks_before_commit_and_no_commit_on_failure(self):
+        checks = section(self.body(), "## 8. Checks")
+        self.assertIn("Do not commit.", checks)
+        self.assertIn("`checks.check`", checks)
+
+    def test_unknown_stack_and_detection(self):
+        body = self.body()
+        for needle in ("investigate before you ask", "`pyproject.toml` and `uv.lock`", "`package.json` and a lock file",
+                       "git symbolic-ref --short refs/remotes/origin/HEAD", "git symbolic-ref --short HEAD"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, body)
+
+    def test_resume_on_the_setup_branch(self):
+        body = self.body()
+        self.assertIn("[Resume on the setup branch](#resume-on-the-setup-branch)", body)
+        resume = body.split("## Resume on the setup branch", 1)[1]
+        for needle in ("--grep='^Phase 1: oneshot' origin/<main>..HEAD", "Never write a second `in-progress` entry",
+                       "Write nothing.", "skip [Nothing to change](#nothing-to-change)",
+                       "git diff --name-only origin/<main>...HEAD", "git fetch origin <main>", "also when they are identical to the templates"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, resume)
+        self.assertIn("Only on `<main>`, never on the setup branch", section(body, "### Nothing to change").split("\n## ", 1)[0]
+                      if "### Nothing to change" in body else "")
+
+    def test_preconditions_find_branches_and_origin(self):
+        pre = section(self.body(), "## 1. Check preconditions")
+        order = ["`<current>` matches `chore/<k>-loom-setup`", "git branch --list 'chore/*-loom-setup'",
+                 "git ls-remote --exit-code --heads origin <main>", "the working tree is dirty (see Values)"]
+        self.assertEqual([pre.index(o) for o in order], sorted(pre.index(o) for o in order))
+        self.assertIn("Next: push <main> yourself (git push -u origin <main>), then /loom:setup", pre)
+        self.assertIn("Write nothing before this table is through.", pre)
+        values = self.body().split("### Values", 1)[1].split("## 1.", 1)[0]
+        for needle in ("gh repo view --json defaultBranchRef --jq .defaultBranchRef.name",
+                       "git symbolic-ref --short refs/remotes/origin/HEAD", "ask the user", "git symbolic-ref --short HEAD",
+                       "Read it first, then Write it", "Paths below `<workDir>` do not count"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, values)
+
+    def test_main_is_updated_before_detection(self):
+        body = self.body()
+        start = body.split("### Start from `<main>`", 1)[1].split("## 2. Detect", 1)[0]
+        self.assertLess(body.index("### Start from `<main>`"), body.index("## 2. Detect"))
+        self.assertLess(body.index("## 1. Check preconditions"), body.index("### Start from `<main>`"))
+        self.assertLess(start.index("git switch <main>"), start.index("git pull --ff-only origin <main>"))
+        boot = section(body, "## 4. Bootstrap")
+        self.assertNotIn("git switch <main>", boot)
+        order = ["git branch -m <main>", "Ignore the work directory", "git push -u origin <main>"]
+        self.assertEqual([boot.index(o) for o in order], sorted(boot.index(o) for o in order))
+
+    def test_status_never_collapses_untracked_directories(self):
+        body = self.body()
+        for m in re.finditer(r"git status --porcelain[^`]*", body):
+            with self.subTest(at=m.start()):
+                self.assertIn("--untracked-files=all", m.group(0))
+        self.assertGreaterEqual(body.count("git status --porcelain --untracked-files=all"), 4)
+
+    def test_merged_setup_pr_goes_to_finish_task(self):
+        body = self.body()
+        self.assertEqual(body.count("gh pr list --head <that branch> --state merged --json number")
+                         + body.count("gh pr list --head <branch> --state merged --json number"), 2)
+        self.assertIn("`Next: /loom:finish-task #<n>`", body)
+        resume = body.split("## Resume on the setup branch", 1)[1]
+        self.assertIn("If `<task dir>/00-ticket.md` is missing, write it from the issue", resume)
+
+    def test_in_progress_entry_comes_right_before_the_commit(self):
+        step = section(self.body(), "## 9. Task directory and commit")
+        order = ["git add -- <paths>", "Ask all questions now", "`## Phase 1 — in-progress`",
+                 "run `git commit -F <task dir>/commit-msg.txt`", "## Phase 1 — done — <commit short hash>"]
+        self.assertEqual([step.index(o) for o in order], sorted(step.index(o) for o in order))
+        self.assertIn("not `/loom:next`", step)
+        self.assertIn("git status --porcelain", step.split("Stage the setup commit", 1)[1])
+
+
+class BacklogSkillTest(unittest.TestCase):
+    """backlog (§9.2)."""
+
+    def body(self) -> str:
+        return split_frontmatter(skill_md("backlog"))[1]
+
+    def test_frontmatter(self):
+        fm = split_frontmatter(skill_md("backlog"))[0]
+        self.assertEqual(fm.get("model"), "inherit")
+        self.assertNotIn("effort", fm)
+        self.assertIn(STATE_INJECTION, skill_md("backlog"))
+
+    def test_reads_issue_format_and_context(self):
+        body = self.body()
+        self.assertIn("${CLAUDE_SKILL_DIR}/references/issue-format.md", body.split("## 1. Check preconditions", 1)[0])
+        for needle in ("`<docs>/product/vision.md`", "gh issue list --state open", "Skeleton written by /loom:setup",
+                       "| The state is empty |", "`Next: /loom:setup`", "new issues do not change it"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, body)
+
+    def test_issues_are_created_after_confirmation(self):
+        create = self.body().split("## Create issues", 1)[1].split("\n## ", 1)[0]
+        for needle in ("Show the full list", "Ask for confirmation", "After \"yes\"",
+                       "gh issue create --title '<title>' --body-file <drafts>/", "`'\\''`", "Depends on #<k>"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, create)
+        self.assertLess(create.index("Ask for confirmation"), create.index("gh issue create"))
+
+    def test_drafts_live_in_the_ignored_work_directory(self):
+        self.assertIn("`<drafts>` is `<workDir>/_drafts`", self.body())
+        self.assertIn("Issue bodies always go to `<drafts>`, also with an active task.", self.body())
+        self.assertIn("`<n>` is `task.number` and `<task dir>` is `task.dir`", self.body())
+        self.assertIn("also when a task is active", reference("backlog", "issue-format.md"))
+        self.assertIn("`<workDir>/_drafts/`", reference("backlog", "issue-format.md"))
+        self.assertIsNone(re.match(r"^\d+-", "_drafts"), "loom-state matches task directories by <n>-")
+
+    def test_writing_style_exception(self):
+        self.assertIn("It does not apply to the discussion with the user or to `vision.md`", self.body())
+        spec = spec_section("### 14.2 Where it applies", "## 15. Project Documentation Structure")
+        self.assertIn("| `vision.md`, `backlog` discussion | No |", spec)
+
+    def test_vision_never_commits_on_main(self):
+        vision = self.body().split("## Fill the vision", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("docs(#<n>): update product vision", vision)
+        self.assertIn("`workingTree` is `clean`", vision)
+        self.assertIn("Do not write the file.", vision)
+        self.assertIn("`docs(#<n>): update product vision`", shared("git-flow.md"))
+
+
+class StartTaskSkillTest(unittest.TestCase):
+    """start-task (§9.3, §5.2, §13.1)."""
+
+    def body(self) -> str:
+        return split_frontmatter(skill_md("start-task"))[1]
+
+    def test_frontmatter_allows_the_slug_helper(self):
+        fm = split_frontmatter(skill_md("start-task"))[0]
+        self.assertEqual(fm.get("model"), "inherit")
+        self.assertNotIn("effort", fm)
+        self.assertIn("Bash(loom-state --slug *)", skill_rules("start-task"))
+        self.assertTrue(any(rule_allows(r, "Bash", "loom-state --slug 'Add x'") for r in skill_rules("start-task")))
+
+    def test_steps_in_order(self):
+        body = self.body()
+        steps = ["## 2. Free text", "## 3. Read the issue", "## 4. Existing task directory", "## 5. Mode",
+                 "## 6. Branch type and slug", "## 7. Branch", "## 8. Write the ticket", "## 9. Final message"]
+        positions = [body.index(s) for s in steps]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_mode_precedence_matches_5_2(self):
+        mode = section(self.body(), "## 5. Mode")
+        order = ["A mode flag", "A `mode:*` label", "A `size:*` label"]
+        self.assertEqual([mode.index(o) for o in order], sorted(mode.index(o) for o in order))
+        self.assertIn("`S` → oneshot, `M` → quick, `L` → full", mode)
+        spec = spec_section("### 5.2 Choosing a mode", "### 5.3 Changing the mode")
+        self.assertIn("(`S` → oneshot, `M` → quick, `L` → full)", spec)
+
+    def test_commands(self):
+        body = self.body()
+        for needle in ("gh issue view <n> --json title,body,labels,url", "loom-state --slug '<issue title>'",
+                       "git switch <main>", "git pull", "git switch -c <branch>", "<workDir>/_archive/<n>-*",
+                       "mv <workDir>/_archive/<dir> <workDir>/", "Offer the stash of `git-flow.md`",
+                       "git rev-parse --verify --quiet refs/heads/<branch>", "Next: /clear, then /loom:next",
+                       "never build it yourself", "The ticket has no `status` and no `updated`"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, body)
+        self.assertLess(body.index("git switch <main>"), body.index("git switch -c <branch>"))
+
+    def test_slug_rule_matches_the_spec(self):
+        spec = spec_section("### 9.3 `start-task`", "### 9.4")
+        self.assertIn("`loom-state --slug '<title>'`", spec)
+        self.assertIn("at most 5 words / 40 characters", spec)
+        self.assertEqual((ls.SLUG_MAX_WORDS, ls.SLUG_MAX_CHARS), (5, 40))
+        interface = spec_section("### 8.2 Interface", "### 8.3 Rules")
+        self.assertIn("--slug '<issue title>'", interface)
+
+    def test_ticket_fields_match_13_1_and_frontmatter_md(self):
+        fm = ls.parse_frontmatter(reference("start-task", "ticket-template.md"))
+        self.assertEqual(list(fm), ["task", "phase", "mode", "size", "issue", "url"])
+        self.assertEqual(fm["phase"], "ticket")
+        documented = shared("frontmatter.md").split("## Ticket frontmatter", 1)[1].split("\n## ", 1)[0]
+        for key in fm:
+            with self.subTest(key=key):
+                self.assertIn("| `%s` |" % key, documented)
+        spec = spec_section("### 13.1 Frontmatter and gates", "### 13.2 Working artifacts")
+        self.assertIn("The ticket has no `status`, `based_on`, `git_commit`, or `updated`.", spec)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ Below, `<main>` is `mainBranch` from the `loom-state` output, `<n>` is `task.num
 | `gh pr create`, `gh pr edit`, `gh pr merge` | Yes |
 | `gh issue create` | Yes |
 | Repo settings, labels, rulesets: `gh api` calls that change something (`--method POST`, `PUT`, `PATCH`, `DELETE`), `gh label create` | Yes |
-| Read-only `gh api` GET calls (no `--method`, no `-f`/`-F` fields), e.g. reading rulesets | No. The permission system may still ask, because `gh api` is not allowlisted. |
+| Read-only `gh api` GET calls (no `--method`, no `-f`/`-F` fields), e.g. reading rulesets | No question from the skill. The permission system always asks: `setup` writes `Bash(gh api *)` as an ask rule, so every `gh api` call prompts, also in auto mode. This is intended. |
 | `git stash`, discarding changes (`git restore`, `git clean`) | Yes |
 
 - Confirmation means: show exactly what the command does (the commits, the body, the files), ask, and wait for "yes".
@@ -50,6 +50,8 @@ The first body line names the implementation phase. `loom-state`, `iterate`, and
 | Fix commit | `iterate` | `<type>(<scope>): <summary of the fix> (#<n>)` | `Phase N: <name>`, a blank line, then one `Fix: <item>` line per fix item |
 | Docs commit | `describe-pr` | `docs(#<n>): record decisions and summary` | none |
 | Task summary update | `iterate` after the PR is open | `docs(#<n>): update task summary` | none |
+| Product vision update | `backlog` on a task branch | `docs(#<n>): update product vision` | none |
+| Setup commit | `setup` | `chore(loom): set up loom (#<n>)` | `Phase 1: oneshot` |
 
 - `<name>` is the name of `## Phase N: <name>` in `04-plan.md`, exactly.
 - Never commit with `--no-verify`, and never amend a pushed commit.
@@ -60,6 +62,8 @@ Never pass a commit message on the command line. A plan heading can contain back
 
 1. Write the whole message with the Write tool to `<task dir>/commit-msg.txt`: the subject, a blank line, then the body. The task directory is ignored by git.
 2. Run `git commit -F <task dir>/commit-msg.txt`.
+
+The file stays after the commit, and every later commit reuses it. The Write tool refuses to overwrite a file it has not read, so: **if `commit-msg.txt` exists, Read it first, then Write the new message.** The same rule holds for every other reused file in the work directory: issue bodies, `pr-body.md`, and the files in `<workDir>/_drafts/`. Do not delete these files; they are ignored by git.
 
 Example file of a phase commit:
 

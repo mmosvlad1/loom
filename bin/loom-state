@@ -6,6 +6,7 @@ next" (LOOM_SPEC.md section 8). It is used by the SessionStart hook,
 /loom:next, the phase skills, and the statusline.
 
 Usage: loom-state [--json | --line] [--pr] [--docs]
+       loom-state --slug '<issue title>'
 
 The script is a silent no-op (exit 0, no output) outside a git repository and
 in a repository without .claude/loom.json. Standard library only; it runs on
@@ -22,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -1216,14 +1218,58 @@ def format_line(state: Optional[Dict[str, Any]]) -> str:
     return " · ".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Branch slug (LOOM_SPEC.md section 9.3 step 5)
+# ---------------------------------------------------------------------------
+
+SLUG_MAX_WORDS = 5
+SLUG_MAX_CHARS = 40
+SLUG_FALLBACK = "task"
+# Letters that NFKD does not decompose into ASCII.
+SLUG_TRANSLITERATION = {
+    "ß": "ss", "ẞ": "SS", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE",
+    "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L", "þ": "th", "Þ": "TH",
+}
+
+
+def slugify(title: str) -> str:
+    """Issue title -> branch slug: lowercase ASCII, non-alphanumerics -> `-`.
+
+    At most 5 words and 40 characters. Words are dropped from the end until the
+    slug fits; a single word longer than 40 characters is cut. A title with no
+    ASCII letters or digits gives `task`. A few letters that NFKD keeps
+    (`ß`, `æ`, `œ`, `ø`, `đ`, `ł`, `þ`) are transliterated first.
+    """
+    for char, ascii_form in SLUG_TRANSLITERATION.items():
+        title = title.replace(char, ascii_form)
+    ascii_text = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+    words = [w for w in re.split(r"[^a-z0-9]+", ascii_text.lower()) if w][:SLUG_MAX_WORDS]
+    while len(words) > 1 and len("-".join(words)) > SLUG_MAX_CHARS:
+        words.pop()
+    slug = "-".join(words)[:SLUG_MAX_CHARS].strip("-")
+    return slug or SLUG_FALLBACK
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    args_in = sys.argv[1:] if argv is None else argv
+    if len(args_in) == 2 and args_in[0] == "--slug":
+        # Before argparse: a title that starts with `-` would look like an option.
+        sys.stdout.write(slugify(args_in[1]) + "\n")
+        return 0
+
     parser = argparse.ArgumentParser(prog="loom-state", description="Compute the loom task state.")
     fmt = parser.add_mutually_exclusive_group()
     fmt.add_argument("--json", action="store_true", help="JSON output (default)")
     fmt.add_argument("--line", action="store_true", help="one line for the statusline")
+    fmt.add_argument("--slug", metavar="TITLE", help="print the branch slug for an issue title and exit")
     parser.add_argument("--pr", action="store_true", help="add pull request state (calls gh and the network)")
     parser.add_argument("--docs", action="store_true", help="docs freshness check (reserved)")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(args_in)
+
+    if args.slug is not None:
+        # Pure string function: works anywhere, also outside a loom project.
+        sys.stdout.write(slugify(args.slug) + "\n")
+        return 0
 
     cwd = os.getcwd()
     top = find_toplevel(cwd)
