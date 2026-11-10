@@ -55,10 +55,22 @@ jobs:
           case "$RUNS" in ''|*[!0-9]*) echo "runs must be a number"; exit 1;; esac
           case "$MAX_COST" in ''|*[!0-9.]*) echo "max_cost_usd must be a number"; exit 1;; esac
           case "$CASE$MODEL" in *[!A-Za-z0-9._*?-]*) echo "case and model allow only [A-Za-z0-9._*?-]"; exit 1;; esac
-          args="--json evals/results/eval.json --runs $RUNS"
+          args="--json evals/results/eval.json --runs $RUNS --keep-temp"
           if [ -n "$CASE" ]; then args="$args --case '$CASE'"; fi
           if [ -n "$MODEL" ]; then args="$args --model $MODEL"; fi
           make eval EVAL_MAX_COST="$MAX_COST" EVAL_ARGS="$args"
+      - name: Collect the run outputs
+        # --keep-temp leaves each run's out/ dir (trace.jsonl, logs) in the temp dir; copy only
+        # out/ (never the run's home or config) next to the results to debug a failing run.
+        if: always()
+        run: |
+          [ -f evals/results/eval.json ] || exit 0
+          jq -r '.cases[] | .name as $c | .arms.with | to_entries[] | "\($c)-\(.key) \(.value.tracePath // "")"' \
+            evals/results/eval.json | while read -r name trace; do
+            [ -n "$trace" ] && [ -d "$(dirname "$trace")" ] || continue
+            mkdir -p "evals/results/runs/$name"
+            cp -R "$(dirname "$trace")/." "evals/results/runs/$name/" 2>/dev/null || true
+          done
       - name: Upload the results
         if: always()
         uses: actions/upload-artifact@v7.0.2
