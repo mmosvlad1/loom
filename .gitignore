@@ -2,3 +2,4 @@
 .loom/
 __pycache__/
 *.pyc
+evals/results/

@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: implement-manual
+description: >-
+  Quick mode, plan approved; implementation phase 1 lists a Manual verification step.
+  /loom:implement commits phase 1, ticks it, logs it as done, and stops for manual
+  verification before phase 2 (LOOM_SPEC.md 9.9 step 7, 20.2). Needs Bash git inside the
+  eval sandbox: fails on macOS; expected to pass under the Linux bubblewrap sandbox,
+  unverified until the first eval.yml run (LOOM_SPEC.md 24.2). Not tagged local.
+tags: [implement, quick, git]
+runs: 1
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: haiku
+  max_turns: 80
+  timeout_seconds: 1800
+  allowed_tools: [Read, Glob, Grep, Skill, Agent]
+  prompt: /loom:implement

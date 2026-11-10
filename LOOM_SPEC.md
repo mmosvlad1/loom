@@ -2,7 +2,7 @@
 
 > A Claude Code plugin for structured, agent-driven development: **Research → Plan → Implement**, with GitHub Issues as the backlog, artifacts as the hand-off between phases, and a full git flow from issue to squash merge.
 
-Status: **Draft, revision 2** · Last updated: 2026-11-09 · Describes plugin release **v1**
+Status: **Draft, revision 2** · Last updated: 2026-11-10 · Describes plugin release **v1**
 
 Changes in revision 2: fixes from the spec review (finish-task commands, agent `tools`, namespacing, versioning, config use, hook exit codes, oneshot conditions), decisions on the post-PR flow, setup bootstrap, approval gates, mode changes and resume, and new features: `loom-state`, `/loom:next`, enforced checks, harness evals, shared snippets, writing style.
 
@@ -156,9 +156,10 @@ loom/
 │       ├── block_output_filtering.py  # §11.3
 │       ├── subagent_checks.py      # §11.4 (milestone M4)
 │       └── stop_lint.py            # §11.5 (milestone M4)
-├── evals/                          # §20
-├── tests/                          # unit tests for loom-state and hook scripts (stdlib unittest)
-├── Makefile                        # test, validate, check
+├── evals/                          # §20.2: one directory per case, _fixture/, results/ (ignored)
+├── tests/                          # unit tests for loom-state, hook scripts, skills, evals (stdlib unittest)
+├── .github/workflows/              # ci.yml (make check), eval.yml (make eval, on demand)
+├── Makefile                        # test, validate, check, eval
 ├── LICENSE
 ├── NOTICE
 └── README.md
@@ -1143,19 +1144,49 @@ Template: `skills/setup/references/templates/settings.json`. `setup` merges it i
 
 ### 20.2 Evals
 
-`evals/` holds a suite for `claude plugin eval`:
-- A scaffold script builds a tiny fixture Python repository with a prepared task directory for each scenario.
-- Graders that do not call a model:
-  - `research` creates `02-research.md` with `status: in-review` and `file:line` references (file and regex checks).
-  - In full mode, `research` never reads `00-ticket.md` (tool-use check with max 0).
-  - `design` writes all questions as open; none appear under Resolved Decisions.
-  - `implement` stops on a phase with manual verification.
-  - The guard blocks a commit on `main`.
-- Run with `make eval` locally. In loom's CI: `claude plugin validate --strict` on every PR; evals manually or on a schedule (they cost tokens).
+`evals/` holds a suite for `claude plugin eval` (format: §24.2, milestone M6). One directory per case, with `case.yaml` and `graders/*.md`:
+
+```
+evals/
+├── _fixture/build.py        # builds the fixture of one scenario in the run workspace
+├── research-full/           # case.yaml (prompt: /loom:research), scaffold.sh, graders/
+├── design-full/
+├── implement-manual/
+├── guard-main/
+└── results/                 # written by the runs; ignored by git
+```
+
+- Each case's `scaffold.sh` runs `_fixture/build.py <scenario>`. It builds a tiny Python repository (`shop/`, stdlib `unittest` checks behind `make check`, the §19.1 `loom.json`), one commit on `main` with fixed dates (stable hashes), and the task directory of task #7 with the artifacts the scenario needs. `tests/test_evals.py` runs every scaffold and checks that `loom-state` routes it to the case's skill.
+- Graders never call a model (`regex`, `tool_used`, `file_exists` only):
+  - `research-full` (full mode, research questions approved):
+    - `02-research.md` exists with `status: in-review` and `file:line` references.
+    - No Read of `00-ticket.md` (`tool_used`, max 0).
+    - No Read, Grep, Glob, or Bash input in the trace names the ticket, by the skill or by a subagent.
+    - The trace never holds `Wholesale customers`, a phrase that occurs only in the ticket body. This catches the ticket's content reaching the session by any tool.
+    - The skill read its shared snippets.
+  - `design-full` (research approved):
+    - `03-design.md` exists with `status: in-review`, a `## Open Questions — Round 1 of ~M` heading, and `**Q1.`.
+    - Resolved Decisions has no table data rows and no list items.
+    - No Read of `01-research-questions.md`.
+  - `implement-manual` (quick mode, plan approved, implementation phase 1 has a `Manual:` line):
+    - Exactly one `git commit` (also as `git -C <dir> commit`).
+    - `log.md` has `## Phase 1 — done — <hash>` and no phase 2 entry.
+    - The Phase Overview ticks phase 1 only.
+    - The last message has `Manual verification:` and `run the manual steps, then /clear, then /loom:next`.
+  - `guard-main` (on `main`, staged change, no skill):
+    - A Bash `git commit` ran.
+    - The trace holds the guard's deny reason.
+    - `main` still points to the fixture commit.
+- Every case has `runs: 1` and `model: haiku` (cost); `--runs 3` and `--model sonnet` override them.
+- `make eval` runs the suite with `--scaffold --ablation none --no-publish --trust-plugin`, a `--max-cost-usd` ceiling, and the narrowest `--allow-tools` set: `Write Edit 'Bash(git *)' 'Bash(make *)' 'Bash(loom-state *)' 'Bash(*/bin/loom-state *)'`. It is not part of `make check`. It puts the plugin's `bin/` on `PATH` (the eval runtime does not) and, on macOS only, the Command Line Tools first.
+- In loom's CI: `make check` (unit tests and `claude plugin validate --strict`) on every PR and push to `main` (`.github/workflows/ci.yml`). The evals run only on demand (`.github/workflows/eval.yml`, `workflow_dispatch`, repository secret `ANTHROPIC_API_KEY`), never on a schedule: they cost tokens.
+- Platform limit: on macOS the eval sandbox breaks Bash `git` (§24.2), so `implement-manual` cannot commit there. It is expected to pass under the Linux bubblewrap sandbox; this is unverified until the first `eval.yml` run.
+  - The other cases carry the tag `local`. On macOS `make eval` defaults to `EVAL_FILTER=--tag local` and prints a note that it skips `implement-manual`. `make eval EVAL_FILTER=` runs every case.
+  - `--case` and `--tag` combine with AND (seen live). On macOS, `EVAL_ARGS='--case implement-manual'` with the default filter selects no case: the run prints `No eval cases found matching …`, exits 1, and costs nothing. Add `EVAL_FILTER=`.
 
 ### 20.3 When to run
 
-After every change to a skill, agent, shared snippet, or hook script. A prompt change is not done until its eval scenario passes.
+After every change to a skill, agent, shared snippet, or hook script. A prompt change is not done until its eval scenario passes: `make eval EVAL_ARGS='--case <name>'` (on macOS, add `EVAL_FILTER=` for a case without the `local` tag; that case runs on Linux through `eval.yml`).
 
 ---
 
@@ -1169,7 +1200,7 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
   ```
 - **Versioning:** semver, **only in `plugin.json`**; bump on every release. Users update with `/plugin marketplace update`.
 - **Local development:** `claude --plugin-dir ./loom` runs the working copy; exercise it on a sandbox repository and with evals.
-- **loom's own CI:** unit tests, `claude plugin validate --strict`, and a check that every `template.md` has its required headings.
+- **loom's own CI:** `.github/workflows/ci.yml` runs `make check` on every PR and push to `main`: unit tests (including the check that every `template.md` has its required headings) and `claude plugin validate --strict`, which needs no credentials. One job `check`, `permissions: contents: read`, `actions/checkout@v7.0.1`, `actions/setup-node@v7.1.0`, and Claude Code pinned with `npm install -g @anthropic-ai/claude-code@2.1.318`. `.github/workflows/eval.yml` runs `make eval` on demand only (§20.2) and uploads `evals/results/` with `actions/upload-artifact@v7.0.2` (latest release, checked on 2026-11-10).
 - **Commands** appear as `/loom:<skill>`; agents as `loom:<agent>`.
 
 ---
@@ -1232,8 +1263,30 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
 
 Still open:
 
-- `claude plugin eval` scenario format and available graders.
+- The first `eval.yml` run of `implement-manual` on Linux. The case has never run inside the Linux bubblewrap sandbox; it is expected to pass there (§20.2).
 - The working directory of the `statusLine` command is not documented. The command finds the script through `git rev-parse --show-toplevel`, and the script runs `loom-state` in `workspace.current_dir` from its input, so it does not depend on it. Only a unit test against a fake plugins root covers the script; an M6 live check must show the line in an interactive session.
+
+Resolved (milestone M6):
+
+- **`claude plugin eval` format** (https://code.claude.com/docs/en/plugin-evals): a case is a directory below `evals/` with `prompt.md` or `case.yaml` and `graders/*.md`. `case.yaml` needs `schema_version: "1.1"` and `name`; run settings go under `execution:` (`model`, `max_turns`, `timeout_seconds`, `allowed_tools`, `prompt`, …); `context.scaffold_script` runs only with `--scaffold`. Model-free graders: `regex` (targets `last_message`, `trace`, `files`, or `{source: file, path}`; `match: not_contains`), `tool_used` (`tool`, `input_match`, `min`, `max`), `tool_order`, `file_exists`; `llm` and `baseline` call a model and loom does not use them. Results go to `evals/results/<timestamp>/`. Exit codes: 0 all cases at the threshold (default 1.0), 1 below it, 2 partial (cost ceiling). `--trust-plugin` is required outside a terminal; `--ablation none` skips the no-plugin arm.
+- **Verified live** (Claude Code 2.1.318, macOS, `make eval` and probe cases, model haiku):
+  - A slash command as the whole prompt (`prompt: /loom:research`) runs the skill like a typed command. No `Skill` tool call appears, so a `tool_used: Skill` grader does not detect it, and the skill text is not in the trace. Graders target the skill's output instead.
+  - Runs use permission mode `dontAsk`: only the operator's `--allow-tools` grants count, and a skill's `allowed-tools` does not widen them. Without a grant the skill's `` !`…` `` injection aborts the invocation (`Shell command permission check failed … don't ask mode`). `--allow-tools 'Bash(*/bin/loom-state *)'` matches the injection `"<plugin root>"/bin/loom-state --json [--pr]`; then the injection runs.
+  - Every hook event fires in an eval run, and hooks run outside the sandbox: a logging probe saw `SessionStart`, `UserPromptSubmit`, `PreToolUse` and `PostToolUse` (also for subagent tools), `SubagentStart`, `SubagentStop` (`agent_type: loom:codebase-locator`), and `Stop`. The trace records only the `SessionStart` output (`hook_response`); a `PreToolUse` deny appears as the tool result `PreToolUse:Bash hook error: <reason>`.
+  - Skills read `${CLAUDE_PLUGIN_ROOT}/skills/_shared/*` and their templates with Read in the eval runtime; no denial.
+  - The agent's working directory is the scaffold workspace (`<run dir>/home/cwd`; `HOME` is `<run dir>/home`). The scaffold runs in place: `$0` is the script in the case directory, so `$(dirname "$0")/../_fixture/build.py` resolves. Its environment has `PATH`, `HOME`, `TMPDIR`, `TMP`, `TEMP`, `TERM=dumb`, and `GIT_CONFIG_NOSYSTEM=1`.
+  - The Agent tool is named `Agent` in the trace. Subagent messages are in the trace with `parent_tool_use_id`, and `tool_used` counts subagent calls too (one Read by the skill plus one by a subagent counted 2). Subagents ran in the background; the trace then has one `result` line per wake-up, and the last one is the final message.
+  - `--case` and `--tag` filters combine with AND. A selection with no case prints `No eval cases found matching …`, exits 1, and starts no run.
+  - The plugin's `bin/` is not on the Bash `PATH` in eval runs (`command not found: loom-state`); the Bash `PATH` is the `PATH` of the `claude plugin eval` process. `make eval` adds `bin/`.
+  - macOS sandbox: `/usr/bin/python3`, `make`, and `git` are xcrun shims that fail inside the sandbox (`couldn't create cache file '/var/folders/…/xcrun_db-…'`, then `xcode-select: Failed to locate 'git'`). `python3` and `make` follow `PATH`, so `make eval` puts `$(xcode-select -p)/usr/bin` first. Bash `git` cannot be fixed from the plugin:
+    - the Bash tool resolves `git` to `/usr/bin/git` regardless of `PATH` (`whence -a git` lists only it);
+    - the eval runtime strips `DEVELOPER_DIR` from the Bash environment;
+    - the sandbox denies the xcrun stub's cache write in `/var/folders/…/T`.
+
+    A skill therefore cannot run `git` there: research falls back to reading `.git/HEAD`, and implement cannot commit. `loom-state` and hook scripts are unaffected (their `git` subprocesses follow `PATH`). The commit scenario passed outside the sandbox (below); under the Linux sandbox it is still open.
+- **`implement` stops at manual verification** (outside the eval sandbox, because of the macOS limit above): `claude -p "/loom:implement" --plugin-dir . --model haiku --permission-mode default --setting-sources project,local --allowedTools "Read" "Edit" "Write" "Agent" "Bash(git *)" "Bash(make *)" "Bash(loom-state *)"` in the `implement-manual` fixture committed phase 1 once, ticked it, logged `## Phase 1 — done — <hash>`, did not start phase 2, and ended with `Manual verification:` and `Next: run the manual steps, then /clear, then /loom:next`. All five graders of the case pass on that output.
+- **`Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` in default permission mode** (the eval runtime cannot cover it): `claude -p "/loom:research" --plugin-dir <loom> --model haiku --permission-mode default --setting-sources project,local --allowedTools "Skill"` in the `research-full` fixture read `skills/_shared/frontmatter.md`, `writing-style.md`, `visual-conventions.md`, `final-answer.md`, and `skills/research/references/template.md` without a denial (only a later Write outside the grants was denied). Control: the same run with that rule removed from the skill's `allowed-tools` denied all four `_shared` reads ("Claude requested permissions to read from …").
+- **`claude plugin validate --strict` needs no credentials:** it passed with an empty `HOME` and no API key or token in the environment, so loom's CI runs it without a secret.
 
 Resolved (milestone M5):
 
@@ -1259,7 +1312,7 @@ Resolved (milestone M3):
   - Also verified live: in default mode, `Read` of the plugin's `skills/` files is denied ("Path is outside allowed working directories") unless allowed; `Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` (an absolute-path rule, `//…` after substitution) allows it.
   - `loom-state` exits 0 outside a loom project, so the injection does not fail there; skills treat empty state as "not a loom project".
   - **Turn scope:** the `allowed-tools` grant lasts only until the user's next message. After a skill asks the user something (overwrite or rerun, fix items, push, rebase conflicts), plugin-file reads and `loom-state` calls fall back to the normal permission rules. Skills therefore read all plugin files (shared snippets, template) before the first question, and `setup` allowlists `loom-state` (§19.3).
-  - **Not documented:** the docs describe `${CLAUDE_PLUGIN_ROOT}` substitution in the Bash rules of `allowed-tools` only. Its substitution in the `Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` rule was seen live (see "Also verified live" above) but is not documented. An M6 eval in default permission mode must cover it.
+  - **Not documented:** the docs describe `${CLAUDE_PLUGIN_ROOT}` substitution in the Bash rules of `allowed-tools` only. Its substitution in the `Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` rule was seen live (see "Also verified live" above) but is not documented. An eval cannot cover it (the eval runtime manages permissions itself); M6 checked it live again in default permission mode (Resolved, milestone M6).
 
 Resolved (milestone M1):
 
