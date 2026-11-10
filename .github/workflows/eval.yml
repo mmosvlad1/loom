@@ -21,6 +21,10 @@ on:
         description: Hard cost ceiling for the whole run, in USD
         required: false
         default: "10"
+      claude_version:
+        description: Claude Code version to install (empty uses the pinned one)
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -42,7 +46,11 @@ jobs:
           sudo apt-get install -y bubblewrap socat
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code@2.1.318
+        env:
+          VERSION: ${{ inputs.claude_version }}
+        run: |
+          case "$VERSION" in *[!0-9.]*) echo "claude_version must look like 2.1.318"; exit 1;; esac
+          npm install -g "@anthropic-ai/claude-code@${VERSION:-2.1.318}"
       - name: Run the evals
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
