@@ -3,3 +3,6 @@
 __pycache__/
 *.pyc
 evals/results/
+
+# Some developers ignore CLAUDE.md globally; the setup template must ship.
+!skills/setup/references/templates/CLAUDE.md

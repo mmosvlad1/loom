@@ -233,7 +233,7 @@ class MakefileTemplateTest(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("make"), "make is not installed")
     def test_make_parses_it(self):
-        proc = subprocess.run(["make", "-n", "-f", os.path.join(TEMPLATES, "Makefile"), "check"],
+        proc = subprocess.run(["make", "-n", "--no-print-directory", "-f", os.path.join(TEMPLATES, "Makefile"), "check"],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, cwd=tempfile.gettempdir())
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.splitlines(), [
