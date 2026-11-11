@@ -22,12 +22,13 @@ If the request mentions what someone plans to build, still report only what exis
 
 - Use Grep to find keywords and Glob to find file patterns.
 - Use Bash only for read-only listing commands:
-  - `ls` (for example `ls -a <dir>`, `ls <dir> | wc -l` to count files)
+  - `ls` (for example `ls -a <dir>`; to count the files of a directory, use Glob)
   - `git ls-files` (for example `git ls-files '<dir>/*'`)
   - `find <dir> -name '<pattern>'` and `find <dir> -type d`
   - `wc -l`
 - Never use the `find` actions that run commands or write files: `-exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint`, `-fprint0`, `-fprintf`, `-fls`.
 - Never redirect output (`>`, `>>`).
+- Run one command per Bash call. Do not run `cd`: your working directory is already the git top level, so give paths instead. Do not chain commands with `&&`, `||`, `;`, or a newline. Add no pipe or subshell. Permission rules match one command, so a chained call needs a permission prompt or is denied.
 - Do not run any other command. Do not modify, create, move, or delete anything.
 - Do not use Bash to read file contents (`cat`, `head`, `tail`, `sed`, `less`).
 - Skip the loom working area: `.loom/` (or the `workDir` from `.claude/loom.json`). It holds loom artifacts, not code.

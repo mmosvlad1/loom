@@ -118,6 +118,7 @@ loom/
 │   │   ├── git-flow.md             # §16: commit format, checks, rebase, push, confirmations
 │   │   ├── implementation-loop.md  # implementer → checks → reviewer → fix attempts (implement, iterate)
 │   │   ├── pr-update.md            # docs refresh, PR body, push after commits on an open PR (iterate, implement)
+│   │   ├── bash-calls.md           # one command per Bash call: no cd, no chaining (every skill)
 │   │   └── final-answer.md         # format of every skill's last message
 │   ├── setup/
 │   │   ├── SKILL.md
@@ -286,7 +287,7 @@ A mode change is allowed **only before `implement` starts**. After that, a diffe
 |---|---|
 | Implementation phases left (a plan change after the PR; plan approved, or oneshot) | `/loom:implement`, before every other route below; after its last phase it refreshes the docs and pushes (confirmation) |
 | Checks failing | `/loom:iterate` → reads failed check logs (`gh run view --log-failed`), fixes |
-| Changes requested / review comments | `/loom:iterate` → reads comments (`gh pr view --comments`), fixes |
+| Changes requested / review comments | `/loom:iterate` → reads comments (`gh pr view --comments`) and inline review comments on code lines (`gh api --paginate repos/{owner}/{repo}/pulls/<number>/comments`, a read-only GET that the permission system asks for), fixes |
 | Branch behind `main` | `/loom:iterate rebase` → `git rebase origin/main`, re-runs checks |
 | Checks pending | Wait; `/loom:finish-task` watches checks |
 | Checks green, no requested changes | `/loom:finish-task` |
@@ -402,6 +403,14 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
 - Phase skills start by injecting state: `` !`"${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json` `` (verified: `` !`cmd` `` injects command output, and `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SKILL_DIR}` are substituted when the skill loads).
 - Every injected command needs a matching `allowed-tools` rule, or the skill aborts outside auto mode (§24.2). Phase skills set `allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json) Bash(loom-state --json) Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` (`iterate`, `implement`, `describe-pr`, `finish-task`, and `next`: the injected command is `… --json --pr`). Only the injection line uses the full path; every Bash call in a skill body uses the bare `loom-state --json` (`bin/` is on the Bash `PATH`), which matches the §19.3 allowlist. `setup`, `backlog`, and `start-task` inject `--json`; `start-task` also allows `Bash(loom-state --slug *)`. The `Read` rule lets the skill read its shared snippets and templates, which lie outside the project's working directory. The grant lasts one turn, so skills read these files before they ask the user anything. Skills inject nothing else; the date comes from `loom-state` → `today`.
 - Skills spawn agents by their namespaced name: `loom:codebase-locator`, etc.
+- Every Bash call runs one command. A permission rule such as `Bash(git *)` (§19.3) matches one command, so a chained call prompts the user, and an eval run in `dontAsk` mode denies it (§24.2). Every skill reads these rules in `_shared/bash-calls.md`:
+  - no `cd`: the working directory is the git top level;
+  - no chaining with `&&`, `||`, `;`, or newlines;
+  - no pipe, redirection, subshell, or shell variable;
+  - tools by the names the skill uses (`loom-state --json`, not `python3 bin/loom-state`);
+  - Read, Grep, and Glob instead of `cat`, `ls`, `grep`, or `find` through Bash.
+
+  Exception: a command that a skill gives, and `checks.check` as configured, run exactly as written, also when they chain commands or have a pipe. The agents with Bash do not read `_shared`. They carry the rules on `cd`, chaining, pipes, and subshells inline (§10.1). Their own command allowlists replace the last two (the locator may use `ls` and `find`).
 - Model and effort per skill (values to tune), set as the skill frontmatter fields `model` and `effort` (verified, §24.2). `default` means the `effort` field is omitted, so the session's effort level applies:
 
 | Skill | Model | Effort |
@@ -640,6 +649,7 @@ Defined as `agents/*.md`, ported from HumanLayer's daemon-registered agents. Plu
 
 - `tools` lists only plain tool names. Command restrictions (e.g. read-only Bash for the locator and reviewer) are stated in the agent prompt and enforced by hooks where needed.
 - All research agents carry the "document what exists, never critique" rule.
+- The agents with Bash (`codebase-locator`, `implementer`, `implementation-reviewer`) carry the one-command rule of §9.0 inline.
 
 ### 10.2 Reviewer verdict format
 
@@ -996,7 +1006,7 @@ docs/
 | `gh pr create`, `gh pr edit`, `gh pr merge` | Yes |
 | `gh issue create` | Yes |
 | Repo settings, labels, ruleset (`gh api`, `gh label create`) | Yes |
-| Read-only `gh api` GET (e.g. listing rulesets) | No question from the skill; the permission system always asks (the `Bash(gh api *)` ask rule of §19.3), also in auto mode, by intent |
+| Read-only `gh api` GET (e.g. listing rulesets, reading inline PR review comments) | No question from the skill; the permission system always asks (the `Bash(gh api *)` ask rule of §19.3), also in auto mode, by intent |
 | `git stash`, discarding changes | Yes. A stash runs `git check-ignore -q <task dir>` first: an ignored task directory takes the plain `git stash push --include-untracked` (a pathspec with an ignored path makes `git stash` exit 1 and leave the changes staged); otherwise the `':(exclude)<task dir>'` pathspec. |
 
 Commit messages are written to `<task dir>/commit-msg.txt` and committed with `git commit -F`; one-line titles (`gh pr create --title`, `gh pr merge --subject`) are single-quoted with every `'` written as `'\''`. Double quotes would expand backticks and `$` from plan headings (`_shared/git-flow.md`).
@@ -1271,9 +1281,7 @@ Done in v1.1:
 
 ### 24.1 Open topics
 
-- Exact prompt texts for each skill and agent (ported from HumanLayer, adapted to this spec).
-- Inline PR review comments: `gh pr view --comments` shows PR comments and review summaries, not inline review comments on code lines. The post-PR fix path in `iterate` does not read them yet; reading them needs `gh api`, which always asks for confirmation (§19.3).
-- Content of `_shared/*.md` and `final-answer.md`.
+- Prompt quality review after the first real use of loom on a project (dogfooding).
 
 ### 24.2 To verify against current Claude Code docs during implementation
 

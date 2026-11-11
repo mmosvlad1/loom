@@ -25,7 +25,7 @@ Plugin root (already filled in): `${CLAUDE_PLUGIN_ROOT}`
 
 ## 1. Read before anything else
 
-Read `${CLAUDE_PLUGIN_ROOT}/skills/_shared/final-answer.md` and `${CLAUDE_PLUGIN_ROOT}/skills/_shared/writing-style.md`.
+Read `${CLAUDE_PLUGIN_ROOT}/skills/_shared/final-answer.md`, `${CLAUDE_PLUGIN_ROOT}/skills/_shared/writing-style.md`, and `${CLAUDE_PLUGIN_ROOT}/skills/_shared/bash-calls.md`.
 
 If step 3 runs a phase, also read that phase's `SKILL.md` and every file it lists under "Shared rules" now, before you ask the user anything. If research is stale (step 2), also read `${CLAUDE_PLUGIN_ROOT}/skills/research/SKILL.md` and its files.
 
