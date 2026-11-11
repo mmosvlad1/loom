@@ -52,7 +52,7 @@ Below, `<main>` is `mainBranch`, `<n>` is `task.number`, `<slug>` is `task.slug`
 | ADRs | no | for resolved decisions with `ADR? = yes` |
 | `overview.md` update | proposed if the architecture changed | proposed if the architecture changed |
 | Docs commit | only if `overview.md` changed | if any docs file changed |
-| PR body | short: `Closes`, Summary, Verification | full, with the plan attached |
+| PR body | short: `Closes`, Why, Verification | full: `Closes`, Why, Special things to note, Change outline, Verification, Decisions, with the plan attached |
 
 ## 1. Check preconditions
 
@@ -70,9 +70,11 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 | `implementation.total` is `0`, or `implementation.done` is less than `implementation.total` | `implementation is not finished (<done> of <total> phases done)` | from `next.command` |
 | Not oneshot, and `04-plan.md` is not `approved` | `04-plan.md changed and is not approved again` | from `next.command` |
 | `workingTree` is `dirty` and `workingTreeDocsOnly` is `false` (code changes) | `working tree has uncommitted code changes` | `/loom:iterate` with no argument (it keeps the changes as a fix, or stashes or discards them) |
+| `task.pr` is set and `pr` is `null` (`gh` failed) | `PR #<task.pr> state unknown (gh: <the gh warning>)` | — (fix `gh`, then run `/loom:describe-pr` again) |
 | `warnings` says `gh` is not installed | `gh is not installed; the PR needs it` | — |
 
 - If `pr.state` is `OPEN` and `task.pr` is not set, an earlier run created the PR but stopped. Write `pr: <number>` into the `00-ticket.md` frontmatter (step 8), then stop with the `PR #<number> is already open` row.
+- While `task.pr` is not set, other `gh` warnings (for example `gh auth login` is missing, or the repository has no remote) do not stop it here. Steps 3-8 still write the docs and `pr-body.md`; step 8 stops when the push or `gh pr create` fails. With `task.pr` set, a failed `gh` stops it (the row above): the PR may exist, so do not redo the docs, the rebase, or the PR.
 - Re-running after a partial failure is safe: every step below checks what already exists.
 - A working tree that is dirty only below `<docs>` (`workingTreeDocsOnly` is `true`) is an earlier partial run of this skill: it wrote docs and stopped before the docs commit. Continue. Steps 3-5 update those files in place; step 6 commits them. Show `git status --porcelain -- <docs>` in a `Warning:` line so the user sees what the earlier run left.
 
@@ -146,15 +148,18 @@ Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`,
 
 1. **Title**: Conventional Commits, `<type>(<scope>): <summary of the task> (#<n>)`. `<type>` is the branch type. `<scope>` and `<summary>` follow `git-flow.md`. This title becomes the squash commit on `<main>`.
 2. **Body**: write `<task dir>/pr-body.md` from `pr-template.md`. A re-run finds the file of the earlier run: Read it before you Write it (`git-flow.md`).
-   - quick and full: `Closes #<n>`, Summary, Changes, Verification, Decisions, then the body of `04-plan.md` (without frontmatter) inside `<details><summary>Implementation plan</summary>`.
-   - oneshot: only `Closes #<n>`, Summary, and Verification. Keep it short.
+   - quick and full, in this order: `Closes #<n>`, Why, Special things to note, Change outline, Verification, Decisions, then the body of `04-plan.md` (without frontmatter) inside `<details><summary>Implementation plan</summary>`.
+   - oneshot: only `Closes #<n>`, Why, and Verification. Keep it short.
+   - **Why** is exactly one sentence of at most 25 words: the problem or need this PR answers (from `00-ticket.md`). It is not a list of what changed.
+   - **Special things to note** has 1-3 list items, most important first: only what a reviewer must know and cannot see quickly in the diff. Candidates: a deviation or addition from `log.md`, a risk, a non-obvious decision, a migration or manual step (also a manual verification step the user has not confirmed), a known limit. If nothing qualifies, write the single line None. (plain text, no backticks); never add filler.
+   - **Change outline** has one line per implementation phase (`1. <phase name> — <commit subject>`), then one visual: a file tree of the changed files only, or an interface `diff` block with only signatures and public API. Pick the one that shows the shape of the change better (`visual-conventions.md`). Omit unchanged parts.
    - Decisions links the new ADRs and the task summary by their repository paths.
    - Remove every guidance comment. Add the user's notes from the argument where they fit.
 3. **Size**: count the characters of the body. If it is longer than 60,000, replace the plan inside `<details>` with its `## Phase Overview` section and the line `The full plan is longer than the PR body allows; only its Phase Overview is attached.`
 
 ### Confirm, push, create
 
-1. Show the title, the body, and the commits to push (`git log --oneline <base>..HEAD`).
+1. Show the title, the body (the `pr-body.md` you wrote above), and the commits to push (`git log --oneline <base>..HEAD`).
 2. Ask for one confirmation for both actions: push the branch and open the PR.
 3. After "yes":
    - Push as `git-flow.md` describes. Normally the branch has no upstream yet: `git push -u origin <branch>`. If an upstream exists and the rebase rewrote its commits, use `git push --force-with-lease`.

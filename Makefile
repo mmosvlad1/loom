@@ -43,7 +43,7 @@ endif
 eval:
 ifeq ($(shell uname -s),Darwin)
 ifeq ($(shell command -v git 2>/dev/null),/usr/bin/git)
-	@echo "make eval: the first git on PATH is /usr/bin/git; in the eval sandbox /usr/bin/git (an xcrun shim) fails, so implement-manual will likely fail (LOOM_SPEC.md 24.2). Install git with Homebrew: brew install git"
+	@echo "make eval: the first git on PATH is /usr/bin/git; in the eval sandbox /usr/bin/git (an xcrun shim) fails, so implement-manual and describe-pr-quick will likely fail (LOOM_SPEC.md 24.2). Install git with Homebrew: brew install git"
 endif
 endif
 	PATH="$(EVAL_PATH):$$PATH" $(CLAUDE) plugin eval . \

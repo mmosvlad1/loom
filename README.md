@@ -27,7 +27,7 @@ Or in two steps:
 4. **`/loom:backlog`** discusses ideas, helps fill `docs/product/vision.md`, and creates GitHub issues (labels `type:*`, `size:*`, `mode:*`).
 5. **`/loom:start-task #<n>`** picks the mode, creates the branch and `.loom/tasks/<n>-<slug>/00-ticket.md`.
 6. **`/clear`, then `/loom:next`**, again and again: `next` runs the next phase for the mode (research, design, plan, implement). Answer question rounds and approve with `/loom:iterate`.
-7. **`/loom:describe-pr`** writes the task summary and ADRs into `docs/`, pushes, and opens the PR (with confirmation).
+7. **`/loom:describe-pr`** writes the task summary and ADRs into `docs/`, pushes, and opens the PR (with confirmation). The PR body has a one-sentence Why, 1–3 Special things to note, and a Change outline (a file tree or an interface `diff`).
 8. **`/loom:finish-task`** waits for green checks, squash-merges (with confirmation), and archives the task directory.
 
 ## Highlights
@@ -52,6 +52,7 @@ Run the working copy with `claude --plugin-dir /path/to/loom` in a sandbox repos
   | `design-full` | `/loom:design` writes round 1 with every question open and an empty Resolved Decisions table |
   | `implement-manual` | `/loom:implement` commits phase 1 and stops for manual verification before phase 2 |
   | `guard-main` | the hook blocks `git commit` on `main` |
+  | `describe-pr-quick` | `/loom:describe-pr` writes `pr-body.md` with Why, Special things to note, Change outline, Verification, and Decisions, and does not push or open the PR |
 
   Evals call the model and cost tokens, so `make check` does not run them. Every case runs once on `haiku`; one run of the whole suite costs well under 1 USD. `EVAL_MAX_COST` (default 10 USD) is a hard ceiling. Pass more flags through `EVAL_ARGS`:
 
@@ -63,9 +64,9 @@ Run the working copy with `claude --plugin-dir /path/to/loom` in a sandbox repos
 
   Results (JSON and an HTML report) go to `evals/results/`, which git ignores.
 
-  `make eval` runs every case. On macOS, install git with Homebrew first: `brew install git`. Inside the eval sandbox the Bash tool always runs `/usr/bin/git`, an xcrun shim. Without another git the shim fails there, so `implement-manual` cannot commit; full Xcode alone did not help. With Homebrew git installed, the shim runs Homebrew git and the case passed (2 of 2 local runs). Without it, `make eval` prints a warning and still runs every case.
+  `make eval` runs every case. On macOS, install git with Homebrew first: `brew install git`. Inside the eval sandbox the Bash tool always runs `/usr/bin/git`, an xcrun shim. Without another git the shim fails there, so `implement-manual` cannot commit; full Xcode alone did not help. With Homebrew git installed, the shim runs Homebrew git and `implement-manual` passed (2 of 2 local runs). `describe-pr-quick` also commits with git, so it needs the same; with Homebrew git it passed 4 of 4 local runs (about 0.02 USD each). It also needs `gh` installed (no login needed). Without Homebrew git, `make eval` prints a warning and still runs every case.
 
-  The **Evals** workflow (Actions → Evals → Run workflow) runs every case on a pinned `macos-26` runner, where all four pass (about 0.25 USD per run). It needs an `ANTHROPIC_API_KEY` repository secret. Its `claude_version` input installs another Claude Code version. Linux cannot run the skill cases: the eval sandbox there keeps `TMPDIR` read-only, so every Bash call fails (likely an upstream Claude Code bug, LOOM_SPEC.md §24.2).
+  The **Evals** workflow (Actions → Evals → Run workflow) runs every case on a pinned `macos-26` runner. The first four cases passed there (about 0.25 USD for those four); `describe-pr-quick` has not run on the runner yet. It needs an `ANTHROPIC_API_KEY` repository secret. Its `claude_version` input installs another Claude Code version. Linux cannot run the skill cases: the eval sandbox there keeps `TMPDIR` read-only, so every Bash call fails (likely an upstream Claude Code bug, LOOM_SPEC.md §24.2).
 
 ## Credits
 

@@ -20,6 +20,7 @@ Scenarios:
   design-full       full mode, research approved
   implement-manual  quick mode, plan approved; implementation phase 1 has a Manual line
   guard-main        on main with a staged change and no task
+  describe-pr-quick quick mode, both implementation phases done and committed, no remote, no PR
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ import json
 import os
 import subprocess
 import sys
-from typing import Dict
+from typing import Dict, Optional
 
 TASK = "7-bulk-discount-tiers"
 BRANCH = "feat/" + TASK
@@ -395,6 +396,212 @@ tests/
 - [ ] Automated: make check
 '''
 
+# ---------------------------------------------------------------------------
+# The implemented plan (describe-pr-quick): the code after each phase commit
+# ---------------------------------------------------------------------------
+
+
+def patch(text: str, old: str, new: str) -> str:
+    if text.count(old) != 1:
+        sys.exit("build.py: patch target not found exactly once: %r" % old)
+    return text.replace(old, new)
+
+
+PRICING_PHASE_1_PY = '''\
+"""Order pricing: discount codes, bulk discount tiers, and totals."""
+from __future__ import annotations
+
+from typing import Optional
+
+from shop.cart import Cart
+
+DISCOUNT_CODES = {
+    "WELCOME10": 0.10,
+    "VIP20": 0.20,
+}
+
+# (minimum item count, rate), largest tier first.
+BULK_TIERS = ((50, 0.10), (10, 0.05))
+
+TAX_RATE = 0.08
+
+
+def code_discount(code: Optional[str]) -> float:
+    """Return the discount rate of a code, or 0.0 for no code or an unknown code."""
+    if not code:
+        return 0.0
+    return DISCOUNT_CODES.get(code.upper(), 0.0)
+
+
+def bulk_discount(item_count: int) -> float:
+    """Return the bulk discount rate for an item count, or 0.0 below the smallest tier."""
+    for minimum, rate in BULK_TIERS:
+        if item_count >= minimum:
+            return rate
+    return 0.0
+
+
+def order_total(cart: Cart, code: Optional[str] = None) -> float:
+    """Subtotal minus the bulk discount (else the code discount), plus tax, rounded to cents."""
+    rate = bulk_discount(cart.item_count()) or code_discount(code)
+    discounted = cart.subtotal() * (1 - rate)
+    return round(discounted * (1 + TAX_RATE), 2)
+'''
+
+PRICING_PHASE_2_PY = patch(
+    patch(PRICING_PHASE_1_PY, "from typing import Optional\n", "from typing import Optional, Tuple\n"),
+    '''def order_total(cart: Cart, code: Optional[str] = None) -> float:
+    """Subtotal minus the bulk discount (else the code discount), plus tax, rounded to cents."""
+    rate = bulk_discount(cart.item_count()) or code_discount(code)
+''',
+    '''def applied_discount(cart: Cart, code: Optional[str] = None) -> Tuple[str, float]:
+    """Return the larger of the bulk and code discounts as (name, rate); the bulk discount wins a tie.
+
+    The name is "bulk", the upper-case code, or "" when no discount applies.
+    """
+    bulk = bulk_discount(cart.item_count())
+    rate = code_discount(code)
+    if bulk and bulk >= rate:
+        return "bulk", bulk
+    if rate and code:
+        return code.upper(), rate
+    return "", 0.0
+
+
+def order_total(cart: Cart, code: Optional[str] = None) -> float:
+    """Subtotal minus the larger of the bulk and code discounts, plus tax, rounded to cents."""
+    _, rate = applied_discount(cart, code)
+''',
+)
+
+RECEIPT_PHASE_1_PY = patch(
+    patch(RECEIPT_PY, "from shop.pricing import code_discount, order_total\n",
+          "from shop.pricing import bulk_discount, code_discount, order_total\n"),
+    '''    rate = code_discount(code)
+    if rate:
+''',
+    '''    bulk = bulk_discount(cart.item_count())
+    rate = code_discount(code)
+    if bulk:
+        lines.append("Bulk discount: -%d%%" % round(bulk * 100))
+    elif rate:
+''',
+)
+
+RECEIPT_PHASE_2_PY = patch(
+    patch(RECEIPT_PHASE_1_PY, "from shop.pricing import bulk_discount, code_discount, order_total\n",
+          "from shop.pricing import applied_discount, order_total\n"),
+    '''    bulk = bulk_discount(cart.item_count())
+    rate = code_discount(code)
+    if bulk:
+        lines.append("Bulk discount: -%d%%" % round(bulk * 100))
+    elif rate:
+        lines.append("Discount %s: -%d%%" % (code.upper(), round(rate * 100)))
+''',
+    '''    name, rate = applied_discount(cart, code)
+    if name == "bulk":
+        lines.append("Bulk discount: -%d%%" % round(rate * 100))
+    elif name:
+        lines.append("Discount %s: -%d%%" % (name, round(rate * 100)))
+''',
+)
+
+MAIN_GUARD = '\n\nif __name__ == "__main__":\n'
+
+TEST_PRICING_PHASE_1_PY = patch(
+    patch(TEST_PRICING_PY, "from shop.pricing import code_discount, order_total\n",
+          "from shop.pricing import bulk_discount, code_discount, order_total\n"),
+    MAIN_GUARD,
+    '''
+
+class BulkDiscountTest(unittest.TestCase):
+    def test_tiers(self):
+        self.assertEqual(bulk_discount(9), 0.0)
+        self.assertEqual(bulk_discount(10), 0.05)
+        self.assertEqual(bulk_discount(49), 0.05)
+        self.assertEqual(bulk_discount(50), 0.10)
+
+    def test_order_total_applies_the_bulk_tier(self):
+        cart = Cart()
+        cart.add(Item("B2", "Pen", 1.0), 10)
+        self.assertEqual(order_total(cart), 10.26)
+
+    def test_receipt_shows_the_bulk_discount(self):
+        cart = Cart()
+        cart.add(Item("B2", "Pen", 1.0), 50)
+        text = format_receipt(cart)
+        self.assertIn("Bulk discount: -10%", text)
+        self.assertIn("Total: 48.60", text)
+''' + MAIN_GUARD,
+)
+
+TEST_PRICING_PHASE_2_PY = patch(
+    patch(TEST_PRICING_PHASE_1_PY, "from shop.pricing import bulk_discount, code_discount, order_total\n",
+          "from shop.pricing import applied_discount, bulk_discount, code_discount, order_total\n"),
+    MAIN_GUARD,
+    '''
+
+class LargerDiscountWinsTest(unittest.TestCase):
+    def test_larger_code_wins(self):
+        cart = Cart()
+        cart.add(Item("B2", "Pen", 1.0), 10)
+        self.assertEqual(applied_discount(cart, "VIP20"), ("VIP20", 0.20))
+        self.assertEqual(order_total(cart, "VIP20"), 8.64)
+        text = format_receipt(cart, "VIP20")
+        self.assertIn("Discount VIP20: -20%", text)
+        self.assertNotIn("Bulk discount", text)
+
+    def test_bulk_wins_a_tie(self):
+        cart = Cart()
+        cart.add(Item("B2", "Pen", 1.0), 50)
+        self.assertEqual(applied_discount(cart, "WELCOME10"), ("bulk", 0.10))
+        text = format_receipt(cart, "WELCOME10")
+        self.assertIn("Bulk discount: -10%", text)
+        self.assertNotIn("WELCOME10", text)
+''' + MAIN_GUARD,
+)
+
+# Each phase commit as implement makes it: (files, subject, body, date).
+PHASE_COMMITS = (
+    ({"shop/pricing.py": PRICING_PHASE_1_PY, "shop/receipt.py": RECEIPT_PHASE_1_PY,
+      "tests/test_pricing.py": TEST_PRICING_PHASE_1_PY},
+     "feat(pricing): add bulk discount tiers (#7)", "Phase 1: Bulk discount tiers",
+     "2026-11-09T11:00:00+00:00"),
+    ({"shop/pricing.py": PRICING_PHASE_2_PY, "shop/receipt.py": RECEIPT_PHASE_2_PY,
+      "tests/test_pricing.py": TEST_PRICING_PHASE_2_PY},
+     "feat(pricing): apply the larger of code and bulk discount (#7)", "Phase 2: Larger discount wins",
+     "2026-11-09T12:00:00+00:00"),
+)
+
+LOG_BODY = '''\
+## Phase 1 — in-progress
+Started: 2026-11-09
+
+## Phase 1 — done — {hash1}
+Checks: make check: pass; lint ✓ typecheck ✓ test ✓ (10 passed)
+Reviewer: pass; nits: None
+Deviations: None
+Additions: None
+Manual verification: run `python3 -m shop.receipt` and confirm that the demo receipt shows `Bulk discount: -10%` on its own line, above the total
+
+## Phase 2 — in-progress
+Started: 2026-11-09
+
+## Phase 2 — done — {hash2}
+Checks: make check: pass; lint ✓ typecheck ✓ test ✓ (12 passed)
+Reviewer: pass; nits: None
+Deviations: the bulk discount wins a tie with a code (the plan does not define a tie), so the demo receipt (52 items, WELCOME10) still shows `Bulk discount: -10%`
+Additions: `applied_discount(cart, code) -> Tuple[str, float]` in shop/pricing.py returns the discount that applies; `order_total` and `format_receipt` share it
+Manual verification: None
+'''
+
+
+def ticked(plan: str) -> str:
+    """The plan after implement: Phase Overview and Automated lines ticked; Manual lines stay for the user."""
+    for old in ("- [ ] 1. ", "- [ ] 2. ", "- [ ] Automated: "):
+        plan = plan.replace(old, old.replace("[ ]", "[x]"))
+    return plan
+
 
 def frontmatter(fields: Dict[str, str]) -> str:
     return "---\n" + "".join("%s: %s\n" % (k, v) for k, v in fields.items()) + "---\n"
@@ -421,9 +628,11 @@ GIT_ENV = {
 }
 
 
-def git(*args: str) -> str:
+def git(*args: str, date: Optional[str] = None) -> str:
     env = dict(os.environ)
     env.update(GIT_ENV)
+    if date:
+        env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = date
     proc = subprocess.run(["git"] + list(args), env=env, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, universal_newlines=True)
     if proc.returncode != 0:
@@ -491,6 +700,22 @@ def scenario_implement_manual() -> None:
     artifact("04-plan.md", "plan", "[00-ticket.md, 02-research.md]", PLAN_BODY)
 
 
+def scenario_describe_pr_quick() -> None:
+    """Quick mode after implement: both phases committed and logged, plan ticked, no remote, no PR."""
+    scenario_implement_manual()
+    hashes = []
+    for files, subject, body, date in PHASE_COMMITS:
+        for path, text in files.items():
+            write(path, text)
+        git("add", "--", *sorted(files))
+        git("commit", "-q", "-m", subject, "-m", body, date=date)
+        hashes.append(git("rev-parse", "--short", "HEAD"))
+        # implement writes every commit message to this file and keeps it (git-flow.md).
+        write(os.path.join(TASK_DIR, "commit-msg.txt"), "%s\n\n%s\n" % (subject, body))
+    artifact("04-plan.md", "plan", "[00-ticket.md, 02-research.md]", ticked(PLAN_BODY))
+    write(os.path.join(TASK_DIR, "log.md"), LOG_BODY.format(hash1=hashes[0], hash2=hashes[1]))
+
+
 def scenario_guard_main() -> None:
     build_repo()
     with open("README.md", "a", encoding="utf-8") as fh:
@@ -503,6 +728,7 @@ SCENARIOS = {
     "design-full": scenario_design_full,
     "implement-manual": scenario_implement_manual,
     "guard-main": scenario_guard_main,
+    "describe-pr-quick": scenario_describe_pr_quick,
 }
 
 
