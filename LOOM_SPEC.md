@@ -231,6 +231,8 @@ A mode change is allowed **only before `implement` starts**. After that, a diffe
 | full → quick | Remaining phases skip design; existing artifacts stay valid |
 | any → oneshot | Allowed only if no plan exists |
 
+**Planned (M9, §9.13.1):** `setup` fixes the mode of the setup task (`oneshot` on an empty repository, `full` on a repository with code). `iterate` refuses a mode change on it.
+
 ### 5.4 Mode differences
 
 | | oneshot | quick | full |
@@ -392,6 +394,18 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 - `--line`: one line for the statusline, e.g. `#42 · full · design:in-review · 3 open Q`, `#42 · full · impl 1/3`, or `#42 · archived`. Empty output when there is no task.
 - `--pr`: adds PR state from `gh pr view --json number,state,reviewDecision,statusCheckRollup,mergeStateStatus` as `{ number, state, reviewDecision, checks: passing|failing|pending|none, mergeStateStatus, behindMain }`; `behindMain` is computed with git after `git fetch origin <mainBranch>`. This calls `gh` and the network, so it is not used by the `SessionStart` hook. If `gh` is missing or unauthenticated, or the branch has no PR, `pr` is `null` and a warning is added.
 - `--docs`: reserved for the docs freshness check (§23.1, planned for v1.2). Until then it prints "not implemented yet (planned for v1.2)" to stderr and exits 2.
+- **Planned (M9, §9.13):**
+  - `docs`: the resolved docs map (§15, §19.1). It is in every non-empty output, also without a task (`backlog` reads it on the main branch). Paths are relative to the git top level. Skills read doc paths from here and never build them:
+    ```json
+    "docs": { "dir": "docs", "vision": "docs/product/vision.md", "overview": "docs/architecture/overview.md",
+              "decisions": { "dir": "docs/architecture/decisions", "pattern": "<NNNN>-<slug>.md" },
+              "conventions": "docs/conventions.md", "tasks": "docs/tasks" }
+    ```
+    `dir` is `docsDir`. The freshness check of `--docs` (§23.1) uses the same paths.
+  - `ci` and `pullRequest`: the resolved values of these `loom.json` keys (§19.1). Like `docs`, they are in every non-empty output, also without a task, e.g. `"ci": { "requiredCheck": "check" }` and `"pullRequest": { "requiredSections": [] }`. Skills read them from here, not from `loom.json`. `pullRequest` (configuration) is not `pr` (the PR state of `--pr`).
+  - `workingTreeDocsOnly` counts a change as a docs change when it is below `docsDir` or at or below any path of `docs`. The `Stop` hook (§11.5) ignores the same paths.
+  - `task.setup`: `true` when the task is the setup task (branch `chore/<n>-loom-setup`), else `false`.
+  - Warnings for invalid `docs`, `ci`, and `pullRequest` values (§19.1).
 - `--slug '<issue title>'`: prints the branch slug of §9.3 step 5 and exits 0. It is a pure string function, so it also works outside a loom project. A title that starts with `-` is taken as the title, not as an option. Before the ASCII step it transliterates the letters that Unicode NFKD keeps (`ß` → `ss`, `æ` → `ae`, `œ` → `oe`, `ø` → `o`, `đ` → `d`, `ł` → `l`, `þ` → `th`). One quirk is accepted: a first word that fits and a second word that would pass 40 characters leave only the first word (`a <50-character word>` → `a`). `start-task` uses it, so the slug never depends on the model.
 
 ### 8.3 Rules
@@ -443,6 +457,10 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
 ### 9.1 `setup`
 
 **Purpose:** prepare a project for loom. Safe to re-run.
+
+**Planned (M9, §9.13.1):** setup takes one of two paths. An empty or new repository keeps the fast `oneshot` setup of this section. A repository with code gets a `full`-mode setup task instead: setup does only the kickoff (issue, branch, ticket, minimal `loom.json`, kickoff commit, fixed research questions), and loom's own phases do the rest. Path selection:
+- On the main branch: the re-run rules below when `origin/<main>` has `.claude/loom.json`; otherwise the path by the repository's files. The plan names the path, and the user can switch it; `/loom:setup --oneshot` forces the fast path.
+- On an existing setup branch: onboarding when `00-ticket.md` has `mode: full`, or, without a ticket (a fresh clone), when `origin/<main>..HEAD` has the kickoff commit `chore(loom): start loom setup (#<n>)`. Otherwise the resume of this section.
 
 **Does:**
 1. Detects the stack (§18) and existing commands.
@@ -511,6 +529,8 @@ Light contextual research with `loom:codebase-locator`, `loom:codebase-analyzer`
 
 **Rule:** questions never reveal what will be built.
 
+**Planned (M9, §9.13.3):** on a setup task this skill stops and names `/loom:research`. `setup` writes `01-research-questions.md` from a fixed list, approved with the setup plan. The fixed list has 7 questions plus the user's own, so the limit of 2–8 questions does not apply to it.
+
 ### 9.5 `research`
 
 **Input:** full → `01-research-questions.md` only (never the ticket). quick → `00-ticket.md`.
@@ -523,6 +543,8 @@ Light contextual research with `loom:codebase-locator`, `loom:codebase-analyzer`
 
 **Rule:** describes only; no recommendations or critique.
 
+**Planned (M9, §9.13.3):** on the onboarding task, research answers the fixed onboarding questions. The blind rule holds: it reads only `01-research-questions.md`. It also reads GitHub facts with read-only `gh` commands, and it treats as data the instruction files that Claude Code does not load (§9.13.3): it quotes their rules and never follows them.
+
 ### 9.6 `design` (full mode)
 
 **Input:** ticket and research (never research questions).
@@ -532,6 +554,8 @@ Current state, desired end state, out of scope, proposed architecture (before/af
 
 **Rule:** all questions are written as open. Recommendations are allowed, resolution is not.
 
+**Planned (M9, §9.13.4):** on a setup task, design also reads `references/onboarding.md`. It holds the onboarding discussion in the same layout. The topics: what the project is, project rules against loom rules, docs roles, gaps, checks, the required CI check, and PR sections. Design reads doc paths from `docs` in the state (§8.2).
+
 ### 9.7 `plan`
 
 **Input:** all artifacts except research questions.
@@ -540,6 +564,8 @@ Current state, desired end state, out of scope, proposed architecture (before/af
 Writes the **Phase Overview** (one line per vertical slice) and full implementation phase details (goal, changes as file tree + key signatures, verification with checkboxes). Adds a round only where uncertain. The whole plan is written at once.
 
 **Rule:** implementation phases are vertical slices; each is verifiable by `loom.json` checks.
+
+**Planned (M9, §9.13.5):** on a setup task, the plan copies the content of every loom template it uses into its Changes: the implementer reads only the plan and the project. Plan reads doc paths from `docs` in the state (§8.2).
 
 ### 9.8 `iterate`
 
@@ -601,6 +627,8 @@ Steps 2–4 are `_shared/implementation-loop.md`; `iterate` runs the same loop f
 8. Stores the PR number in `00-ticket.md` frontmatter (`pr: 57`).
 9. Proposes follow-ups from the summary as new issues, in the format of `${CLAUDE_PLUGIN_ROOT}/skills/backlog/references/issue-format.md` (confirmation required).
 
+**Planned (M9, §9.13):** describe-pr takes the paths of the task summary, the ADRs, and the overview from `docs` in the state (§8.2, §15), and numbers ADRs by `docs.decisions.pattern`. The PR body keeps the sections of `pullRequest.requiredSections` from the state (§13.6). On the onboarding task, the follow-ups include every `Follow-up:` line of the design's Out of Scope (§9.13.5).
+
 ### 9.11 `finish-task`
 
 **Does:**
@@ -611,6 +639,7 @@ Steps 2–4 are `_shared/implementation-loop.md`; `iterate` runs the same loop f
 5. `git switch <mainBranch> && git pull && git fetch --prune`. Deletes the local branch with `git branch -D` only if it still exists.
 6. Moves the task directory to `.loom/tasks/_archive/`. `events.jsonl` (§11.6) moves with it; the hook writes nothing for an archived task.
 7. If the merged task was the setup task and no ruleset exists, offers to enable it (§17.3).
+   **Planned (M9, §17.3):** the ruleset requires `ci.requiredCheck` from the state (default `check`). `finish-task` also reads classic branch protection and skips the offer when a ruleset or the protection already requires that check.
 
 All steps are idempotent: re-running after a partial failure continues where it stopped. Every stop after the merge ends with `Next: /loom:finish-task #<n>`, which resumes on the main branch.
 
@@ -646,6 +675,183 @@ A file read with Read is not loaded as a skill, so `next` compensates (§24.2):
 Gate work (rows 6 and 7) comes before PR routing and "all implementation phases done": a design or plan that went back to review, for example after a plan change on an open PR, is never skipped. Before implementation starts, a `draft` gate artifact is unfinished work and falls to row 11, which reruns its phase (`/loom:plan` overwrites a draft plan). After implementation started, a draft or in-review plan is a plan change and row 4 handles it, before the dirty tree, PR routing, and describe-pr. Non-gate artifacts (research-questions, research) never block row 11. If research is `in-review`, `next` prints "research not reviewed" and continues. If research is stale, it warns and offers to rerun research.
 
 Row 5 and a dirty tree: `implement` resumes only while implementation phases are left. With all phases done, a tree that is dirty only below `docsDir` (`workingTreeDocsOnly`) is an interrupted `describe-pr` and falls through to the later rows (row 9, `/loom:describe-pr`, which continues its partial run; with an open PR, the PR routing of row 8, whose skills commit the docs through `_shared/pr-update.md`); code changes go to `/loom:iterate` (or `/loom:finish-task` when the PR is merged). A skill that refuses a dirty tree names the skill that handles the changes, never a `Next:` that leads back to the same refusal.
+
+### 9.13 Onboarding an existing repository (planned, M9)
+
+**Status:** planned for v1.2, milestone M9. Nothing in this section is implemented in release 1.1.0. Other sections mark each M9 change with **Planned (M9, §…):**. Text without that marker describes release 1.1.0.
+
+Today `setup` on a repository with code runs one `oneshot` task: it detects the stack, reuses an existing `Makefile` and CI, adds config, and writes empty doc skeletons. It does not discuss the project, and skills hard-code the doc paths. M9 adds an onboarding flow that works for any project. It uses loom's own `full` mode, so the discussion, the gates, the artifacts, and the reviews come from the normal phases.
+
+Terms (M9a adds the docs terms and M9b the task terms to §3 and to the glossary of `_shared/writing-style.md`):
+
+| Term | Meaning |
+|---|---|
+| **setup task** | The task of the issue "Set up loom", on the branch `chore/<n>-loom-setup` |
+| **onboarding task** | A setup task in `full` mode: the setup of a repository with code |
+| **docs role** | One kind of durable document that loom reads or writes: `vision`, `overview`, `decisions`, `conventions`, `tasks` (§15) |
+| **docs map** | `loom.json` → `docs`: the path of each docs role (§19.1) |
+
+#### 9.13.1 Two setup paths
+
+| Repository (files tracked on the main branch) | Path | Mode of the setup task |
+|---|---|---|
+| Empty or new: no commits, or only files that are not code (list below) | Fast setup of §9.1, unchanged | `oneshot` |
+| With code: any other tracked file | Onboarding (this section) | `full` |
+
+Files that are not code: `README*`, `LICENSE*`, `.gitignore`, `.gitattributes`, `.editorconfig`, `CODEOWNERS`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, and files below `.github/` except `.github/workflows/`. A workflow file counts as code.
+
+**Path selection.** `setup` takes the first matching row:
+
+| Where `setup` runs | Condition | Path |
+|---|---|---|
+| The main branch | A branch `chore/<n>-loom-setup` exists, local or on `origin` | Switch to it (§9.1), then use the setup-branch rows |
+| The main branch | `origin/<main>` has `.claude/loom.json` | The re-run rules of §9.1 (loom is set up) |
+| The main branch | Otherwise | By the table above |
+| An existing setup branch `chore/<n>-loom-setup` | `<task dir>/00-ticket.md` has `mode: full` | Onboarding re-run (§9.13.2) |
+| An existing setup branch | The ticket is missing (a fresh clone), and `git log origin/<main>..HEAD` has the subject `chore(loom): start loom setup (#<n>)` | Onboarding re-run (§9.13.2) |
+| An existing setup branch | `origin/<main>..HEAD` is empty (setup stopped after `git switch -c`, before the ticket) | By the repository's files, as on the main branch |
+| An existing setup branch | Otherwise | The fast-path resume of §9.1 |
+
+- The setup plan names the chosen path and why. The user can switch to the other path in the answer. `/loom:setup --oneshot` also forces the fast path. An empty repository has nothing to research, so it never takes the onboarding path.
+- The bootstrap rules of §9.1 apply only to the fast path on an empty repository: the first commit on the main branch, its first push, and the guard exceptions of §11.2. An onboarding repository has commits, so the existing precondition applies: its main branch must be on `origin`. Onboarding never uses a guard exception.
+- `loom-state` recognizes the setup task by its branch `chore/<n>-loom-setup` and reports `task.setup: true` (§8.2). An onboarding task is a setup task with `task.mode` `full`. The ticket gets no new field.
+- The mode of a setup task is fixed by `setup`. `iterate` refuses a mode change on it (§5.3). `start-task` keeps refusing the setup issue (§9.3).
+
+#### 9.13.2 Kickoff (`setup`)
+
+On the onboarding path, `setup` does only the kickoff. It shows one plan and acts after one confirmation, by the rules of §9.1. The plan lists the fixed research questions; the user adds project-specific questions there explicitly.
+
+1. Preconditions and the update of the main branch, as in §9.1.
+2. **`.gitignore`:** the `.loom/` line (or `<workDir>/`) if missing. It comes first: the issue draft goes below `workDir`. The uncommitted change goes with the branch, as in §9.1.
+3. **Labels:** the missing loom labels (§19.2), optional (`gh label create`, confirmation). Existing labels and label schemes stay. Issues are not migrated: `start-task` proposes the mode for an issue without loom labels (§5.2).
+4. **Issue:** "Set up loom" from `templates/setup-issue-onboarding.md`, with the labels `type:chore`, `size:M`, `mode:full` that exist. The notes of `/loom:setup <notes>` go into the issue body. An open issue with this exact title is reused.
+5. **Branch:** `chore/<n>-loom-setup` from the up-to-date main branch.
+6. **Ticket:** `<workDir>/<n>-loom-setup/00-ticket.md` with `mode: full`, `size: M`, and the issue copied verbatim (§9.3 step 7). It comes right after the branch, so a re-run finds the onboarding path.
+7. **`.claude/loom.json`, minimal:** `version` and `mainBranch` (and `workDir` if it is not the default). Every other key takes its §19.1 default until implementation phase 1 writes the full file.
+8. **Kickoff commit:** `chore(loom): start loom setup (#<n>)`, with only `.claude/loom.json` and, if step 2 changed it, `.gitignore`, and no `Phase` line in the body. It keeps the working tree clean. A dirty tree would route the task to the resume flow of `implement` (§9.12 row 5).
+9. **Research questions:** `<task dir>/01-research-questions.md` with the fixed list of §9.13.3 and the questions the user added. `status: approved`: the user approved the list with the plan confirmation (an exception to §13.1). Key Context Pointers lists, verbatim, the paths that setup found while it chose the path (instruction files, workflow files, PR templates, docs directories).
+10. **Final message:** `Next: /clear, then /loom:next`. `next` then runs `research` (§9.12 row 11).
+
+Size `M` caps the design rounds at 3 (§12.5). Most onboarding questions are independent, so round 1 carries most of them.
+
+**Onboarding re-run.** `setup` completes only the missing kickoff items (ticket, kickoff commit, research questions file). Then it stops with `Next:` from `next.command`. It never writes the files of the implementation phases. On a fresh clone the ignored task directory is missing: setup writes the ticket and the research questions again. Research, design, and plan are lost, as for every task (§4.3).
+
+#### 9.13.3 Research: the fixed question list
+
+The list is `skills/setup/references/onboarding-questions.md`, in the §13.2 layout of `01-research-questions.md`. `research-questions` does not run on a setup task: it stops and names `/loom:research`. The questions are descriptive, as §9.4 requires. The fixed list has 7 questions, and the user's questions come on top: the limit of 2–8 questions of §9.4 does not apply to it.
+
+1. **Stacks and check commands.** Which languages, package managers, and lock files does the repository use, and where? Which commands run lint, format check, typecheck, unit tests, build, and e2e tests today (`Makefile`, `justfile`, `Taskfile.yml`, `package.json` scripts, `tox.ini`, `noxfile.py`, `scripts/`)? Is there one root command that runs several of them? Which services, secrets, or network access does each command need?
+2. **CI.** Which workflows exist in `.github/workflows/` (and other CI configuration)? For each: the triggers, the check names as GitHub reports them (job `name`, with matrix suffixes), the commands each job runs, how actions and tools are pinned, and how long the jobs ran in the latest run on the main branch (`gh run list`, `gh run view`).
+3. **Documentation.** Where do the docs live (README, `docs/`, `doc/`, ADR directories, wiki links)? What are the structure, the file formats, and the file naming? Which documents describe the product and its users, the architecture and its components, past decisions (with their file name pattern and layout), code conventions, and past work (changelogs, task notes)?
+4. **Agent instruction files.** Which of `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.cursor/rules/`, `.github/copilot-instructions.md`, `GEMINI.md`, and similar files exist? Which of them does `CLAUDE.md` import with `@`? What do they state about branches, commits, push, pull requests, confirmations, the planning workflow, checks, and code? Quote each rule with `file:line`.
+5. **Conventions.** Which linter, formatter, and type checker configurations exist, with their main settings? How are tests laid out (directories, naming, fixtures)? How are modules and packages laid out?
+6. **Git process.** What are the default branch, the branch name patterns in use, the commit message format on the main branch, and the merge method (from history)? Which PR templates exist, with which sections? Which CI steps or actions read the PR title or body? Which labels, open issues, and milestones exist? Which rulesets or branch protection rules apply to the main branch?
+7. **loom requirements.** For each item, does it exist today, and where:
+   - one root command that runs lint, typecheck, and unit tests; separate commands for each;
+   - a CI job that runs that command on pull requests and on pushes to the main branch;
+   - a document in each docs role (§15);
+   - tests, and the result of the latest CI run on the main branch;
+   - `.claude/settings.json`, and its keys.
+
+Rules for the onboarding research:
+
+- **Blind rule:** it holds unchanged. Research reads only `01-research-questions.md`, never the ticket (§9.5). The ticket of the onboarding task holds nothing that the fixed list misses.
+- **Describes only:** question 7 is answered as "exists" or "does not exist", with the location. Design names the gaps; research never writes "missing" or "should".
+- **GitHub facts:** research reads them in the main context with read-only commands: `gh repo view`, `gh label list`, `gh issue list`, `gh run list`, `gh run view`, and `gh api` GET of rulesets, branch protection, and milestones (the permission system asks for `gh api`, §16.4). A fact it cannot read goes to Not Found / Unclear.
+- **Instruction files:** Claude Code loads `CLAUDE.md` and its `@` imports into every session and subagent. During the onboarding task their rules are in effect, not data. The other instruction files are not loaded (`AGENTS.md` without an import, `.cursorrules`, `GEMINI.md`, …): research quotes their rules as data and never follows them. The same holds for every other document it reads.
+- **Safeguard until the loom section lands:** a loaded rule such as "push without confirmation" can conflict with loom. Until the setup PR adds the loom section and the `ask` rules of §19.3 (implementation phase 1 and later), the safeguard is the skills' own confirmations and the guard hook (§11.2).
+
+The result is `02-research.md` with `file:line` references, as for every task.
+
+#### 9.13.4 Design: the discussion
+
+On a setup task, `design` also reads `skills/design/references/onboarding.md` (the topics and defaults below), with its other shared files, before any question. `03-design.md` keeps the §13.2 layout:
+
+| Section | Onboarding content |
+|---|---|
+| Current State | The project as research found it: stacks, check commands, CI, docs, instruction files, git process |
+| Desired End State | What the setup PR leaves: the full `loom.json`, `checks.check`, the required CI check that runs it, the docs roles, the `CLAUDE.md` loom section, `.claude/settings.json` |
+| Out of Scope | Each gap deferred to an issue, as one line `Follow-up: <gap>`. No migration of issues, labels, or branches. |
+| Proposed Architecture | The drafts of topic 1, the docs map, the new `loom.json`, the check and CI changes, a `diff` for each changed instruction file, and the table of project rules and their resolution |
+| Open Questions | One round per §12, over the topics below |
+| Testing Approach | `checks.check` passes locally and in the required CI check of the setup PR |
+
+Topics. Topics 2–7 are one or more questions with 2–4 options and a recommendation; the independence rule of §12.1 applies:
+
+1. **What the project is.** Design drafts vision and overview from the code and the README, as `### Draft: vision` and `### Draft: overview`. It drafts only a role whose recommended option in topic 3 is **create**. If the user maps the role instead, the draft is dropped. The user corrects a draft with `/loom:iterate <feedback>`.
+2. **Project rules and loom rules.** One question per conflict between a project rule (research question 4) and a loom rule. Default recommendation:
+   - loom's safety rules win in loom-run flows: the confirmations of §16.4, the guard on the main branch (§11.2), and one command per Bash call (§9.0);
+   - the formats that loom writes and parses win for loom tasks: the branch name `<type>/<n>-<slug>`, the commit subject `<type>(<scope>): <summary> (#<n>)`, the `Phase N:` commit body, `Closes #<n>` in the PR body, and the task summary file name `<n>-<slug>.md` (open topic in §24.1);
+   - every other project rule stays authoritative. The `CLAUDE.md` loom section references it.
+   Examples of conflicts: "push and open PRs without confirmation", another branch or commit format, another planning workflow. The resolutions go into the `conventions` document, as a table "project rule → resolution in loom tasks". The `CLAUDE.md` loom section states the precedence in one line and links that table.
+3. **Documentation.** For each docs role, one of:
+   - **map:** an existing document plays the role; the docs map records its path (recommended when one exists);
+   - **migrate:** move the files into loom's layout and update the links in the same implementation phase (only when the user asks: other documents and people link to the old paths);
+   - **create:** a new document from the setup skeleton or the approved draft (recommended when none exists).
+   For `decisions`, the design records the directory and the file name pattern of the existing ADRs. Known limit: loom reads and writes Markdown only. A project whose docs are reStructuredText or AsciiDoc can only **create** loom's documents.
+4. **Gaps.** For each gap of research question 7 and the other findings: close it in the setup PR, or defer it to a follow-up issue. Default: §9.13.6.
+5. **Checks.** Which command is `checks.check`: the fast set that the implementer and the `SubagentStop` hook run.
+   - It must pass on the main branch today and finish within the hook timeout (540 seconds, §11.4).
+   - A check that fails on the existing code (for example a new type checker) stays out of `checks.check` and becomes a follow-up issue.
+   - Slow checks and checks that need services (e2e tests) stay CI-only (§17.1).
+   - `checks.lint`, `checks.typecheck`, and `checks.test` may be `null` when the project has no such check (§19.1).
+   - Several stacks (§18): one root command must run the checks of every stack. If each stack has its own commands and no root command exists, the setup PR adds a root entry point that only calls them (a gap of §9.13.6).
+6. **The required CI check.** Which CI check runs `checks.check` (§17.2):
+   - a) change an existing job to run `checks.check` exactly, plus its CI-only steps, and record its check name in `ci.requiredCheck` (recommended when a job already runs the same checks);
+   - b) add a job named `check` that runs `checks.check` (recommended when no job fits).
+   Never rename an existing job: branch protection may require the old name. The ruleset that `finish-task` offers requires `ci.requiredCheck` (§17.3).
+7. **PR body.** Which sections the PR template or a CI check requires. They go into `pullRequest.requiredSections` (§13.6, §19.1).
+8. **Agent instruction files.** Fixed plan items, not questions:
+   - `AGENTS.md` exists and `CLAUDE.md` does not: a new short `CLAUDE.md` with the line `@AGENTS.md` and the loom section;
+   - `CLAUDE.md` exists: the loom section is added to it, shown as a `diff`;
+   - other instruction files: no change. A topic 2 answer can still change one; that change is a plan item with a `diff`.
+   loom never rewrites an instruction file silently.
+
+#### 9.13.5 Plan, implementation, and PR
+
+The plan has the normal layout. Typical implementation phases:
+
+1. **Config and checks:** the full `.claude/loom.json` (checks, docs map, `ci.requiredCheck`, `pullRequest.requiredSections`), the missing parts of the check entry point, `.claude/settings.json` merged by the rules of §19.3, and the optional status line.
+2. **CI:** the required check runs `checks.check`.
+3. **Docs:** map, migrate, or create each docs role; vision and overview from the approved drafts; the `conventions` document with the CI-only checks (§17.1) and the table of project rules.
+4. **Agent instructions:** `CLAUDE.md` and the agreed changes to other instruction files.
+
+- The implementer reads only the plan and the project, never plugin files. So the plan copies small loom templates into its Changes (`loom.json`, the `settings.json` rules, the CI job, the `CLAUDE.md` loom section).
+- A larger template (e.g. `loom-statusline.py`) is named in the plan by its path below `skills/setup/references/templates/`. `implement` (its main session may read plugin files) copies it into `<task dir>/templates/` before it launches the implementer, and names that copy in the implementer prompt.
+- Each implementation phase runs as for any task: implementer, checks (enforced), reviewer, commit. From phase 1 on, the `SubagentStop` hook runs the new `checks.check`.
+- `describe-pr` and `finish-task` run as for any task. The task summary goes to the `tasks` path of the docs map. `describe-pr` proposes every `Follow-up:` line of the design's Out of Scope as an issue (§9.10 step 9, confirmation).
+- After the merge, `finish-task` offers the ruleset (§17.3) with `ci.requiredCheck` as the required check.
+
+#### 9.13.6 Gap scope
+
+The setup PR closes only the gaps that loom needs to work:
+
+- the full `.claude/loom.json`;
+- one check entry point for `checks.check` (and `lint`, `typecheck`, `test` where the project has them);
+- CI runs `checks.check` in the required check;
+- `.claude/settings.json` and the `.gitignore` line;
+- the `CLAUDE.md` loom section (or a new `CLAUDE.md`);
+- the docs roles that the design chose to map, migrate, or create.
+
+Every other gap becomes a follow-up issue after the PR, for example: no tests, no type checker, a check that fails on existing code, old lint errors, missing docs beyond the roles. The setup PR on a mature repository stays reviewable.
+
+#### 9.13.7 Agent instruction files
+
+- **`AGENTS.md` without `CLAUDE.md`:** the onboarding plan writes a short `CLAUDE.md` that imports `@AGENTS.md` and adds the loom section (topic 8). The fast path does not change.
+- **Existing instruction files:** never rewritten silently. A change is a plan item with a `diff`.
+
+#### 9.13.8 Implementation milestones
+
+A prompt change is done only when its eval case passes (§20.3). New cases cost tokens, so each milestone names the minimum.
+
+| Milestone | Changes | Tests and evals |
+|---|---|---|
+| **M9a** — config keys and their use in existing skills | `bin/loom-state`: parse and validate `docs`, `ci`, `pullRequest`, and `null` check commands (§19.1); output the resolved `docs`, `ci`, and `pullRequest`, and the wider `workingTreeDocsOnly` (§8.2). Hooks: `stop_lint.py` ignores every docs path and does nothing without `checks.lint`; `block_output_filtering.py` skips `null` commands. **Docs map:** `setup` (skeleton by role), `backlog`, `design`, `plan`, `implement` and `iterate` (they pass `docs.conventions` to the implementer and the reviewer), `describe-pr` and its templates, `_shared/pr-update.md`; agents `implementer` and `implementation-reviewer` take the conventions path from their prompt. **`ci.requiredCheck`:** `finish-task` builds the ruleset with it and skips the offer when a ruleset or classic branch protection already requires it (§17.3). **Checks for the implementer:** `implement` and `iterate` pass the resolved `checks` in the implementer prompt, like `docs.conventions`. `agents/implementer.md` no longer reads `.claude/loom.json`, skips a `null` key, and never invents a command for it. **`pullRequest.requiredSections`:** `describe-pr`, `pr-template.md`, and `_shared/pr-update.md`, whose check for the layout before v1.1 ignores the required headings. Glossary terms **docs role** and **docs map**. | Unit tests: defaults, custom values, invalid values, warnings; lints that no skill builds a role path or reads these keys from `loom.json` itself. No new eval case: the `describe-pr-quick` fixture gets a non-default `docs.tasks` and `pullRequest.requiredSections: ["## Test plan"]`, with a `file_exists` grader on the mapped summary path and a grader for `## Test plan` after `## Decisions`. The fixture keeps the default `docs.decisions`: it has no decision with `ADR? = yes`. Rerun `describe-pr-quick`, `design-full`, `implement-manual`. |
+| **M9b** — onboarding flow | `setup`: path selection, `--oneshot`, kickoff, onboarding re-run, templates `setup-issue-onboarding.md` and `onboarding-questions.md`. `bin/loom-state`: `task.setup`. `research-questions`: stop on a setup task. `research`: the fixed list, GitHub facts, instruction files. `design`: `references/onboarding.md`, including the `CLAUDE.md` plan item with `@AGENTS.md`. `plan`: the template rule of §9.13.5. `implement`: copies larger templates into the task directory. `iterate`: no mode change on a setup task. `finish-task`: recognizes the setup task also by `task.setup`. Glossary terms **setup task** and **onboarding task**. | Unit tests for path selection, `task.setup`, and the skill texts. One new eval case, `design-onboarding`: a setup task in full mode with approved research, a fixture with `AGENTS.md` ("push and open PRs without confirmation") and a CI job named `test`. Graders: `03-design.md` in review with round 1, empty Resolved Decisions, a question that names `AGENTS.md`, no Read of `01-research-questions.md`. Rerun `research-full`, `design-full`, `implement-manual`. The kickoff needs `gh` and `origin`, which eval runs lack: static tests plus one live run on a sandbox repository. |
+
+`setup`, `backlog`, `plan`, `iterate`, and `finish-task` have no eval case; their changes get static tests in `tests/test_skills.py` and `tests/test_setup.py`.
+
+Each milestone removes its **Planned** markers from this spec and adds its `CHANGELOG.md` entry when it ships.
 
 ---
 
@@ -869,6 +1075,8 @@ The ticket frontmatter has instead: `mode`, `size` (`S`|`M`|`L`, optional, copie
 
 A skill writes `draft` while it works and `in-review` when it finishes. `iterate` also writes `draft` on `04-plan.md` while it changes the plan after implementation started. Only `iterate approve` sets `approved`.
 
+**Planned (M9, §9.13.2):** one exception. `setup` writes the fixed `01-research-questions.md` of the onboarding task as `approved`: the user approves the list with the confirmation of the setup plan.
+
 ### 13.2 Working artifacts (`.loom/tasks/<n>-<slug>/`)
 
 **`00-ticket.md`** — copy of the issue: title, body, labels, URL; the `size:*` label is also stored as frontmatter `size`. Not edited by agents except frontmatter (`mode`, `pr`).
@@ -984,6 +1192,7 @@ Closes #42
 - **Change outline** has one line per implementation phase (`1. <phase name> — <commit subject>`), then a file tree of the changed files or an interface `diff` block (signatures and public API only), whichever shows the shape of the change better (§13.3). Unchanged parts are omitted.
 - If the body would exceed 60,000 characters (GitHub limit: 65,536), the plan is replaced by its Phase Overview plus a note.
 - oneshot PRs contain only `Closes`, Why, and Verification.
+- **Planned (M9, §9.13.4):** `pullRequest.requiredSections` (§19.1) lists the headings that the project's PR template or a CI check requires, e.g. `## Test plan`. A required heading that the layout above already has is that section. Every other required heading comes after Decisions (oneshot: after Verification), before `<details>`, in the order of the list. `describe-pr` fills it from the task's artifacts, or writes `None.` when nothing applies. `_shared/pr-update.md` keeps these sections when it rewrites the body, and its check for the layout before v1.1 ignores them.
 
 ---
 
@@ -1035,6 +1244,22 @@ docs/
 - `overview.md` is updated in the same PR as the change that affects it.
 - ADRs come from design decisions.
 
+**Planned (M9, §9.13): docs roles and the docs map.** The tree above becomes the default layout. An existing project can keep its own structure: `loom.json` → `docs` (§19.1) maps each docs role to a path, and `loom-state --json` reports the resolved paths (§8.2).
+
+| Role | Default path | Read by | Written by |
+|---|---|---|---|
+| `vision` | `<docsDir>/product/vision.md` | backlog | setup (skeleton), backlog |
+| `overview` | `<docsDir>/architecture/overview.md` | backlog, design, plan | setup (skeleton), describe-pr (update) |
+| `decisions` | directory `<docsDir>/architecture/decisions`, file name pattern `<NNNN>-<slug>.md` | design | describe-pr |
+| `conventions` | `<docsDir>/conventions.md` | design, plan, implementer, implementation-reviewer | setup (skeleton) |
+| `tasks` | `<docsDir>/tasks` (files `<n>-<slug>.md`) | backlog | describe-pr, `_shared/pr-update.md` |
+
+- `CLAUDE.md` is not a docs role. It stays at the git top level.
+- Every skill that names a doc path today takes it from `docs` in the state: `setup`, `backlog`, `design`, `plan`, `implement` and `iterate` (they pass `docs.conventions` to the implementer and the reviewer), `describe-pr` with its templates, and `_shared/pr-update.md`. No skill builds a role path from `docsDir`.
+- `docsDir` stays for compatibility. It is the root of the default paths, and changes below it still count as docs changes (§8.2). A path in the map may lie outside `docsDir`, e.g. `ARCHITECTURE.md` or `adr/`.
+- loom writes its own ADR layout (§13.5) also in a mapped directory. Only the file name follows the project's pattern. The `NNNN` in the ADR title is the number of the file name, with the digit count of the pattern.
+- The task summary file name stays `<n>-<slug>.md`.
+
 ---
 
 ## 16. Git Conventions
@@ -1052,6 +1277,7 @@ docs/
 - One commit per implementation phase, created by `implement` (never by the implementer agent).
 - Docs commit before the PR, only if docs changed: `docs(#42): record decisions and summary`.
 - No commits during research/design/plan (those artifacts are in `.loom/`).
+- **Planned (M9, §9.13.2):** the onboarding kickoff commit `chore(loom): start loom setup (#<n>)` comes before research. It holds only `.claude/loom.json` and the `.gitignore` line, and its body has no `Phase` line.
 
 ### 16.3 Rebase and merge
 
@@ -1084,7 +1310,7 @@ Commit messages are written to `<task dir>/commit-msg.txt` and committed with `g
 
 ### 17.1 Single entry point
 
-Checks run in four places — the implementer, the `SubagentStop` hook, the optional `Stop` hook, and CI — and must never diverge. The project exposes them through one entry point (Python: `Makefile`):
+Checks run in four places — the implementer, the `SubagentStop` hook, the optional `Stop` hook, and CI — and must never diverge. The rule: CI runs `checks.check` exactly as configured, and it may run CI-only steps in addition (for example e2e tests or checks that need services). `setup` writes the CI workflow, or reuses an existing one after the user confirms it. **Planned (M9, §9.13.4):** `setup` checks that the workflow runs `checks.check`; on onboarding, the design verifies the existing workflow. The implementer and the hooks never run CI-only steps; the implementer may run narrower commands for fast feedback. The project exposes them through one entry point (Python: `Makefile`):
 
 ```makefile
 lint:
@@ -1102,6 +1328,11 @@ check: lint typecheck test
 
 `loom.json` references these targets; CI runs `make check`. Recipe lines start with a tab. `pytest` exits with 5 when it collects no tests; a new project has none, so the `test` target accepts exit status 5 and no other failure. Node projects use the `lint`, `typecheck`, `test`, and `check` scripts of `package.json` instead (`setup/references/stacks/node.md`).
 
+**Planned (M9, §9.13.4):**
+- `checks.check` is the fast set. It must pass on the main branch and finish within the `SubagentStop` timeout (540 seconds, §11.4). The onboarding design chooses it and the CI-only steps.
+- The `conventions` document lists each CI-only step: what it runs, why it is CI-only, and how to run it locally. `loom.json` does not record CI-only steps: loom never runs them.
+- `checks.lint`, `checks.typecheck`, and `checks.test` may be `null` when the project has no such check (§19.1). `checks.check` is always a command.
+
 ### 17.2 CI workflow (v1)
 
 `.github/workflows/ci.yml`, on `pull_request` and `push` to the main branch. One job named `check` (the ruleset requires this name):
@@ -1116,13 +1347,17 @@ check: lint typecheck test
 
 CI runs the steps through the single entry point (`make check`, or the `check` script for Node), so CI and the hooks never diverge. Single Python version. Action versions are pinned to exact release tags when `setup` generates the file: `actions/checkout@v7.0.1`, `astral-sh/setup-uv@v10.3.3` (it publishes no major tag), `actions/setup-node@v7.1.0`, `pnpm/action-setup@v6.1.1`, `oven-sh/setup-bun@v2.2.0` (latest releases, checked on 2026-11-09). The workflow sets `permissions: contents: read`.
 
+**Planned (M9, §9.13.4):** on an onboarding task the required check can be an existing CI job. The design changes that job to run `checks.check` exactly (its CI-only steps stay) and records its check name in `ci.requiredCheck`. The name is the one GitHub reports: the job `name`, with a matrix suffix if any. The design adds a job named `check` only when no job fits. It never renames a job: branch protection may require the old name.
+
 ### 17.3 Ruleset
 
 Offered by `finish-task` after the setup PR is merged, created with `gh api` after confirmation:
 - Merge to the main branch only through a PR.
-- Required status check: `check`.
+- Required status check: `check`. **Planned (M9, §19.1):** the check named in `ci.requiredCheck` (default `check`).
 - Required approvals: **0** (a solo developer cannot approve their own PR).
 - Block force pushes and deletion.
+
+**Planned (M9, §9.13.8):** before the offer, `finish-task` also reads classic branch protection: `gh api repos/{owner}/{repo}/branches/<main>/protection`, a read-only GET (the `Bash(gh api *)` ask rule prompts; a 404 means none). A 403 (a private repository on GitHub Free, or no admin access) means unknown: `finish-task` still offers the ruleset, and the POST reports whether rulesets are available. It skips the offer when a ruleset or the classic protection already requires `ci.requiredCheck`. Otherwise it offers the ruleset as above.
 
 Availability (verified, §24.2): rulesets work on public repositories on GitHub Free; private repositories need GitHub Pro, Team, or Enterprise Cloud. If unavailable, loom relies on the guard hook only.
 
@@ -1152,6 +1387,12 @@ everything else — stack-agnostic
 4. **Idempotent:** re-running shows a diff.
 
 v1 ships recipes for **python-uv** and **node**. Adding a stack means adding one recipe file. Monorepos with several stacks are out of scope for v1.
+
+**Planned (M9, §9.13.4 topic 5): several stacks.**
+- Only the onboarding path handles several stacks. The fast path on an empty repository has at most one stack, so its recipes do not change.
+- A repository with several stacks is supported when one root command runs all checks, e.g. a root `Makefile` whose `check` target runs a Python backend and a Node frontend. `checks.*` name the root commands.
+- If each stack has its own check commands and no root command exists, the setup PR adds a root entry point that only calls them (a gap of §9.13.6).
+- Out of scope: a monorepo without a common root check command, and checks that run per package (only the changed packages) (§23.3).
 
 ---
 
@@ -1187,6 +1428,36 @@ v1 ships recipes for **python-uv** and **node**. Adding a stack means adding one
 ```
 
 Every component reads `mainBranch`, `workDir`, and `docsDir` from this file. None of them hard-codes `main` or `.loom/tasks`.
+
+**Planned (M9, §9.13): new optional keys.** The template above does not change: a missing key takes its default, so a project that omits them keeps the behavior of release 1.1.0. The onboarding task writes the keys it needs. Example of these keys with non-default values:
+
+```json
+{
+  "docs": {
+    "vision": "README.md",
+    "overview": "ARCHITECTURE.md",
+    "decisions": { "dir": "docs/adr", "pattern": "ADR-<NNN>-<slug>.md" },
+    "conventions": "CONTRIBUTING.md",
+    "tasks": "docs/loom-tasks"
+  },
+  "ci": { "requiredCheck": "test (3.12)" },
+  "pullRequest": { "requiredSections": ["## Test plan"] },
+  "checks": { "lint": "make lint", "typecheck": null, "test": "make test", "check": "make check" }
+}
+```
+
+| Key | Default | Rule | Invalid value |
+|---|---|---|---|
+| `docs` | every role at its §15 default below `docsDir` | An object. Each key is optional. An unknown key gets a warning and is ignored. | Not an object: warning, all defaults |
+| `docs.vision`, `docs.overview`, `docs.conventions` | §15 | A relative path to a `.md` file: not empty, not absolute, not `.` or the git top level, no `..` segment, not below `workDir` | Warning, the default of that role |
+| `docs.tasks` | `<docsDir>/tasks` | A relative directory path, by the same rules | Warning, the default |
+| `docs.decisions` | `{ "dir": "<docsDir>/architecture/decisions", "pattern": "<NNNN>-<slug>.md" }` | An object. `dir`: a relative directory path, by the same rules. `pattern`: a file name (no `/`) that ends in `.md`, has `<slug>` once, and has one number placeholder `<N…N>` of 1–6 `N`. The placeholder's length is the digit count of the zero-padded number (`<NNN>` → `007`). A missing field takes its default. | Warning, the default of that field |
+| `ci.requiredCheck` | `"check"` | The name of the CI check that runs `checks.check` (§17.2), as GitHub reports it | Warning, the default |
+| `pullRequest.requiredSections` | `[]` | A list of heading lines, each `## <text>` or `### <text>` (§13.6) | Warning; an invalid item is dropped |
+| `checks.lint`, `checks.typecheck`, `checks.test` | as above | A command, or `null` when the project has no such check. A `null` check is skipped: the `Stop` hook does nothing without `checks.lint`. | Warning, the default |
+| `checks.check` | `"make check"` | A command; never `null` | Warning, the default |
+
+`loom-state` validates these keys, reports problems in `warnings`, and outputs the resolved values as `docs`, `ci`, and `pullRequest` (§8.2). Skills read them from the state, never from the raw file. Agents get the values they need in their prompt.
 
 ### 19.2 Issue labels
 
@@ -1319,7 +1590,14 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
 
 ### 23.1 v1.2 (planned)
 
-- **Docs freshness gate:** `loom-state --docs` flags paths in `overview.md` and ADRs that no longer exist and modules added since the last summary; `describe-pr` asks to address them.
+- **Docs freshness gate:** `loom-state --docs` flags paths in `overview.md` and ADRs that no longer exist and modules added since the last summary; `describe-pr` asks to address them. It reads the documents through the docs map (§8.2).
+- **Onboarding existing repositories (M9):** `setup` on a repository with code starts a `full`-mode setup task.
+  - Research answers a fixed onboarding question list.
+  - Design discusses the project with the user: drafts of vision and overview, project rules against loom rules, docs roles, gaps, checks, and the required CI check.
+  - The normal plan, implement, describe-pr, and finish-task phases follow. Gaps outside loom's needs become follow-up issues.
+  - Empty repositories keep the fast `oneshot` setup.
+  - New `loom.json` keys let skills use an existing structure: a docs map, the required CI check, and required PR sections.
+  - Specified in §9.13, with the milestones M9a and M9b in §9.13.8.
 
 Done in v1.1 (release 1.1.0, `CHANGELOG.md`):
 
@@ -1330,12 +1608,12 @@ Done in v1.1 (release 1.1.0, `CHANGELOG.md`):
 
 ### 23.2 Deferred, needs a separate discussion
 
-- **Onboarding existing repositories:** how loom adopts a project that already has code, docs, CI, and conventions (drafting `overview.md` and `conventions.md` from the code, reusing existing docs, migrating existing branches and issues). v1 targets new projects; `setup` on an existing repository only adds config, checks, and empty doc skeletons.
+None. Onboarding existing repositories moved to §23.1 (M9, §9.13). It migrates no existing branches or issues.
 
 ### 23.3 Out of scope
 
 - Git worktrees and parallel tasks.
-- Monorepos with multiple stacks.
+- Monorepos without one root check command, and checks per package (only the changed packages). Several stacks behind one root check command are planned for M9 onboarding (§18).
 - Agents other than Claude Code.
 - Linear / Jira.
 - pre-commit hooks, Dependabot, coverage reports.
@@ -1348,6 +1626,8 @@ Done in v1.1 (release 1.1.0, `CHANGELOG.md`):
 ### 24.1 Open topics
 
 - Prompt quality review after the first real use of loom on a project (dogfooding).
+- **Project formats that loom writes (M9):** for loom tasks, the formats that loom writes and parses win over the project's formats (§9.13.4 topic 2): the branch name `<type>/<n>-<slug>`, the commit subject `<type>(<scope>): <summary> (#<n>)`, the `Phase N:` commit body, `Closes #<n>` in the PR body, and the task summary file name `<n>-<slug>.md`. A project that enforces another format (a CI check on commit subjects, branch names that a ticket system needs) has no config key for it. Decide after onboarding a mature repository whether `loom.json` needs format keys.
+- **Fast set over the hook timeout (M9):** `checks.check` must finish within 540 seconds (§17.1). A project whose fastest useful set takes longer has no answer yet: a longer hook timeout, or checks scoped to the changed files.
 
 ### 24.2 To verify against current Claude Code docs during implementation
 
