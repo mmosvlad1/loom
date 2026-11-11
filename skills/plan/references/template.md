@@ -10,7 +10,7 @@ updated: YYYY-MM-DD
 Guidance for the plan skill. Remove every guidance comment before you set `status: in-review`.
 - based_on: quick mode [00-ticket.md, 02-research.md]; full mode adds 03-design.md.
 - Every implementation phase is a vertical slice: it cuts across layers and ends in something that can be run, queried, or tested.
-- Every implementation phase passes the checks from `.claude/loom.json` on its own. Phase N never needs phase N+1 to verify.
+- Every implementation phase passes the checks (`checks` in the loom-state output) on its own. Phase N never needs phase N+1 to verify.
 - Follow the shared `visual-conventions.md` for trees, diffs, and signatures.
 -->
 
@@ -61,7 +61,7 @@ then key signatures and `diff` blocks for changed shapes. Include the tests to a
 ### Verification
 
 <!--
-Automated lines first: the checks from `.claude/loom.json` and any specific command (a test file, a curl call).
+Automated lines first: the checks (`checks` in the loom-state output, never a `null` one) and any specific command (a test file, a curl call).
 A Manual line only if the check cannot reasonably be automated. Delete the Manual line otherwise:
 `implement` stops after every implementation phase that has a Manual line.
 -->

@@ -11,10 +11,10 @@
 
 ## Docs
 
-- Product vision: `docs/product/vision.md`
-- Architecture: `docs/architecture/overview.md`; decisions: `docs/architecture/decisions/`
-- Conventions (code style, testing rules, module layout): `docs/conventions.md`
-- Task summaries: `docs/tasks/`
+- Product vision: `<docs.vision>`
+- Architecture: `<docs.overview>`; decisions: `<docs.decisions.dir>/`
+- Conventions (code style, testing rules, module layout): `<docs.conventions>`
+- Task summaries: `<docs.tasks>/`
 
 ## Workflow
 

@@ -4,7 +4,7 @@
 Denies a check command piped into head, tail, grep, sed, awk, cut, less, or
 more, because filtered output hides failures. `| tee <file>` is allowed.
 
-Check commands: the commands in loom.json `checks`, plus `make
+Check commands: the commands in loom.json `checks` (a null check is skipped), plus `make
 lint|typecheck|test|check`, pytest, ruff, pyright, mypy, `npm test`, `npm run
 test|lint|typecheck`, and any of these behind `uv run` or `python -m`.
 A silent no-op outside a git repository and without .claude/loom.json.
@@ -69,7 +69,7 @@ def configured_patterns(cfg: Dict[str, Any]) -> List[List[str]]:
         return patterns
     for value in checks.values():
         if not isinstance(value, str):
-            continue
+            continue  # a null check: the project has no such check
         for stages in loomhook.parse_pipelines(value) or []:
             for words in stages:
                 words = normalize(words)

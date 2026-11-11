@@ -22,7 +22,7 @@ Below, `<main>` is `mainBranch` from the `loom-state` output, `<n>` is `task.num
 
 ## Checks
 
-- Run `checks.check` from `.claude/loom.json` exactly as configured (default `make check`), from the git top level.
+- Run `checks.check` from the `loom-state --json` output (`checks.check`, the resolved command) exactly as configured, from the git top level.
 - Run it as one Bash call, also when it chains commands.
 - Run it unfiltered: no pipe into `head`, `tail`, `grep`, `sed`, or similar filters. A hook blocks that, because filtered output hides failures.
 - Add no pipe, redirection, or shell variable to it (the shared `bash-calls.md`). Such a command needs a permission prompt, which a subagent or a later turn may not get.

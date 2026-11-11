@@ -20,6 +20,7 @@ import datetime
 import fnmatch
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -48,6 +49,24 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "rounds": {"cap": {"S": 2, "M": 3, "L": 5}},
     "implement": {"maxFixAttempts": 2, "autoAdvance": True},
 }
+
+# Check commands that may be null: the project has no such check (LOOM_SPEC.md 19.1).
+OPTIONAL_CHECKS = ("lint", "typecheck", "test")
+CHECK_KEYS = OPTIONAL_CHECKS + ("check",)
+
+# Optional keys with defaults outside DEFAULT_CONFIG (the loom.json template does
+# not list them). The docs map defaults lie below docsDir (LOOM_SPEC.md 15).
+DOCS_FILE_ROLES = {
+    "vision": "product/vision.md",
+    "overview": "architecture/overview.md",
+    "conventions": "conventions.md",
+}
+DOCS_DIR_ROLES = {"tasks": "tasks"}
+DOCS_ROLES = ("vision", "overview", "decisions", "conventions", "tasks")
+DEFAULT_DECISIONS_DIR = "architecture/decisions"
+DEFAULT_DECISIONS_PATTERN = "<NNNN>-<slug>.md"
+DEFAULT_CI: Dict[str, Any] = {"requiredCheck": "check"}
+DEFAULT_PULL_REQUEST: Dict[str, Any] = {"requiredSections": []}
 
 BRANCH_RE = re.compile(r"^(feat|fix|chore|docs|refactor)/(\d+)-(.+)$")
 
@@ -215,7 +234,214 @@ def load_config(top: str) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     if not isinstance(cfg.get("checks"), dict):
         warnings.append("%s: invalid 'checks'; using defaults" % CONFIG_PATH)
         cfg["checks"] = copy.deepcopy(DEFAULT_CONFIG["checks"])
+    warnings.extend(_resolve_checks(cfg["checks"]))
+    cfg["docs"], w = resolve_docs(data.get("docs"), cfg["docsDir"], cfg["workDir"])
+    warnings.extend(w)
+    cfg["ci"], w = resolve_ci(data.get("ci"))
+    warnings.extend(w)
+    cfg["pullRequest"], w = resolve_pull_request(data.get("pullRequest"))
+    warnings.extend(w)
     return cfg, warnings
+
+
+def _invalid(key: str, value: Any, default: Any) -> str:
+    return "%s: invalid %r (%s); using the default %s" % (
+        CONFIG_PATH, key, json.dumps(value, ensure_ascii=False), json.dumps(default, ensure_ascii=False))
+
+
+def _resolve_checks(checks: Dict[str, Any]) -> List[str]:
+    """Validate the check commands in place (LOOM_SPEC.md 19.1).
+
+    `lint`, `typecheck`, and `test` are a command or null (no such check); an
+    empty string is null with a warning (it turned the check off in 1.1.0).
+    `check` is always a command. Another invalid value takes its default.
+    """
+    warnings: List[str] = []
+    for key in CHECK_KEYS:
+        value = checks.get(key)
+        if value is None and key in OPTIONAL_CHECKS:
+            continue
+        if isinstance(value, str) and value.strip():
+            continue
+        if isinstance(value, str) and key in OPTIONAL_CHECKS:
+            warnings.append("%s: empty 'checks.%s' means no such check; use null" % (CONFIG_PATH, key))
+            checks[key] = None
+            continue
+        default = DEFAULT_CONFIG["checks"][key]
+        warnings.append(_invalid("checks." + key, value, default))
+        checks[key] = default
+    return warnings
+
+
+# Directories that never hold a document of the docs map: git, Claude Code, and loom's working area.
+RESERVED_DIRS = (".git", ".claude", LOOM_DIR)
+
+
+def _clean_path(value: Any, work_dir: str) -> Optional[str]:
+    """A docs map path, normalized; None if invalid.
+
+    Valid: a non-empty relative path, not `.` (the git top level), without a
+    `..` segment, and not at or below workDir, `.git/`, `.claude/`, or `.loom/`.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.startswith("/") or os.path.isabs(text) or ".." in text.split("/"):
+        return None
+    path = posixpath.normpath(text)
+    if path == "." or _is_under(path, posixpath.normpath(work_dir)):
+        return None
+    if any(_is_under(path, reserved) for reserved in RESERVED_DIRS):
+        return None
+    return path
+
+
+_NUMBER_PLACEHOLDER_RE = re.compile(r"<(N+)>")
+
+
+def valid_decisions_pattern(value: Any) -> bool:
+    """A file name (no `/`) ending in `.md`, with `<slug>` once and one `<N…N>` of 1-6 N."""
+    if not isinstance(value, str) or "/" in value or not value.endswith(".md"):
+        return False
+    numbers = _NUMBER_PLACEHOLDER_RE.findall(value)
+    return value.count("<slug>") == 1 and len(numbers) == 1 and 1 <= len(numbers[0]) <= 6
+
+
+def default_docs(docs_dir: str) -> Dict[str, Any]:
+    """The docs map with every role at its default path below docsDir."""
+    base = posixpath.normpath(docs_dir.strip())
+
+    def below(rel: str) -> str:
+        return posixpath.normpath(posixpath.join(base, rel))
+
+    return {
+        "dir": base,
+        "vision": below(DOCS_FILE_ROLES["vision"]),
+        "overview": below(DOCS_FILE_ROLES["overview"]),
+        "decisions": {"dir": below(DEFAULT_DECISIONS_DIR), "pattern": DEFAULT_DECISIONS_PATTERN},
+        "conventions": below(DOCS_FILE_ROLES["conventions"]),
+        "tasks": below(DOCS_DIR_ROLES["tasks"]),
+    }
+
+
+def resolve_docs(raw: Any, docs_dir: str, work_dir: str) -> Tuple[Dict[str, Any], List[str]]:
+    """Resolve loom.json `docs` (the docs map) against the defaults (LOOM_SPEC.md 15, 19.1).
+
+    Returns ({dir, vision, overview, decisions: {dir, pattern}, conventions,
+    tasks}, warnings). `dir` is docsDir. Paths are relative to the git top
+    level. An invalid value gets a warning and its default.
+    """
+    docs = default_docs(docs_dir)
+    warnings: List[str] = []
+    if raw is None:
+        return docs, warnings
+    if not isinstance(raw, dict):
+        warnings.append("%s: 'docs' is not an object; using the default docs map" % CONFIG_PATH)
+        return docs, warnings
+    for key in raw:
+        if key not in DOCS_ROLES:
+            warnings.append("%s: unknown key 'docs.%s' ignored" % (CONFIG_PATH, key))
+    for role in list(DOCS_FILE_ROLES) + list(DOCS_DIR_ROLES):
+        if role not in raw:
+            continue
+        path = _clean_path(raw[role], work_dir)
+        if path is None or (role in DOCS_FILE_ROLES and not path.endswith(".md")):
+            warnings.append(_invalid("docs." + role, raw[role], docs[role]))
+        else:
+            docs[role] = path
+    if "decisions" in raw:
+        decisions = raw["decisions"]
+        if not isinstance(decisions, dict):
+            warnings.append(_invalid("docs.decisions", decisions, docs["decisions"]))
+            return docs, warnings
+        for key in decisions:
+            if key not in ("dir", "pattern"):
+                warnings.append("%s: unknown key 'docs.decisions.%s' ignored" % (CONFIG_PATH, key))
+        if "dir" in decisions:
+            path = _clean_path(decisions["dir"], work_dir)
+            if path is None:
+                warnings.append(_invalid("docs.decisions.dir", decisions["dir"], docs["decisions"]["dir"]))
+            else:
+                docs["decisions"]["dir"] = path
+        if "pattern" in decisions:
+            if valid_decisions_pattern(decisions["pattern"]):
+                docs["decisions"]["pattern"] = decisions["pattern"]
+            else:
+                warnings.append(_invalid("docs.decisions.pattern", decisions["pattern"], DEFAULT_DECISIONS_PATTERN))
+    return docs, warnings
+
+
+def resolve_ci(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
+    """Resolve loom.json `ci`: `requiredCheck` is the CI check that runs checks.check."""
+    ci = copy.deepcopy(DEFAULT_CI)
+    warnings: List[str] = []
+    if raw is None:
+        return ci, warnings
+    if not isinstance(raw, dict):
+        warnings.append(_invalid("ci", raw, ci))
+        return ci, warnings
+    for key in raw:
+        if key not in ci:
+            warnings.append("%s: unknown key 'ci.%s' ignored" % (CONFIG_PATH, key))
+    if "requiredCheck" in raw:
+        value = raw["requiredCheck"]
+        if isinstance(value, str) and value.strip():
+            ci["requiredCheck"] = value.strip()
+        else:
+            warnings.append(_invalid("ci.requiredCheck", value, DEFAULT_CI["requiredCheck"]))
+    return ci, warnings
+
+
+_REQUIRED_SECTION_RE = re.compile(r"^#{2,3} +\S[^\r\n]*$")
+
+
+def resolve_pull_request(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
+    """Resolve loom.json `pullRequest`: `requiredSections` lists `## <text>` or `### <text>` headings.
+
+    An invalid item, or a repeated one, is dropped with a warning.
+    """
+    pull_request = copy.deepcopy(DEFAULT_PULL_REQUEST)
+    warnings: List[str] = []
+    if raw is None:
+        return pull_request, warnings
+    if not isinstance(raw, dict):
+        warnings.append(_invalid("pullRequest", raw, pull_request))
+        return pull_request, warnings
+    for key in raw:
+        if key not in pull_request:
+            warnings.append("%s: unknown key 'pullRequest.%s' ignored" % (CONFIG_PATH, key))
+    if "requiredSections" not in raw:
+        return pull_request, warnings
+    sections = raw["requiredSections"]
+    if not isinstance(sections, list):
+        warnings.append(_invalid("pullRequest.requiredSections", sections, []))
+        return pull_request, warnings
+    for item in sections:
+        heading = item.strip() if isinstance(item, str) else None
+        if heading is None or not _REQUIRED_SECTION_RE.match(heading):
+            warnings.append("%s: invalid item %s in 'pullRequest.requiredSections' dropped (a heading "
+                            "`## <text>` or `### <text>`)" % (CONFIG_PATH, json.dumps(item, ensure_ascii=False)))
+        elif heading in pull_request["requiredSections"]:
+            warnings.append("%s: repeated item %s in 'pullRequest.requiredSections' dropped"
+                            % (CONFIG_PATH, json.dumps(item, ensure_ascii=False)))
+        else:
+            pull_request["requiredSections"].append(heading)
+    return pull_request, warnings
+
+
+def docs_change_paths(cfg: Dict[str, Any]) -> List[str]:
+    """Paths whose changes count as docs changes: docsDir and every path of the docs map.
+
+    Used by `workingTreeDocsOnly` and the Stop hook (LOOM_SPEC.md 8.2, 11.5).
+    """
+    docs = cfg.get("docs") or default_docs(cfg["docsDir"])
+    paths = [cfg["docsDir"], docs["dir"], docs["decisions"]["dir"]]
+    paths += [docs[role] for role in list(DOCS_FILE_ROLES) + list(DOCS_DIR_ROLES)]
+    unique: List[str] = []
+    for path in paths:
+        if path not in unique:
+            unique.append(path)
+    return unique
 
 
 def load_repo_config(cwd: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
@@ -630,8 +856,8 @@ def working_tree_status(
 ) -> Tuple[Optional[str], List[str]]:
     """Return ("clean" | "dirty", warnings). Files under workDir are ignored.
 
-    extra_ignore: more directories (relative to top) whose changes do not count,
-    e.g. the Stop hook ignores `.loom/` and docsDir.
+    extra_ignore: more paths (relative to top) whose changes do not count, at
+    or below each path, e.g. the Stop hook ignores `.loom/` and the docs paths.
     """
     rc, out, err = git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], top)
     if rc != 0:
@@ -1095,6 +1321,11 @@ def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
         "branch": branch,
         "mainBranch": main_branch,
         "onMain": branch == main_branch,
+        # Resolved configuration (LOOM_SPEC.md 19.1): skills read these, never loom.json.
+        "docs": cfg["docs"],
+        "checks": {key: cfg["checks"].get(key) for key in CHECK_KEYS},
+        "ci": cfg["ci"],
+        "pullRequest": cfg["pullRequest"],
         "task": None,
         "artifacts": [],
         "implementation": None,
@@ -1108,8 +1339,9 @@ def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
     state["workingTree"] = tree
     warnings.extend(w)
     if tree == "dirty":
-        # Dirty only below docsDir (an interrupted describe-pr writes docs before its commit).
-        docs_tree, _ = working_tree_status(top, cfg, extra_ignore=(LOOM_DIR, cfg["docsDir"]))
+        # Dirty only in docs paths: below docsDir or at or below a docs map path
+        # (an interrupted describe-pr writes docs before its commit).
+        docs_tree, _ = working_tree_status(top, cfg, extra_ignore=(LOOM_DIR,) + tuple(docs_change_paths(cfg)))
         state["workingTreeDocsOnly"] = docs_tree == "clean"
 
     m = BRANCH_RE.match(branch or "")

@@ -218,11 +218,16 @@ class SubagentChecksTest(RepoTestCase):
         self.assertNotIn("line-1\n", proc.stderr)
         self.assertIn("output shortened", proc.stderr)
 
-    def test_empty_check_command_warns(self):
-        self.write_config({"checks": {"check": ""}})
-        proc = self.run_checks()
-        self.assertEqual(proc.returncode, 0)
-        self.assertIn("no checks.check", json.loads(proc.stdout)["systemMessage"])
+    def test_invalid_check_command_takes_the_default(self):
+        # checks.check is never null or empty (LOOM_SPEC.md 19.1): an invalid value takes `make check`.
+        write(self.path("Makefile"), "check:\n\t@echo make-check-ran; exit 1\n")
+        for value in ("", None, 5):
+            with self.subTest(value=value):
+                self.write_config({"checks": {"check": value}})
+                proc = self.run_checks(agent_id="agent-%r" % (value,))  # a fresh attempt counter
+                self.assertEqual(proc.returncode, 2)
+                self.assertIn("make-check-ran", proc.stderr)
+                self.assertIn("`make check`", proc.stderr)
 
     def test_invalid_input_is_ignored(self):
         proc = run_hook(CHECKS, None, raw="not json", cwd=self.repo, env=self.env)
@@ -322,10 +327,41 @@ class StopLintTest(RepoTestCase):
         proc = self.run_lint()
         self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "", ""))
 
-    def test_missing_lint_command_is_a_no_op(self):
-        self.write_config({"checks": {"lint": ""}, "hooks": {"stopLint": True}})
+    def test_null_lint_command_is_a_no_op(self):
+        self.write_config({"checks": {"lint": None}, "hooks": {"stopLint": True}})
         write(self.path("src", "app.py"), "x = 1\n")
+        proc = self.run_lint()
+        self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "", ""))
+
+    def test_empty_lint_command_is_off(self):
+        # An empty optional check means "no such check", as in 1.1.0 (loom-state warns: use null).
+        self.write_config({"checks": {"lint": "  "}, "hooks": {"stopLint": True}})
+        write(self.path("Makefile"), "lint:\n\t@echo make-lint-ran; exit 1\n")
+        write(self.path("src", "app.py"), "x = 1\n")
+        proc = self.run_lint()
+        self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "", ""))
+
+    def test_invalid_lint_command_takes_the_default(self):
+        self.write_config({"checks": {"lint": 5}, "hooks": {"stopLint": True}})
+        write(self.path("Makefile"), "lint:\n\t@echo make-lint-ran; exit 1\n")
+        write(self.path("src", "app.py"), "x = 1\n")
+        proc = self.run_lint()
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("make-lint-ran", proc.stderr)
+
+    def test_docs_map_paths_skip_lint(self):
+        self.write_config({"checks": {"lint": "exit 1"}, "hooks": {"stopLint": True},
+                           "docs": {"overview": "ARCHITECTURE.md", "decisions": {"dir": "adr"},
+                                    "tasks": "notes/tasks"}})
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "config")
+        write(self.path("ARCHITECTURE.md"), "# Architecture\n")
+        write(self.path("adr", "0001-x.md"), "# 0001. X\n")
+        write(self.path("notes", "tasks", "42-x.md"), "# summary\n")
+        write(self.path("docs", "conventions.md"), "x\n")  # the default role path below docsDir
         self.assertEqual(self.run_lint().returncode, 0)
+        write(self.path("notes", "other.md"), "x\n")  # next to a mapped path, not below it
+        self.assertEqual(self.run_lint().returncode, 2)
 
 
 if __name__ == "__main__":

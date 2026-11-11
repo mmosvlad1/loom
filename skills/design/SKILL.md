@@ -66,7 +66,7 @@ Follow this rule exactly. An eval checks it.
 - **Never read `01-research-questions.md`.** It is an input of the research phase only. Use the research instead.
 - Do not read `*.superseded.md` files.
 - Read every file the arguments mention, in full.
-- You may read the project docs in `<docsDir>` (from `.claude/loom.json`, default `docs`) if they exist: `architecture/overview.md`, `architecture/decisions/`, `conventions.md`.
+- You may read the project docs if they exist. Take their paths from `docs` in the state (the docs map); never build a doc path yourself: `docs.overview`, the decisions in `docs.decisions.dir`, and `docs.conventions`.
 - Read the inputs yourself, in the main context, before you spawn any agent.
 
 When the ticket and the research disagree about current behavior, the research and the code win. When they disagree about the goal, the ticket wins.

@@ -112,6 +112,24 @@ class DocsSkeletonTest(unittest.TestCase):
                 expected.add(path)
         self.assertEqual(set(self.template_paths()), expected)
 
+    def test_skeleton_by_docs_role(self):
+        """setup writes one skeleton target per docs role, at the path of the docs map (LOOM_SPEC.md 15)."""
+        body = read(os.path.join(SETUP, "SKILL.md"))
+        table = body.split("The docs skeleton, by docs role.", 1)[1].split("\n\n", 2)[1]
+        rows = re.findall(r"^\| `(\w+)` \| `([^`]+)` \| `templates/([^`]+)`", table, re.MULTILINE)
+        self.assertEqual([r[0] for r in rows], ["vision", "overview", "conventions", "decisions", "tasks"])
+        defaults = ls.default_docs("docs")
+        for role, target, skeleton in rows:
+            with self.subTest(role=role):
+                self.assertTrue(os.path.isfile(os.path.join(TEMPLATES, *skeleton.split("/"))), skeleton)
+                # Before loom.json exists, the default path of a role is its skeleton path below templates/.
+                default = defaults[role]["dir"] if role == "decisions" else defaults[role]
+                expected = default + "/.gitkeep" if role in ("decisions", "tasks") else default
+                self.assertEqual(skeleton, expected)
+                self.assertIn("docs.%s" % ("decisions.dir" if role == "decisions" else role), target)
+        self.assertIn("the path of its skeleton file relative to `templates/`", body)
+        self.assertIn("Then run `loom-state --json`. Take `checks` and the docs paths (`docs`) from it", body)
+
     def test_spec_9_1_lists_the_skeleton(self):
         section = spec_section("### 9.1 `setup`", "### 9.2 `backlog`")
         for path in ("product/vision.md", "architecture/overview.md", "architecture/decisions/", "conventions.md", "tasks/"):
@@ -137,8 +155,9 @@ class DocsSkeletonTest(unittest.TestCase):
     def test_claude_md_is_short_and_links_docs(self):
         text = template("CLAUDE.md")
         self.assertLessEqual(len(text.splitlines()), 30)
-        for link in ("docs/product/vision.md", "docs/architecture/overview.md", "docs/conventions.md", "docs/tasks/",
-                     "<checks.check>", "/loom:start-task", "/loom:next"):
+        # Doc links are the docs map paths of the state (LOOM_SPEC.md 15), filled in by setup.
+        for link in ("`<docs.vision>`", "`<docs.overview>`", "`<docs.decisions.dir>/`", "`<docs.conventions>`",
+                     "`<docs.tasks>/`", "<checks.check>", "/loom:start-task", "/loom:next"):
             with self.subTest(link=link):
                 self.assertIn(link, text)
 

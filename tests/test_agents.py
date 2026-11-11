@@ -190,8 +190,11 @@ class AgentPromptTest(unittest.TestCase):
     def test_implementer_rules(self):
         body = self.body("implementer")
         for needle in (
-            "exactly ONE", "04-plan.md", "00-ticket.md", "`<docsDir>/conventions.md`", "`docsDir` from `.claude/loom.json`",
-            ".claude/loom.json", "checks.check", "SubagentStop", "git commit", "git push",
+            "exactly ONE", "04-plan.md", "00-ticket.md", "Conventions: <path of the conventions document>",
+            "Checks: check = `<command>`; lint = `<command>`; typecheck = `<command>`; test = `<command>`",
+            "Do not read `.claude/loom.json`", "never invent a command for it", "Never run a check that is `null`",
+            "run `loom-state --json` and take `checks` and `docs.conventions` from its output",
+            "checks.check", "SubagentStop", "git commit", "git push",
             "git switch", "### Files changed", "### Checks", "### Deviations from the plan",
             "### Manual verification needed", "### Open problems", "## Ownership",
             "exactly as configured and unfiltered", "Run no other git command", "Use `rm` and `mv`", "continue from it",
@@ -199,6 +202,18 @@ class AgentPromptTest(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, body)
+
+    def test_implementer_never_reads_loom_json(self):
+        body = read(os.path.join(AGENTS_DIR, "implementer.md"))
+        self.assertEqual(re.findall(r"(?<!not )[Rr]ead `?\.claude/loom\.json", body), [])
+        self.assertNotIn("from .claude/loom.json", body)
+        self.assertNotIn("docsDir", body)
+
+    def test_reviewer_takes_the_conventions_from_its_prompt(self):
+        body = self.body("implementation-reviewer")
+        self.assertIn("`Conventions: <path>`", body)
+        self.assertIn("If the prompt names none, skip this check; do not guess a path.", body)
+        self.assertNotIn("docsDir", body)
 
     def test_reviewer_verdict_format_matches_spec(self):
         body = self.body("implementation-reviewer")

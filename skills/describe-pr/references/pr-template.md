@@ -6,6 +6,8 @@ Template of the PR body (quick and full mode). Guidance for describe-pr. Remove 
   replace the plan inside <details> with its `## Phase Overview` section and this line:
   `The full plan is longer than the PR body allows; only its Phase Overview is attached.`
 - The PR title is not part of the body: `<type>(<scope>): <summary of the task> (#<n>)` (Conventional Commits).
+- Required sections: `pullRequest.requiredSections` in the loom-state output (empty by default). A required heading
+  that this layout already has (the same heading line) is that section. See the comment before <details>.
 -->
 
 Closes #<n>
@@ -47,10 +49,16 @@ Omit unchanged parts.
 ## Decisions
 
 <!--
-Links to the ADRs this PR adds and to the task summary, e.g.
-`- [ADR 0003: Use SQLite for agent state](docs/architecture/decisions/0003-use-sqlite-for-agent-state.md)`
-`- Task summary: [docs/tasks/42-auth-flow.md](docs/tasks/42-auth-flow.md)`
-Add one line per other resolved decision a reviewer needs. Use the real docsDir path.
+Links to the ADRs this PR adds and to the task summary, by their repository paths, e.g.
+`- [ADR 0003: Use SQLite for agent state](<docs.decisions.dir>/0003-use-sqlite-for-agent-state.md)`
+`- Task summary: [<docs.tasks>/42-auth-flow.md](<docs.tasks>/42-auth-flow.md)`
+Add one line per other resolved decision a reviewer needs. Take the real paths from `docs` in the loom-state output.
+-->
+
+<!--
+Required sections: every heading of `pullRequest.requiredSections` that this layout does not have, exactly as listed,
+in the order of the list. Fill each from the task's artifacts, or write the single line None. when nothing applies.
+Without required sections, nothing goes here.
 -->
 
 <details><summary>Implementation plan</summary>
@@ -62,4 +70,5 @@ Add one line per other resolved decision a reviewer needs. Use the real docsDir 
 <!--
 oneshot mode: a short body with only three parts, in this order: the `Closes #<n>` line, the Why section, and the Verification section.
 No Special things to note, no Change outline, no Decisions, and no plan.
+The required sections that this layout does not have are the exception: they come after the Verification section.
 -->

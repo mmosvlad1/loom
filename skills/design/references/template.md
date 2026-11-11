@@ -71,4 +71,4 @@ Follow the shared `question-rounds.md` exactly:
 
 ## Testing Approach
 
-<!-- How the change is tested: which existing test patterns to follow (with `path:line`), which new tests, and which checks from `.claude/loom.json` cover them. -->
+<!-- How the change is tested: which existing test patterns to follow (with `path:line`), which new tests, and which checks (`checks` in the loom-state output) cover them. -->

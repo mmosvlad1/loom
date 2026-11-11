@@ -1444,9 +1444,11 @@ class DescribePrTest(unittest.TestCase):
 
     def test_key_rules(self):
         body = self.body()
-        for needle in ("`<docs>/tasks/<n>-<slug>.md`", "`<docs>/architecture/decisions/`", "`ADR?` = `yes`",
-                       "plus 1, with four digits", "`0001`", "`<docs>/architecture/overview.md`",
-                       "only if `<docs>/architecture/overview.md` changed", "git fetch origin <main>",
+        for needle in ("`<tasks>/<n>-<slug>.md`", "List `<decisions>`", "`ADR?` = `yes`",
+                       "whose names match `<pattern>`", "plus 1. Pad it with zeros to the length of the placeholder",
+                       "`0001`", "`<NNN>` starts at `001`", "Compare the change (the diff, the design, and the ADRs) with `<overview>`",
+                       "only if `<overview>` changed", "the ADR slug that `adr-template.md` defines, not `task.slug`",
+                       "A number longer than the placeholder is written in full, never cut", "git fetch origin <main>",
                        "run `checks.check` again", "`git push -u origin <branch>`", "gh pr create --base <main>",
                        "`<type>(<scope>): <summary of the task> (#<n>)`", "`pr: <number>`", "Ask for one confirmation",
                        "Create only confirmed issues"):
@@ -1465,8 +1467,8 @@ class DescribePrTest(unittest.TestCase):
         self.assertIn("| PR description | short | full | full |", spec)
         self.assertIn("| PR body | short: `Closes`, Why, Verification |", self.body())
         body = self.body()
-        self.assertIn("| Docs commit | only if `overview.md` changed | if any docs file changed |", body)
-        self.assertIn("| Task summary `<docs>/tasks/<n>-<slug>.md` | no | yes |", body)
+        self.assertIn("| Docs commit | only if `<overview>` changed | if any docs file changed |", body)
+        self.assertIn("| Task summary `<tasks>/<n>-<slug>.md` | no | yes |", body)
 
 
 class FinishTaskTest(unittest.TestCase):
@@ -1487,7 +1489,7 @@ class FinishTaskTest(unittest.TestCase):
                        "`chore/<n>-loom-setup`", "`Set up loom`", "gh api repos/{owner}/{repo}/rules/branches/<main>",
                        "read-only and needs no confirmation", "`~DEFAULT_BRANCH`", "no bypass actors",
                        "gh api --method POST repos/{owner}/{repo}/rulesets",
-                       '"required_approving_review_count": 0', '"context": "check"', "non_fast_forward", "deletion"):
+                       '"required_approving_review_count": 0', '"context": "<required check>"', "non_fast_forward", "deletion"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, body)
         self.assertNotRegex(body, r"gh pr merge \d")
@@ -1504,7 +1506,9 @@ class FinishTaskTest(unittest.TestCase):
     def test_idempotent_steps(self):
         body = self.body()
         for needle in ("`pr.state` is `MERGED` | The merge already happened.", "offer the stash of `git-flow.md`",
-                       "the archive is done. Skip this step", "a ruleset already protects `<main>`: skip this step",
+                       "the archive is done. Skip this step", "a ruleset already requires the check: skip this step",
+                       "classic protection already requires the check: skip this step",
+                       "If the GET fails with HTTP 403 or 404, the rules are unknown: continue with item 2.",
                        "## Resume on the main branch"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, body)
@@ -1759,7 +1763,7 @@ class BacklogSkillTest(unittest.TestCase):
     def test_reads_issue_format_and_context(self):
         body = self.body()
         self.assertIn("${CLAUDE_SKILL_DIR}/references/issue-format.md", body.split("## 1. Check preconditions", 1)[0])
-        for needle in ("`<docs>/product/vision.md`", "gh issue list --state open", "Skeleton written by /loom:setup",
+        for needle in ("`<vision>` is `docs.vision`", "gh issue list --state open", "Skeleton written by /loom:setup",
                        "| The state is empty |", "`Next: /loom:setup`", "new issues do not change it"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, body)
@@ -1781,9 +1785,10 @@ class BacklogSkillTest(unittest.TestCase):
         self.assertIsNone(re.match(r"^\d+-", "_drafts"), "loom-state matches task directories by <n>-")
 
     def test_writing_style_exception(self):
-        self.assertIn("It does not apply to the discussion with the user or to `vision.md`", self.body())
+        self.assertIn("It does not apply to the discussion with the user or to the vision document", self.body())
         spec = spec_section("### 14.2 Where it applies", "## 15. Project Documentation Structure")
-        self.assertIn("| `vision.md`, `backlog` discussion | No |", spec)
+        self.assertIn("| The vision document, `backlog` discussion | No |", spec)
+        self.assertIn("| The vision document, `backlog` discussion | No |", shared("writing-style.md"))
 
     def test_vision_never_commits_on_main(self):
         vision = self.body().split("## Fill the vision", 1)[1].split("\n## ", 1)[0]
@@ -1850,6 +1855,259 @@ class StartTaskSkillTest(unittest.TestCase):
                 self.assertIn("| `%s` |" % key, documented)
         spec = spec_section("### 13.1 Frontmatter and gates", "### 13.2 Working artifacts")
         self.assertIn("The ticket has no `status`, `based_on`, `git_commit`, or `updated`.", spec)
+
+
+# ---------------------------------------------------------------------------
+# M9a: the docs map, the resolved check commands, ci, and pullRequest (§8.2, §15, §19.1)
+# ---------------------------------------------------------------------------
+
+# Keys that skills and agents take from the loom-state output, never from loom.json.
+STATE_CONFIG_KEYS = ("docs", "docsDir", "checks", "ci", "pullRequest")
+_KEY = r"`<?(?:%s)>?(?:\.[\w.<>]+)?`" % "|".join(STATE_CONFIG_KEYS)
+CONFIG_READ_PATTERNS = [
+    # "Read `.claude/loom.json` → `checks`", "Read `.claude/loom.json` and note the `checks` commands"
+    re.compile(r"[Rr]ead `?\.claude/loom\.json`?(?: at the git top level)?[^.;\n]*?" + _KEY),
+    # "`docsDir` from `.claude/loom.json`", "`checks.check` from `.claude/loom.json`"
+    re.compile(_KEY + r"[^.\n]{0,40}? (?:from|in) `?\.claude/loom\.json"),
+    # "`docsDir` (from `.claude/loom.json`, default `docs`)"
+    re.compile(_KEY + r"\s*\(from `?\.claude/loom\.json"),
+]
+# Role paths that a skill would build itself (the defaults of the docs map, §15).
+ROLE_PATH_PATTERNS = [
+    re.compile(r"<docs(?:Dir)?>"),
+    re.compile(r"\bdocsDir\b"),
+    re.compile(r"product/vision\.md"),
+    re.compile(r"architecture/overview\.md"),
+    re.compile(r"architecture/decisions"),
+    re.compile(r"(?<![\w-])conventions\.md"),
+    re.compile(r"docs/tasks"),
+]
+
+
+def config_table_keys(text: str) -> List[str]:
+    """Keys of a `| Key | Default |` table that follows a "Read `.claude/loom.json`" line."""
+    keys: List[str] = []
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if "Read `.claude/loom.json`" not in line:
+            continue
+        for row in lines[i + 1:i + 15]:
+            m = re.match(r"^\|\s*`([^`]+)`\s*\|", row)
+            if m:
+                keys.append(m.group(1))
+    return keys
+
+
+def config_reads(text: str) -> List[str]:
+    """What a text reads from loom.json among STATE_CONFIG_KEYS: matched phrases and table keys."""
+    found = [m.group(0) for rx in CONFIG_READ_PATTERNS for m in rx.finditer(text)]
+    found += [k for k in config_table_keys(text) if k.split(".")[0] in STATE_CONFIG_KEYS]
+    return found
+
+
+def prompt_texts() -> Dict[str, str]:
+    """Every skill, its .md references, the shared snippets, and the implementer and reviewer agents."""
+    paths = glob.glob(os.path.join(SKILLS_DIR, "*", "SKILL.md")) + reference_files("*.md")
+    paths += glob.glob(os.path.join(SKILLS_DIR, "_shared", "*.md"))
+    paths += [os.path.join(AGENTS_DIR, n + ".md") for n in ("implementer", "implementation-reviewer")]
+    return {os.path.relpath(p, ROOT): read(p) for p in sorted(set(paths))}
+
+
+class ConfigFromStateTest(unittest.TestCase):
+    """Skills read docs, checks, ci, and pullRequest from loom-state and never build a role path (§15, §19.1)."""
+
+    def test_lints_catch_the_old_forms(self):
+        old = [
+            "Read `.claude/loom.json` → `checks`. If a key is missing, use the default.",
+            "Read `<docsDir>/conventions.md` if it exists (`docsDir` from `.claude/loom.json`, default `docs`).",
+            "4. Read `.claude/loom.json` and note the `checks` commands.",
+            "- Run `checks.check` from `.claude/loom.json` exactly as configured.",
+            "- You may read the project docs in `<docsDir>` (from `.claude/loom.json`, default `docs`).",
+            "Read `.claude/loom.json` at the git top level. If a key is missing, use the default:\n\n"
+            "| Key | Default |\n|---|---|\n| `docsDir` | `docs` |\n| `checks.check` | `make check` |",
+            "Read `.claude/loom.json` → `ci.requiredCheck`.",
+            "`pullRequest.requiredSections` from `.claude/loom.json`",
+        ]
+        for text in old:
+            with self.subTest(text=text[:50]):
+                self.assertTrue(config_reads(text), text)
+        for text in ("Write `<docs>/tasks/<n>-<slug>.md`.", "Read `docs/architecture/overview.md`.",
+                     "Read `<docsDir>/conventions.md`.", "`docs/conventions.md`"):
+            with self.subTest(text=text):
+                self.assertTrue(any(rx.search(text) for rx in ROLE_PATH_PATTERNS), text)
+        for text in ("Cap: `.claude/loom.json` → `rounds.cap.<size>`.", "`workDir` from `.claude/loom.json`",
+                     "Take them from there, never from `.claude/loom.json`.", "`visual-conventions.md`",
+                     "| **checks** | The commands in `loom.json` → `checks` |"):
+            with self.subTest(text=text):
+                self.assertEqual(config_reads(text), [])
+                self.assertFalse(any(rx.search(text) for rx in ROLE_PATH_PATTERNS), text)
+
+    def test_no_skill_reads_these_keys_from_loom_json(self):
+        for name, text in prompt_texts().items():
+            if name.startswith(os.path.join("skills", "setup", "references")):
+                continue  # the stack recipes and templates say what setup writes into loom.json
+            with self.subTest(file=name):
+                self.assertEqual(config_reads(text), [])
+
+    def test_no_skill_builds_a_role_path(self):
+        for name, text in prompt_texts().items():
+            text = re.sub(r"templates/docs/[\w./-]*", "", text)  # setup's skeleton templates
+            for rx in ROLE_PATH_PATTERNS:
+                with self.subTest(file=name, pattern=rx.pattern):
+                    self.assertIsNone(rx.search(text))
+
+    def test_doc_paths_come_from_the_state(self):
+        for name, needles in {
+            "backlog": ["`<vision>` is `docs.vision`", "`<overview>` is `docs.overview`", "`<tasks>` is `docs.tasks`"],
+            "design": ["`docs.overview`", "`docs.decisions.dir`", "`docs.conventions`"],
+            "plan": ["`docs.conventions`", "`docs.overview`", "from `checks` in the state"],
+            "describe-pr": ["`docs.tasks`", "`docs.decisions.dir`", "`docs.decisions.pattern`", "`docs.overview`",
+                            "`pullRequest.requiredSections`"],
+            "implement": ["`checks` and `docs.conventions` to the agents"],
+            "iterate": ["`checks` and `docs.conventions` to the agents"],
+            "setup": ["`docs.vision`", "`docs.overview`", "`docs.conventions`", "`<docs.decisions.dir>/.gitkeep`",
+                      "`<docs.tasks>/.gitkeep`"],
+            "finish-task": ["`ci.requiredCheck` from the state"],
+        }.items():
+            for needle in needles:
+                with self.subTest(skill=name, needle=needle):
+                    self.assertIn(needle, skill_md(name))
+        self.assertIn("`<tasks>` is `docs.tasks`", shared("pr-update.md"))
+
+    def test_spec_names_the_skills_that_use_the_docs_map(self):
+        spec = spec_section("## 15. Project Documentation Structure", "## 16. Git Conventions")
+        self.assertNotIn("Planned", spec)
+        for name in ("`setup`", "`backlog`", "`design`", "`plan`", "`implement`", "`iterate`", "`describe-pr`",
+                     "`_shared/pr-update.md`"):
+            with self.subTest(skill=name):
+                self.assertIn(name, spec.split("- Every skill that names a doc path", 1)[1].split("\n", 1)[0])
+
+    def test_implementer_and_reviewer_get_the_configuration_in_their_prompt(self):
+        loop = shared("implementation-loop.md")
+        for needle in ("Checks: check = `<checks.check>`; lint = `<checks.lint>`; typecheck = `<checks.typecheck>`; "
+                       "test = `<checks.test>`", "Conventions: <docs.conventions>", "`null` without backticks",
+                       "The implementer gets both lines. The reviewer gets the `Conventions:` line.",
+                       "with a short prompt and the configuration lines above",
+                       "the `Conventions:` line, the implementer's report"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, loop)
+        iterate = skill_md("iterate").split("### The fix loop", 1)[1]
+        self.assertIn("the fix items, and the `Checks:` and `Conventions:` lines of `implementation-loop.md`", iterate)
+        self.assertIn("the fix items, the `Conventions:` line, and the implementer's report", iterate)
+        self.assertIn("the `Conventions:` line, and the diff", skill_md("iterate"))
+        self.assertIn("Configuration: the `Checks:` line (`checks` from the state) and the `Conventions:` line",
+                      skill_md("implement"))
+
+    def test_plan_skips_null_checks(self):
+        body = skill_md("plan")
+        self.assertIn("A `null` check does not exist in the project: never plan it, and never invent a command for it.",
+                      body)
+        self.assertIn("never a `null` one", body)
+
+
+class RequiredSectionsTest(unittest.TestCase):
+    """pullRequest.requiredSections in describe-pr, pr-template.md, and pr-update.md (§13.6)."""
+
+    def test_describe_pr_places_the_required_sections(self):
+        body = skill_md("describe-pr")
+        draft = body.split("### Draft", 1)[1].split("### Confirm", 1)[0]
+        for needle in ("**Required sections**: `pullRequest.requiredSections` from the state",
+                       "A required heading that the layout above already has (the same heading line",
+                       "Write every other required heading after Decisions (oneshot: after Verification), before "
+                       "`<details>`, in the order of the list, exactly as listed",
+                       "the single line None. (no backticks) when nothing applies"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, draft)
+
+    def test_template_places_the_required_sections(self):
+        text = reference("describe-pr", "pr-template.md")
+        decisions = text.index("## Decisions")
+        details = text.index("<details><summary>")
+        required = text.index("Required sections: every heading of `pullRequest.requiredSections`")
+        self.assertLess(decisions, required)
+        self.assertLess(required, details)
+        oneshot = text.rsplit("<!--", 1)[1]
+        self.assertIn("they come after the Verification section", oneshot)
+
+    def test_pr_update_keeps_them_and_ignores_them_in_the_old_layout_check(self):
+        text = shared("pr-update.md")
+        for needle in ("Keep the required sections: `pullRequest.requiredSections`",
+                       "A heading of `pullRequest.requiredSections` never marks the old layout",
+                       "ignore the required headings in this check"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+
+    def test_spec_13_6_is_current_behavior(self):
+        spec = spec_section("### 13.6 PR body", "## 14. Writing Style")
+        self.assertNotIn("Planned", spec)
+        self.assertIn("**Required sections:** `pullRequest.requiredSections`", spec)
+        self.assertIn("its check for the layout before v1.1 ignores them", spec)
+
+
+class RequiredCheckTest(unittest.TestCase):
+    """finish-task builds the ruleset with ci.requiredCheck and reads classic branch protection (§17.3)."""
+
+    def body(self) -> str:
+        return split_frontmatter(skill_md("finish-task"))[1]
+
+    def test_ruleset_requires_ci_required_check(self):
+        import json
+        body = self.body()
+        block = re.search(r"```json\n(.*?)```", body, re.DOTALL).group(1)
+        data = json.loads(re.sub(r"^ {3}", "", block, flags=re.MULTILINE))
+        rule = next(r for r in data["rules"] if r["type"] == "required_status_checks")
+        self.assertEqual(rule["parameters"]["required_status_checks"], [{"context": "<required check>"}])
+        self.assertIn("`<required check>` is `ci.requiredCheck` from the state", body)
+        self.assertIn("the required status check is `<required check>`", body)
+        self.assertNotIn('"context": "check"', body)
+
+    def test_classic_protection_is_read_before_the_offer(self):
+        step = self.body().split("## 7. Ruleset after the setup task", 1)[1].split("\n## ", 1)[0]
+        for needle in ("gh api repos/{owner}/{repo}/rules/branches/<main>",
+                       "gh api repos/{owner}/{repo}/branches/<main>/protection", "This GET is read-only too",
+                       "| HTTP 404 (`Branch not protected`) | No classic protection. Continue. |",
+                       "| HTTP 403 | Unknown", "still offer the ruleset",
+                       "`required_status_checks.contexts`, or a `context` in `required_status_checks.checks`",
+                       "a ruleset already requires the check: skip this step"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, step)
+        self.assertLess(step.index("rules/branches/<main>"), step.index("/protection"))
+        self.assertLess(step.index("/protection"), step.index("Offer the ruleset"))
+        self.assertNotIn("--method", step.split("Offer the ruleset", 1)[0])  # only GETs before the offer
+
+    def test_spec_17_3_is_current_behavior(self):
+        spec = spec_section("### 17.3 Ruleset", "## 18. Stack Detection")
+        self.assertNotIn("Planned", spec)
+        self.assertIn("`ci.requiredCheck`", spec)
+        self.assertIn("branches/<main>/protection", spec)
+        self.assertIn("A 403", spec)
+
+
+class GlossaryTermsTest(unittest.TestCase):
+    def test_docs_terms(self):
+        spec = spec_section("## 3. Glossary", "## 4. Architecture")
+        style = shared("writing-style.md")
+        for term in ("docs role", "docs map"):
+            with self.subTest(term=term):
+                self.assertIn("| **%s** |" % term, spec)
+                self.assertIn("| **%s** |" % term, style)
+
+
+class MilestoneMarkersTest(unittest.TestCase):
+    """M9a is done: its Planned markers are gone, M9b keeps its own (§9.13)."""
+
+    def test_status_line(self):
+        status = spec_section("### 9.13 Onboarding an existing repository", "#### 9.13.1")
+        self.assertIn("Milestone M9a (config keys and their use in existing skills) is implemented", status)
+        self.assertIn("Milestone M9b (the onboarding flow) is planned", status)
+
+    def test_no_m9a_planned_markers(self):
+        spec = spec_text()
+        for marker in re.findall(r"\*\*Planned \(M9[^)]*\):\*\*[^\n]*", spec):
+            for m9a in ("requiredSections", "`docs` in the state", "classic branch protection",
+                        "may be `null`", "docs roles and the docs map", "new optional keys", "workingTreeDocsOnly"):
+                with self.subTest(marker=marker[:60], m9a=m9a):
+                    self.assertNotIn(m9a, marker)
 
 
 if __name__ == "__main__":

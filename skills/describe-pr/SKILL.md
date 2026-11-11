@@ -41,18 +41,26 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 ### Configuration
 
-Read `.claude/loom.json` at the git top level. If a key is missing, use the default: `docsDir` = `docs`, `checks.check` = `make check`. `mainBranch` is in the state.
+Take every configuration value from the state, never from `.claude/loom.json`: `mainBranch`, `checks.check`, the doc paths (`docs`, the docs map), and `pullRequest.requiredSections`. Never build a doc path yourself.
 
-Below, `<main>` is `mainBranch`, `<n>` is `task.number`, `<slug>` is `task.slug`, `<task dir>` is `task.dir`, and `<docs>` is `docsDir`.
+Below, `<main>` is `mainBranch`, `<n>` is `task.number`, `<slug>` is `task.slug`, and `<task dir>` is `task.dir`. The doc paths:
+
+| Placeholder | From the state |
+|---|---|
+| `<tasks>` | `docs.tasks`: the directory of task summaries |
+| `<decisions>` | `docs.decisions.dir`: the directory of ADRs |
+| `<pattern>` | `docs.decisions.pattern`: the ADR file name, e.g. `<NNNN>-<slug>.md` |
+| `<overview>` | `docs.overview`: the architecture overview |
+| `<docs paths>` | `docs.dir` and every path of `docs`; `workingTreeDocsOnly` counts a change at or below one of them as a docs change |
 
 ### Mode differences
 
 | | oneshot | quick, full |
 |---|---|---|
-| Task summary `<docs>/tasks/<n>-<slug>.md` | no | yes |
+| Task summary `<tasks>/<n>-<slug>.md` | no | yes |
 | ADRs | no | for resolved decisions with `ADR? = yes` |
-| `overview.md` update | proposed if the architecture changed | proposed if the architecture changed |
-| Docs commit | only if `overview.md` changed | if any docs file changed |
+| `<overview>` update | proposed if the architecture changed | proposed if the architecture changed |
+| Docs commit | only if `<overview>` changed | if any docs file changed |
 | PR body | short: `Closes`, Why, Verification | full: `Closes`, Why, Special things to note, Change outline, Verification, Decisions, with the plan attached |
 
 ## 1. Check preconditions
@@ -77,7 +85,7 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 - If `pr.state` is `OPEN` and `task.pr` is not set, an earlier run created the PR but stopped. Write `pr: <number>` into the `00-ticket.md` frontmatter (step 8), then stop with the `PR #<number> is already open` row.
 - While `task.pr` is not set, other `gh` warnings (for example `gh auth login` is missing, or the repository has no remote) do not stop it here. Steps 3-8 still write the docs and `pr-body.md`; step 8 stops when the push or `gh pr create` fails. With `task.pr` set, a failed `gh` stops it (the row above): the PR may exist, so do not redo the docs, the rebase, or the PR.
 - Re-running after a partial failure is safe: every step below checks what already exists.
-- A working tree that is dirty only below `<docs>` (`workingTreeDocsOnly` is `true`) is an earlier partial run of this skill: it wrote docs and stopped before the docs commit. Continue. Steps 3-5 update those files in place; step 6 commits them. Show `git status --porcelain -- <docs>` in a `Warning:` line so the user sees what the earlier run left.
+- A working tree that is dirty only in the docs paths (`workingTreeDocsOnly` is `true`) is an earlier partial run of this skill: it wrote docs and stopped before the docs commit. Continue. Steps 3-5 update those files in place; step 6 commits them. Show `git status --porcelain -- <docs paths>` in a `Warning:` line so the user sees what the earlier run left.
 
 ## 2. Read the task
 
@@ -85,7 +93,7 @@ Read in full, without offset or limit:
 
 - `<task dir>/00-ticket.md`, `<task dir>/log.md`.
 - quick and full: `<task dir>/04-plan.md`, `<task dir>/02-research.md`, and `<task dir>/03-design.md` if it exists. Do not read `*.superseded.md` files.
-- `<docs>/architecture/overview.md` if it exists. List `<docs>/architecture/decisions/`.
+- `<overview>` if it exists. List `<decisions>`.
 
 Read the code history:
 
@@ -97,7 +105,7 @@ Take the issue title from the first `# ` heading of `00-ticket.md`.
 
 ## 3. Task summary (quick and full)
 
-Write `<docs>/tasks/<n>-<slug>.md` from `summary-template.md`:
+Write `<tasks>/<n>-<slug>.md` from `summary-template.md`:
 
 - If the file exists (a re-run), update it in place. Keep text that is still true.
 - **Key Decisions**: the resolved decisions of `03-design.md` and `04-plan.md` that matter after the merge, with links to their ADRs (step 4).
@@ -112,28 +120,28 @@ Write `<docs>/tasks/<n>-<slug>.md` from `summary-template.md`:
 
 For each row of `## Resolved Decisions` in `03-design.md` and `04-plan.md` with `ADR?` = `yes`:
 
-1. Skip it if an ADR for it exists: an ADR in `<docs>/architecture/decisions/` with `Task: #<n>` and the same decision.
-2. Number: the highest `NNNN` of the files named `NNNN-*.md` in the directory, plus 1, with four digits. Start at `0001`. Create the directory if it is missing.
-3. Write `<docs>/architecture/decisions/NNNN-<slug>.md` from `adr-template.md`. `Status: Accepted · Task: #<n> · Date: <today>`.
+1. Skip it if an ADR for it exists: an ADR in `<decisions>` with `Task: #<n>` and the same decision.
+2. Number: the highest number of the files in `<decisions>` whose names match `<pattern>` (its `<N…N>` placeholder holds the number), plus 1. Pad it with zeros to the length of the placeholder: `<NNNN>` gives four digits, so the default numbering starts at `0001`; `<NNN>` starts at `001`. Create the directory if it is missing.
+3. Write `<decisions>/<file name>` from `adr-template.md`. The file name is `<pattern>` with the number and the ADR slug filled in. The `<slug>` inside `<pattern>` is the ADR slug that `adr-template.md` defines, not `task.slug`. A number longer than the placeholder is written in full, never cut (`<NN>` and ADR 100 give `100`). The title is `# <number>. <Decision title>`, with the same digits as the file name. `Status: Accepted · Task: #<n> · Date: <today>`.
 4. Context, Alternatives Considered, and Consequences come from the question, its options, the design, and the research. A decision taken by the round cap ("accepted by default") gets that fact in its Context.
 5. Link the ADR from the task summary's Key Decisions.
 
 ## 5. Architecture overview
 
-1. Compare the change (the diff, the design, and the ADRs) with `<docs>/architecture/overview.md`. The architecture changed if the task:
+1. Compare the change (the diff, the design, and the ADRs) with `<overview>`. The architecture changed if the task:
    - adds, removes, or renames a component, module, or service
    - changes the data flow or a protocol between components
    - adds a major library or an external dependency
 2. If it changed, propose an update:
-   - Show the change as a `diff` block of `overview.md`.
+   - Show the change as a `diff` block of `<overview>`.
    - Ask the user to accept, change, or skip it. Apply it only after "yes".
-3. If `overview.md` does not exist, do not create it. Add `Warning: <docs>/architecture/overview.md is missing (/loom:setup creates it)`.
+3. If `<overview>` does not exist, do not create it. Add `Warning: <overview> is missing (/loom:setup creates it)`.
 
 ## 6. Docs commit
 
-1. Run `git status --porcelain -- <docs>`.
-   - oneshot: commit only if `<docs>/architecture/overview.md` changed.
-   - quick and full: commit if any file under `<docs>` changed.
+1. Run `git status --porcelain -- <docs paths>`.
+   - oneshot: commit only if `<overview>` changed.
+   - quick and full: commit if any file in `<docs paths>` changed.
 2. If nothing changed, make no commit.
 3. Otherwise stage the changed docs files (`git add -- <paths>`). Write `docs(#<n>): record decisions and summary` to `<task dir>/commit-msg.txt` and run `git commit -F <task dir>/commit-msg.txt`. If `commit-msg.txt` exists, Read it before you Write it (`git-flow.md`).
 
@@ -156,6 +164,7 @@ Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`,
    - **Special things to note** has 1-3 list items, most important first: only what a reviewer must know and cannot see quickly in the diff. Candidates: a deviation or addition from `log.md`, a risk, a non-obvious decision, a migration or manual step (also a manual verification step the user has not confirmed), a known limit. If nothing qualifies, write the single line None. (plain text, no backticks); never add filler.
    - **Change outline** has one line per implementation phase (`1. <phase name> — <commit subject>`), then one visual: a file tree of the changed files only, or an interface `diff` block with only signatures and public API. Pick the one that shows the shape of the change better (`visual-conventions.md`). Omit unchanged parts.
    - Decisions links the new ADRs and the task summary by their repository paths.
+   - **Required sections**: `pullRequest.requiredSections` from the state lists headings that the project's PR template or a CI check requires (empty by default). A required heading that the layout above already has (the same heading line, e.g. `## Verification`) is that section. Write every other required heading after Decisions (oneshot: after Verification), before `<details>`, in the order of the list, exactly as listed. Fill it from the task's artifacts, or write the single line None. (no backticks) when nothing applies.
    - Remove every guidance comment. Add the user's notes from the argument where they fit.
 3. **Size**: count the characters of the body. If it is longer than 60,000, replace the plan inside `<details>` with its `## Phase Overview` section and the line `The full plan is longer than the PR body allows; only its Phase Overview is attached.`
 

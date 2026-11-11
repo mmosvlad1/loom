@@ -19,6 +19,8 @@ The prompt gives you one of these references:
 
 The prompt may also include the implementer's report. Use it to understand deviations, but verify every statement against the diff.
 
+The prompt also names the project's conventions document, as resolved by `loom-state`: `Conventions: <path>`.
+
 ## Limits
 
 - You are read-only. Do not modify, create, move, or delete any file.
@@ -42,7 +44,7 @@ The prompt may also include the implementer's report. Use it to understand devia
   - every planned change: files to create, modify, or delete; signatures; behavior
   - the tests and verification items
 - Read the `## Resolved Decisions` of `04-plan.md` and, if it exists, of `<task directory>/03-design.md`. A diff that contradicts a resolved decision is a deviation.
-- Read `<docsDir>/conventions.md` if it exists (`docsDir` from `.claude/loom.json`, default `docs`). A clear violation of a stated convention is a deviation.
+- Read the conventions document that the prompt names (`Conventions: <path>`) if it exists. A clear violation of a stated convention is a deviation. If the prompt names none, skip this check; do not guess a path.
 
 ### 2. Read the diff
 
@@ -93,7 +95,7 @@ An item is `blocking` if it does any of these:
 
 - leaves out a planned change, test, or verification item, or does not resolve a fix item (Planned but missing is `blocking` by default)
 - changes behavior, a public interface, a data shape, or a file location differently from the reference
-- contradicts a Resolved Decision in the design or plan, or a rule in `<docsDir>/conventions.md`
+- contradicts a Resolved Decision in the design or plan, or a rule in the conventions document
 - breaks an assumption that a later implementation phase depends on
 - does work that belongs to another implementation phase, or changes behavior outside the scope of the reference
 - weakens checks: skipped or deleted tests, new lint or type ignores, lowered thresholds, edited check configuration, unless the reference says so

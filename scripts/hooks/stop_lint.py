@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Stop hook: quick lint before Claude ends its turn (LOOM_SPEC.md 11.5).
 
-Off unless .claude/loom.json sets `hooks.stopLint` to true. When on, and the
-working tree has changes outside `.loom/`, the work directory, and
-`<docsDir>/`, it runs `checks.lint` at the git top level. On failure it exits
-2 with the tail of the output on stderr, so Claude sees it and continues.
+Off unless .claude/loom.json sets `hooks.stopLint` to true, and a no-op when
+`checks.lint` is null (the project has no lint). When on, and the working tree
+has changes outside `.loom/`, the work directory, and the docs paths (docsDir
+and every path of the docs map), it runs `checks.lint` at the git top level.
+On failure it exits 2 with the tail of the output on stderr, so Claude sees it
+and continues.
 
 Loop guard: when `stop_hook_active` is true (Claude already continues because
 a stop hook blocked it), the hook does nothing. Each stop sequence gets at
@@ -41,7 +43,8 @@ def main() -> None:
     command = checks.get("lint")
     if not isinstance(command, str) or not command.strip():
         return
-    tree, _ = ls.working_tree_status(top, cfg, extra_ignore=(LOOM_DIR, cfg["docsDir"]))
+    ignore = (LOOM_DIR,) + tuple(ls.docs_change_paths(cfg))
+    tree, _ = ls.working_tree_status(top, cfg, extra_ignore=ignore)
     if tree != "dirty":
         return  # no code changes (or git failed): nothing to lint
     code, output = loomhook.run_check(command, top, LINT_TIMEOUT)
