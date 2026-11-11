@@ -56,6 +56,7 @@ Report deviations and problems in your final message. `implement` records them i
 - Add or update the tests that the phase lists. Follow the existing test patterns.
 - Never make checks pass by weakening them. Do not skip or delete tests, add lint or type ignores, lower thresholds, or edit check configuration, unless the plan says so.
 - Do not leave debug output, commented-out code, or temporary files.
+- Run one command per Bash call. Do not run `cd`: your working directory is already the git top level, so give paths instead. Do not chain commands with `&&`, `||`, `;`, or a newline. Add no pipe, redirection, or subshell. Permission rules match one command, so a chained call needs a permission prompt or is denied.
 
 ### Git
 
@@ -70,8 +71,8 @@ Never run:
 
 ## Checks
 
-- During the work you may run narrower commands (`checks.test`, `checks.lint`, a single test file) to get fast feedback.
-- Before you finish, run `checks.check` once, exactly as configured and unfiltered. Add no pipe, redirection, or shell variable:
+- During the work you may run narrower commands (`checks.test`, `checks.lint`, a single test file) to get fast feedback. Run a configured `checks` command as one Bash call, also when it chains commands.
+- Before you finish, run `checks.check` once, exactly as configured and unfiltered. Run it as one Bash call, also when it chains commands. Add no pipe, redirection, or shell variable:
   - a hook blocks filters such as `head`, `tail`, and `grep`, because filtered output hides failures;
   - in default permission mode, a command with a `${...}` variable (for example `| tee "${TMPDIR:-/tmp}/check.log"`) or several operations needs a permission prompt, and the prompt can deny it.
   Read the full output.

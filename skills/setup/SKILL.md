@@ -37,6 +37,7 @@ Read these files in full before you start:
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/git-flow.md` (confirmations, commit message file, quoting, staging, stash, push)
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/frontmatter.md` (ticket frontmatter)
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/writing-style.md` (style of the issue, commit, docs, and final message)
+- `${CLAUDE_PLUGIN_ROOT}/skills/_shared/bash-calls.md` (one command per Bash call: no `cd`, no chaining)
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/final-answer.md` (format of your last message)
 
 Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission. Read the templates with the Read tool and copy them; never write them from memory.

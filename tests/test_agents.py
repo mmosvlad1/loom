@@ -54,6 +54,7 @@ SHARED_SECTIONS = {
     ],
     "implementation-loop.md": ["## Inputs", "## Steps", "## Results", "## Rules"],
     "pr-update.md": ["## Steps"],
+    "bash-calls.md": ["## Rules"],
 }
 # HumanLayer-specific leftovers that must not appear in ported prompts.
 FORBIDDEN = [
@@ -217,6 +218,26 @@ class AgentPromptTest(unittest.TestCase):
         self.assertNotIn("-n 10", body)
         self.assertNotIn("edits files in the task directory", body)
 
+    def test_bash_agents_run_one_command_per_call(self):
+        # Agents do not read skills/_shared/, so each agent with Bash carries the bash-calls.md rule inline.
+        bash_agents = []
+        for path in agent_files():
+            stem = os.path.splitext(os.path.basename(path))[0]
+            fm = split_frontmatter(read(path))[0]
+            if "Bash" not in [t.strip() for t in fm.get("tools", "").split(",")]:
+                continue
+            bash_agents.append(stem)
+            body = self.body(stem)
+            for needle in ("Run one command per Bash call.", "Do not run `cd`", "`&&`, `||`, `;`, or a newline",
+                           "Permission rules match one command"):
+                with self.subTest(agent=stem, needle=needle):
+                    self.assertIn(needle, body)
+            chained = [c for c in re.findall(r"`([^`\n]+)`", body) if c not in ("&&", "||") and ("&&" in c or "||" in c)]
+            with self.subTest(agent=stem):
+                self.assertEqual(chained, [], "a command example chains commands")
+        self.assertEqual(set(bash_agents), {"codebase-locator", "implementer", "implementation-reviewer"})
+        self.assertNotIn("| wc -l", self.body("codebase-locator"))
+
     def test_read_only_agents_forbid_writing_flags(self):
         locator = self.body("codebase-locator")
         for flag in ("-exec", "-execdir", "-ok", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"):
@@ -251,6 +272,26 @@ class SharedSnippetsTest(unittest.TestCase):
         for term in terms:
             with self.subTest(term=term):
                 self.assertIn("| **%s** |" % term, style)
+
+    def test_spec_layout_lists_every_snippet(self):
+        tree = spec_section("### 4.1 Plugin repository layout", "### 4.2 Project-side footprint")
+        tree = tree.split("_shared/", 1)[1].split("├── setup/", 1)[0]
+        listed = set(re.findall(r"[├└]── ([\w-]+\.md)", tree))
+        self.assertEqual(listed, set(SHARED_SECTIONS))
+
+    def test_bash_calls_rules(self):
+        text = read(os.path.join(SHARED_DIR, "bash-calls.md"))
+        for needle in ("one command per Bash call", "Do not run `cd`", "`&&`, `||`, `;`, or a newline",
+                       "pipe, redirection, subshell, or shell variable", "`loom-state --json`, not `python3 bin/loom-state --json`",
+                       "Read, Grep, and Glob", "matches one command", "\"Checks\" in the shared `git-flow.md`",
+                       "Exception: run a command that a skill gives, and `checks.check`"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+        checks = read(os.path.join(SHARED_DIR, "git-flow.md")).split("## Checks", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("`bash-calls.md`", checks)
+        self.assertIn("as one Bash call, also when it chains commands", checks)
+        implementer = read(os.path.join(AGENTS_DIR, "implementer.md"))
+        self.assertIn("as one Bash call, also when it chains commands", implementer)
 
     def test_final_answer_has_the_next_step(self):
         self.assertIn("Next: /clear, then /loom:next", read(os.path.join(SHARED_DIR, "final-answer.md")))

@@ -26,6 +26,7 @@ The prompt may also include the implementer's report. Use it to understand devia
   - `git status`, `git diff`, `git log`, `git show`, `git ls-files`, `git rev-parse`
   - `ls`
 - Do not run any other command. Do not run the checks; the implementer and a hook run them.
+- Run one command per Bash call. Do not run `cd`: your working directory is already the git top level, so give paths instead. Do not chain commands with `&&`, `||`, `;`, or a newline. Add no pipe or subshell. Permission rules match one command, so a chained call needs a permission prompt or is denied.
 - Do not run git commands that change state (`add`, `commit`, `stash`, `checkout`, `switch`, `restore`, `reset`, `clean`).
 - Do not write output to files:
   - no redirection (`>`, `>>`)
@@ -45,7 +46,7 @@ The prompt may also include the implementer's report. Use it to understand devia
 
 ### 2. Read the diff
 
-The implementer does not commit, so the implementation phase is the uncommitted change against `HEAD`:
+The implementer does not commit, so the implementation phase is the uncommitted change against `HEAD`. Run each of these commands as its own Bash call:
 
 ```bash
 git status --porcelain

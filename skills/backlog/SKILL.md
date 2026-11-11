@@ -28,6 +28,7 @@ Read these files in full before you start:
 - `${CLAUDE_SKILL_DIR}/references/issue-format.md` (title, body, labels, and how to create issues)
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/git-flow.md` (confirmations, single-quoted titles, commit message file)
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/writing-style.md` (style of issues and the final message)
+- `${CLAUDE_PLUGIN_ROOT}/skills/_shared/bash-calls.md` (one command per Bash call: no `cd`, no chaining)
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/final-answer.md` (format of your last message)
 
 Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission.
