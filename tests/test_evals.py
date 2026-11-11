@@ -591,24 +591,36 @@ class MakefileTest(unittest.TestCase):
     def test_eval_flags(self):
         recipe = self.recipe("eval")
         for flag in ("plugin eval .", "--scaffold", "--ablation none", "--no-publish", "--trust-plugin",
-                     "--max-cost-usd $(EVAL_MAX_COST)", "--allow-tools $(EVAL_TOOLS)", "$(EVAL_FILTER)",
-                     "$(EVAL_ARGS)", 'PATH="$(EVAL_PATH):$$PATH"'):
+                     "--max-cost-usd $(EVAL_MAX_COST)", "--allow-tools $(EVAL_TOOLS)", "$(EVAL_ARGS)", 'PATH="$(EVAL_PATH):$$PATH"'):
             with self.subTest(flag=flag):
                 self.assertIn(flag, recipe)
         for forbidden in ("--dangerously-skip-permissions", "bypassPermissions", "--mocks off"):
             self.assertNotIn(forbidden, self.text)
 
-    def test_macos_runs_only_local_cases_by_default(self):
-        darwin = self.text.split("ifeq ($(shell uname -s),Darwin)", 1)[1].split("endif", 1)[0]
-        self.assertIn("EVAL_FILTER ?= --tag local", darwin)
-        self.assertIn("xcode-select -p", darwin)
-        self.assertNotIn("xcode-select", self.text.split("ifeq ($(shell uname -s),Darwin)", 1)[0])
-        note = self.recipe("eval")
-        for part in ("implement-manual", "Bash git", "24.2", "EVAL_FILTER="):
-            self.assertIn(part, note)
-        local = {os.path.basename(d) for d in case_dirs() if "local" in case(os.path.basename(d)).get("tags", [])}
-        self.assertEqual(local, set(EXPECTED_STATE) - {"implement-manual"})
+    def test_every_case_runs_on_every_platform(self):
+        self.assertNotIn("EVAL_FILTER", self.text)
+        self.assertNotIn("--tag", self.text)
+        for name in EXPECTED_STATE:
+            with self.subTest(case=name):
+                self.assertNotIn("local", case(name).get("tags", []))
 
+    def test_macos_puts_the_developer_directory_on_path(self):
+        before, darwin = self.text.split("ifeq ($(shell uname -s),Darwin)", 1)
+        darwin = darwin.split("endif", 1)[0]
+        self.assertIn("EVAL_PATH := $(EVAL_PATH):$(shell xcode-select -p 2>/dev/null)/usr/bin", darwin)
+        self.assertNotIn("xcode-select", before)
+
+    def test_macos_warns_about_the_command_line_tools(self):
+        """A warning, not a skip: implement-manual still runs (LOOM_SPEC.md 24.2)."""
+        recipe = self.recipe("eval")
+        guard = "ifeq ($(shell xcode-select -p 2>/dev/null),/Library/Developer/CommandLineTools)"
+        self.assertIn("ifeq ($(shell uname -s),Darwin)\n" + guard + "\n\t@echo ", recipe)
+        warning = recipe.split(guard, 1)[1].split("endif", 1)[0]
+        for part in ("Command Line Tools", "implement-manual", "24.2",
+                     "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"):
+            with self.subTest(part=part):
+                self.assertIn(part, warning)
+        self.assertEqual(warning.count("\t"), 1)  # one echo line, then the run
 
 class WorkflowTest(unittest.TestCase):
     """loom's own CI (LOOM_SPEC.md 21): `make check` on PRs and main; evals only on demand."""
@@ -640,7 +652,7 @@ class WorkflowTest(unittest.TestCase):
         for trigger in ("schedule", "push", "pull_request"):
             self.assertNotIn(trigger, on)
         self.assertIn("secrets.ANTHROPIC_API_KEY", text)
-        self.assertIn("make eval EVAL_FILTER= ", text)
+        self.assertIn("make eval EVAL_MAX_COST=", text)
         self.assertIn("--json", text)
         self.assertIn("--keep-temp", text)
         self.assertIn("actions/upload-artifact@", text)

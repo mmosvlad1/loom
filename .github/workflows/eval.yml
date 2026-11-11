@@ -63,8 +63,7 @@ jobs:
           args="--json evals/results/eval.json --runs $RUNS --keep-temp"
           if [ -n "$CASE" ]; then args="$args --case '$CASE'"; fi
           if [ -n "$MODEL" ]; then args="$args --model $MODEL"; fi
-          # EVAL_FILTER= runs every case: the runner's git works inside the eval sandbox.
-          make eval EVAL_FILTER= EVAL_MAX_COST="$MAX_COST" EVAL_ARGS="$args"
+          make eval EVAL_MAX_COST="$MAX_COST" EVAL_ARGS="$args"
       - name: Collect the run outputs
         # --keep-temp leaves each run's out/ dir (trace.jsonl, logs) in the temp dir; copy only
         # out/ (never the run's home or config) next to the results to debug a failing run.

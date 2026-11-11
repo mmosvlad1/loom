@@ -17,7 +17,6 @@ check: test validate
 
 # Eval suite (evals/, LOOM_SPEC.md 20.2). Not part of `check`: it calls the model and costs tokens.
 # Extra flags go in EVAL_ARGS, e.g. make eval EVAL_ARGS='--case design-full --runs 3 --keep-temp'.
-# --case and --tag combine with AND: on macOS, `--case implement-manual` also needs EVAL_FILTER=.
 # Linux: every skill case fails in the eval sandbox (read-only TMPDIR, likely an upstream Claude Code bug);
 # the Evals workflow (.github/workflows/eval.yml) runs every case on a macOS runner instead.
 EVAL_MAX_COST ?= 10
@@ -30,23 +29,20 @@ EVAL_TOOLS = Write Edit 'Bash(git *)' 'Bash(make *)' 'Bash(loom-state *)' 'Bash(
 # PATH for the eval runs (seen live with Claude Code 2.1.318, LOOM_SPEC.md 24.2): the eval runtime
 # does not put the plugin's bin/ on the Bash PATH, so bare `loom-state` calls need it here.
 EVAL_PATH = $(CURDIR)/bin
-# macOS: on a Mac with only the Command Line Tools, /usr/bin/python3 and make are xcrun shims that
-# fail inside the eval sandbox, so the developer directory comes first. Bash `git` stays pinned to
-# /usr/bin/git and failed there too, so by default only the cases tagged `local` run
-# (implement-manual needs git). The macOS CI runner (full Xcode) passed every case: EVAL_FILTER= runs all.
+# macOS: with only the Command Line Tools selected, /usr/bin/python3 and make were xcrun shims that
+# failed inside the eval sandbox, so the developer directory comes before them. Bash `git` stays
+# pinned to /usr/bin/git: it failed there too (implement-manual then fails), while the macOS CI
+# runner, which has full Xcode, passed. The recipe warns about the Command Line Tools; it runs every case.
 ifeq ($(shell uname -s),Darwin)
 EVAL_PATH := $(EVAL_PATH):$(shell xcode-select -p 2>/dev/null)/usr/bin
-EVAL_FILTER ?= --tag local
-else
-EVAL_FILTER ?=
 endif
 
 eval:
 ifeq ($(shell uname -s),Darwin)
-ifneq ($(strip $(EVAL_FILTER)),)
-	@echo "make eval: skipping implement-manual (Bash git fails in the eval sandbox on a Mac with only the Command Line Tools, LOOM_SPEC.md 24.2); EVAL_FILTER= runs it, the Evals workflow runs every case."
+ifeq ($(shell xcode-select -p 2>/dev/null),/Library/Developer/CommandLineTools)
+	@echo "make eval: xcode-select points to the Command Line Tools, where Bash git failed in the eval sandbox, so implement-manual will likely fail (LOOM_SPEC.md 24.2). The macOS CI runner has full Xcode and passes; to try that: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
 endif
 endif
 	PATH="$(EVAL_PATH):$$PATH" $(CLAUDE) plugin eval . \
 		--scaffold --ablation none --no-publish --trust-plugin \
-		--max-cost-usd $(EVAL_MAX_COST) --allow-tools $(EVAL_TOOLS) $(EVAL_FILTER) $(EVAL_ARGS)
+		--max-cost-usd $(EVAL_MAX_COST) --allow-tools $(EVAL_TOOLS) $(EVAL_ARGS)

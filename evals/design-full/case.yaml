@@ -4,7 +4,7 @@ description: >-
   Full mode, research approved. /loom:design writes 03-design.md in review with round 1 of
   open questions, an empty Resolved Decisions table, and no read of 01-research-questions.md
   (LOOM_SPEC.md 9.6, 12, 20.2).
-tags: [design, full, local]
+tags: [design, full]
 runs: 1
 context:
   scaffold_script: scaffold.sh
