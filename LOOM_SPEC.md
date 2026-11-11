@@ -565,6 +565,7 @@ Steps 2–4 are `_shared/implementation-loop.md`; `iterate` runs the same loop f
 
 **Does:**
 1. Reads all artifacts and `log.md`. A working tree that is dirty only below `docsDir` is its own earlier partial run: it continues. Code changes stop it.
+   A missing `gh` stops it. So does a failed `gh` when the ticket already has `pr:` (`PR #<n> state unknown`): the PR may exist. Otherwise other `gh` problems (not authenticated, no remote) do not stop it: it still writes the docs and `pr-body.md`, and step 7 reports the failing push or `gh pr create`.
 2. quick/full: writes `docs/tasks/<n>-<slug>.md` (§13.4).
 3. Creates ADRs for resolved decisions marked `ADR? = yes` (§13.5).
 4. Checks whether the task changed the architecture; if so, proposes an update to `docs/architecture/overview.md`.
@@ -893,10 +894,11 @@ Status: Accepted · Task: #42 · Date: 2026-11-08
 ```markdown
 Closes #42
 
-## Summary
-## Changes
+## Why                       ← exactly one sentence: the problem or need this PR answers
+## Special things to note    ← 1–3 items, or the single line None.
+## Change outline            ← phases → commit subjects, then a file tree or an interface `diff` block
 ## Verification
-## Decisions          ← links to ADRs and the task summary
+## Decisions                 ← links to ADRs and the task summary
 
 <details><summary>Implementation plan</summary>
 
@@ -905,8 +907,11 @@ Closes #42
 </details>
 ```
 
+- **Why** is one sentence of at most 25 words (§14.1 rule 3), on one line, not a list of what changed.
+- **Special things to note** lists only what a reviewer must know and cannot see quickly in the diff: a deviation or addition from `log.md`, a risk, a non-obvious decision, a migration or manual step, a known limit. Most important first. If nothing qualifies, the section is the single line None. (no filler, §14.1 rule 6).
+- **Change outline** has one line per implementation phase (`1. <phase name> — <commit subject>`), then a file tree of the changed files or an interface `diff` block (signatures and public API only), whichever shows the shape of the change better (§13.3). Unchanged parts are omitted.
 - If the body would exceed 60,000 characters (GitHub limit: 65,536), the plan is replaced by its Phase Overview plus a note.
-- oneshot PRs contain only `Closes`, Summary, and Verification.
+- oneshot PRs contain only `Closes`, Why, and Verification.
 
 ---
 
@@ -1153,6 +1158,7 @@ evals/
 ├── design-full/
 ├── implement-manual/
 ├── guard-main/
+├── describe-pr-quick/
 └── results/                 # written by the runs; ignored by git
 ```
 
@@ -1177,11 +1183,19 @@ evals/
     - A Bash `git commit` ran.
     - The trace holds the guard's deny reason.
     - `main` still points to the fixture commit.
+  - `describe-pr-quick` (quick mode, both implementation phases done and committed, no remote, no PR):
+    - `pr-body.md` exists, and its first line is `Closes #7`.
+    - The headings `## Why`, `## Special things to note`, `## Change outline`, `## Verification`, and `## Decisions` come in this order; no `## Summary` or `## Changes`.
+    - Why is one sentence. Special things to note has 1–3 items or `None.`. Change outline has the phase lines `1.` and `2.`, then a file tree or a `diff` block.
+    - The plan is attached in `<details>`.
+    - No Bash `git push` and no `gh pr create` (`tool_used`, max 0). The fixture has no remote, and `make eval` does not grant `gh`. The skill writes `pr-body.md` before it asks to push, and the run ends at that question.
+    - The case needs `gh` installed (not authenticated): without it, `loom-state --pr` warns `gh is not installed`, and the skill stops before it writes the body.
+    - Passed 4 of 4 local runs (haiku, macOS, Homebrew git, about 0.02 USD each); not run on the CI runner yet. In one run Bash denied a chained `cd …; ls …`, so the docs commit and the rebase did not happen; the body was still written.
 - Every case has `runs: 1` and `model: haiku` (cost); `--runs 3` and `--model sonnet` override them.
 - `make eval` runs the suite with `--scaffold --ablation none --no-publish --trust-plugin`, a `--max-cost-usd` ceiling, and the narrowest `--allow-tools` set: `Write Edit 'Bash(git *)' 'Bash(make *)' 'Bash(loom-state *)' 'Bash(*/bin/loom-state *)'`. It is not part of `make check`. It puts the plugin's `bin/` on `PATH` (the eval runtime does not) and, on macOS only, the developer directory (`xcode-select -p`) first.
 - In loom's CI: `make check` (unit tests and `claude plugin validate --strict`) on every PR and push to `main` (`.github/workflows/ci.yml`). The evals run only on demand (`.github/workflows/eval.yml`, `workflow_dispatch`, repository secret `ANTHROPIC_API_KEY`), never on a schedule: they cost tokens.
-- `make eval` runs every case, locally and in the Evals workflow. The Evals workflow runs all 4 cases on a pinned `macos-26` runner. Linux cannot run the skill cases: the eval sandbox breaks every Bash call there (§24.2).
-- macOS needs Homebrew git (`brew install git`) for `implement-manual`. Inside the eval sandbox Bash `git` is always the `/usr/bin/git` shim; without another git it fails, with the Command Line Tools and with full Xcode (§24.2). When the first `git` on the caller's `PATH` (`command -v git`) is `/usr/bin/git`, `make eval` prints a warning that names `brew install git` and still runs every case.
+- `make eval` runs every case, locally and in the Evals workflow. The Evals workflow runs all 5 cases on a pinned `macos-26` runner. Linux cannot run the skill cases: the eval sandbox breaks every Bash call there (§24.2).
+- macOS needs Homebrew git (`brew install git`) for `implement-manual` and `describe-pr-quick` (docs commit and rebase). Inside the eval sandbox Bash `git` is always the `/usr/bin/git` shim; without another git it fails, with the Command Line Tools and with full Xcode (§24.2). When the first `git` on the caller's `PATH` (`command -v git`) is `/usr/bin/git`, `make eval` prints a warning that names `brew install git` and still runs every case.
 
 ### 20.3 When to run
 
@@ -1233,7 +1247,10 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
 
 - **Observability:** `SubagentStart`/`SubagentStop` hooks append one line per subagent run (agent, phase, duration, result) to `<task dir>/events.jsonl`. `describe-pr` adds a "Process metrics" line to the task summary.
 - **Docs freshness gate:** `loom-state --docs` flags paths in `overview.md` and ADRs that no longer exist and modules added since the last summary; `describe-pr` asks to address them.
-- **PR layout:** "Why" in one sentence, 1–3 "Special things to note", and a "Change outline" (file tree or interface `diff`).
+
+Done in v1.1:
+
+- **PR layout:** "Why" in one sentence, 1–3 "Special things to note", and a "Change outline" (file tree or interface `diff`). Specified in §13.6, written by `describe-pr`, kept by `_shared/pr-update.md`, and covered by the `describe-pr-quick` eval case (§20.2).
 
 ### 23.2 Deferred, needs a separate discussion
 

@@ -10,15 +10,34 @@ Template of the PR body (quick and full mode). Guidance for describe-pr. Remove 
 
 Closes #<n>
 
-## Summary
-
-<!-- Two to four sentences: the problem and what this PR changes. No list of files. -->
-
-## Changes
+## Why
 
 <!--
-The shape of the change: one line per implementation phase (`1. <phase name> — <commit subject>`),
-then a small file tree or a `diff` block where it helps a reviewer. Omit unchanged parts.
+Exactly one sentence of at most 25 words, on one line: the problem or need this PR answers, from 00-ticket.md.
+Not a list of what changed: Change outline shows that.
+-->
+
+## Special things to note
+
+<!--
+1-3 list items (`- `), most important first. Only what a reviewer must know and cannot see quickly in the diff:
+- a deviation from the plan or an addition, recorded in log.md
+- a risk
+- a non-obvious decision
+- a migration or a manual step (also a manual verification step that the user has not confirmed)
+- a known limit
+If nothing qualifies, write the single line None. (no backticks) and nothing else. Do not add filler.
+-->
+
+## Change outline
+
+<!--
+First one line per implementation phase, in order: `1. <phase name> — <commit subject>`.
+Use the commit subject, not the hash: the rebase and the squash merge change hashes.
+Then one visual that shows the shape of the change. Pick the one that shows it better:
+- a file tree of the changed files only, with `new:` or `changed:` comments (`visual-conventions.md`)
+- an interface `diff` block: only signatures and public API (functions, classes, fields, config keys, commands)
+Omit unchanged parts.
 -->
 
 ## Verification
@@ -41,6 +60,6 @@ Add one line per other resolved decision a reviewer needs. Use the real docsDir 
 </details>
 
 <!--
-oneshot mode: a short body with only three parts, in this order: the `Closes #<n>` line, the Summary section, and the Verification section.
-No Changes, no Decisions, and no plan.
+oneshot mode: a short body with only three parts, in this order: the `Closes #<n>` line, the Why section, and the Verification section.
+No Special things to note, no Change outline, no Decisions, and no plan.
 -->

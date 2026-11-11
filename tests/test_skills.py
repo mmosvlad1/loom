@@ -973,13 +973,120 @@ class DocsTemplateTest(unittest.TestCase):
     def test_pr_size_limit_and_oneshot_rules(self):
         spec = spec_section("### 13.6 PR body", "## 14. Writing Style")
         self.assertIn("60,000 characters", spec)
-        self.assertIn("oneshot PRs contain only `Closes`, Summary, and Verification", spec)
+        self.assertIn("oneshot PRs contain only `Closes`, Why, and Verification", spec)
         template = reference("describe-pr", "pr-template.md")
         body = skill_md("describe-pr")
         for text in (template, body):
             self.assertIn("60,000", text)
             self.assertIn("Phase Overview", text)
-        self.assertIn("oneshot: only `Closes #<n>`, Summary, and Verification", body)
+        self.assertIn("oneshot: only `Closes #<n>`, Why, and Verification", body)
+        oneshot = template.rsplit("<!--", 1)[1]
+        self.assertIn("the `Closes #<n>` line, the Why section, and the Verification section", oneshot)
+        self.assertIn("No Special things to note, no Change outline, no Decisions, and no plan", oneshot)
+
+    # The PR layout (§13.6, §23.1 v1.1): section names in order, as the template writes them.
+    PR_SECTIONS = ["Why", "Special things to note", "Change outline", "Verification", "Decisions"]
+
+    def test_pr_sections_in_order(self):
+        block = spec_markdown_block("### 13.6 PR body", "## 14. Writing Style")
+        self.assertEqual(spec_h2_headings(block), self.PR_SECTIONS)
+        lines = [l for l in strip_comments(reference("describe-pr", "pr-template.md")).splitlines() if l.strip()]
+        self.assertEqual(h2_headings(lines), self.PR_SECTIONS)
+        self.assertEqual(lines[:2], ["Closes #<n>", "## Why"])
+        self.assertEqual(lines[-2:], ["<details><summary>Implementation plan</summary>", "</details>"])
+        body = skill_md("describe-pr")
+        self.assertIn("quick and full, in this order: `Closes #<n>`, Why, Special things to note, Change outline, "
+                      "Verification, Decisions, then the body of `04-plan.md`", body)
+        self.assertIn("| PR body | short: `Closes`, Why, Verification | full: `Closes`, Why, Special things to note, "
+                      "Change outline, Verification, Decisions, with the plan attached |", body)
+
+    def test_no_old_pr_sections(self):
+        template = reference("describe-pr", "pr-template.md")
+        spec = spec_section("### 13.6 PR body", "## 14. Writing Style")
+        for text in (template, strip_comments(template), spec):
+            for old in ("## Summary", "## Changes"):
+                with self.subTest(old=old):
+                    self.assertNotRegex(text, r"(?m)^%s\b" % re.escape(old))
+        for name, text in (("template", template), ("spec", spec), ("describe-pr", skill_md("describe-pr")),
+                           ("pr-update", shared("pr-update.md"))):
+            for old in ("Summary,", ", Summary", "Changes,", "the Summary section", "Summary, Changes"):
+                with self.subTest(file=name, old=old):
+                    self.assertNotIn(old, text)
+
+    def test_why_is_one_sentence(self):
+        spec = spec_section("### 13.6 PR body", "## 14. Writing Style")
+        self.assertIn("## Why                       ← exactly one sentence", spec)
+        self.assertIn("on one line, not a list of what changed.", spec)
+        why = section(reference("describe-pr", "pr-template.md"), "## Why")
+        self.assertIn("Exactly one sentence of at most 25 words, on one line", why)
+        self.assertIn("Not a list of what changed", why)
+        self.assertIn("**Why** is exactly one sentence of at most 25 words", skill_md("describe-pr"))
+        self.assertIn("one sentence of at most 25 words (§14.1 rule 3)", spec)
+
+    def test_special_things_has_1_to_3_items_or_none(self):
+        spec = spec_section("### 13.6 PR body", "## 14. Writing Style")
+        self.assertIn("## Special things to note    ← 1–3 items, or the single line None.", spec)
+        self.assertIn("If nothing qualifies, the section is the single line None. (no filler, §14.1 rule 6)", spec)
+        special = section(reference("describe-pr", "pr-template.md"), "## Special things to note")
+        body = skill_md("describe-pr")
+        for text in (special, body):
+            with self.subTest(text=text[:40]):
+                self.assertIn("1-3 list items", text)
+                self.assertIn("most important first", text.lower())
+                self.assertIn("the single line None. (", text)
+                self.assertIn("no backticks", text)
+                self.assertNotIn("`None.`", text)  # models copy the backticks
+                self.assertIn("cannot see quickly in the diff", text)
+        for candidate in ("log.md", "a risk", "a non-obvious decision", "a migration or a manual step", "a known limit"):
+            with self.subTest(candidate=candidate):
+                self.assertIn(candidate, special)
+        self.assertIn("never add filler", body)
+        self.assertIn("rule 6", spec)
+        self.assertIn("### 6. No introductions, recaps, or filler", shared("writing-style.md"))
+
+    def test_change_outline_is_phase_lines_then_tree_or_interface_diff(self):
+        spec = spec_section("### 13.6 PR body", "## 14. Writing Style")
+        outline = section(reference("describe-pr", "pr-template.md"), "## Change outline")
+        body = skill_md("describe-pr")
+        for text in (spec, outline, body):
+            with self.subTest(text=text[:40]):
+                self.assertIn("`1. <phase name> — <commit subject>`", text)
+                self.assertIn("file tree", text)
+                self.assertRegex(text, r"interface `diff` block")
+                self.assertRegex(text, r"(signatures and public API|signatures/public API)")
+                self.assertRegex(text, r"[Oo]mit(ted)? unchanged parts|Unchanged parts are omitted")
+        self.assertIn("changed files only", outline)
+        self.assertIn("`visual-conventions.md`", outline)
+        self.assertIn("(§13.3)", spec)
+        # The summary template keeps its own Implementation format; both name the phases the same way.
+        self.assertIn("`1. <phase name> — <commit subject>`", reference("describe-pr", "summary-template.md"))
+
+    def test_pr_update_names_the_new_sections(self):
+        text = shared("pr-update.md")
+        self.assertIn("(Why, Special things to note, Change outline, Verification, Decisions, or the attached plan)", text)
+        for needle in ("Why stays one sentence", "1-3 list items, or the single line None. (no backticks)",
+                       "one line per implementation phase, then a file tree or an interface `diff` block",
+                       "A body in the layout before loom v1.1 (`## Summary` and `## Changes`",
+                       "is rewritten into this layout", "A phase line names the phase's own commit subject",
+                       "Fix commits get no phase line"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+
+    def test_known_pr_with_failed_gh_stops(self):
+        body = skill_md("describe-pr")
+        self.assertIn("| `task.pr` is set and `pr` is `null` (`gh` failed) | `PR #<task.pr> state unknown (gh: <the gh warning>)` |", body)
+        self.assertIn("While `task.pr` is not set, other `gh` warnings", body)
+        self.assertIn("With `task.pr` set, a failed `gh` stops it (the row above)", body)
+        self.assertLess(body.index("`PR #<task.pr> state unknown"), body.index("While `task.pr` is not set"))
+        spec = spec_section("### 9.10 `describe-pr`", "### 9.11")
+        self.assertIn("So does a failed `gh` when the ticket already has `pr:` (`PR #<n> state unknown`)", spec)
+
+    def test_roadmap_records_the_pr_layout_as_done(self):
+        roadmap = spec_section("### 23.1 v1.1 (planned)", "### 23.2")
+        planned, done = roadmap.split("Done in v1.1:", 1)
+        self.assertNotIn("PR layout", planned)
+        self.assertIn("**PR layout:**", done)
+        self.assertIn("§13.6", done)
 
     def test_templates_have_no_unclosed_fence(self):
         for name in ("summary-template.md", "adr-template.md", "pr-template.md"):
@@ -1302,6 +1409,7 @@ class DescribePrTest(unittest.TestCase):
         spec = spec_section("### 5.4 Mode differences", "## 6. End-to-End Lifecycle")
         self.assertIn("| Docs commit in describe-pr | only if `overview.md` changed | ✓ | ✓ |", spec)
         self.assertIn("| PR description | short | full | full |", spec)
+        self.assertIn("| PR body | short: `Closes`, Why, Verification |", self.body())
         body = self.body()
         self.assertIn("| Docs commit | only if `overview.md` changed | if any docs file changed |", body)
         self.assertIn("| Task summary `<docs>/tasks/<n>-<slug>.md` | no | yes |", body)

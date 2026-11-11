@@ -51,6 +51,8 @@ EXPECTED_STATE: Dict[str, Dict[str, Any]] = {
     "implement-manual": {"mode": "quick", "next": "/loom:implement",
                          "artifacts": {"02-research.md": "approved", "04-plan.md": "approved"}},
     "guard-main": {"onMain": True},
+    "describe-pr-quick": {"mode": "quick", "next": "/loom:describe-pr",
+                          "artifacts": {"02-research.md": "approved", "04-plan.md": "approved"}},
 }
 
 
@@ -467,6 +469,159 @@ class GraderRegexTest(unittest.TestCase):
         self.assertIsNone(rx.search('{"command":"git log --grep=commit"}'))
 
 
+class PrBodyGraderTest(unittest.TestCase):
+    """The describe-pr-quick graders accept a body in the 13.6 layout and reject the old or loose ones."""
+
+    CASE = "describe-pr-quick"
+    GOOD = (
+        "Closes #7\n\n"
+        "## Why\n\n"
+        "Wholesale orders get no discount, so customers who buy 10 or more items pay the full price.\n\n"
+        "## Special things to note\n\n"
+        "- The bulk discount wins a tie with a code; the plan did not define a tie.\n"
+        "- The manual receipt check of phase 1 is not confirmed yet.\n\n"
+        "## Change outline\n\n"
+        "1. Bulk discount tiers — feat(pricing): add bulk discount tiers (#7)\n"
+        "2. Larger discount wins — feat(pricing): apply the larger of code and bulk discount (#7)\n\n"
+        "```diff\n"
+        " shop/pricing.py\n"
+        "+BULK_TIERS = ((50, 0.10), (10, 0.05))\n"
+        "+def bulk_discount(item_count: int) -> float\n"
+        "+def applied_discount(cart: Cart, code: Optional[str] = None) -> Tuple[str, float]\n"
+        "```\n\n"
+        "## Verification\n\n"
+        "- `make check`: pass (12 tests)\n\n"
+        "## Decisions\n\n"
+        "- Task summary: [docs/tasks/7-bulk-discount-tiers.md](docs/tasks/7-bulk-discount-tiers.md)\n\n"
+        "<details><summary>Implementation plan</summary>\n\n"
+        "## Phase Overview\n\n- [x] 1. A\n- [x] 2. B\n\n## Phase 1: A\n\n### Changes\n\n## Phase 2: B\n\n"
+        "</details>\n"
+    )
+    TREE = (
+        "```text\n"
+        "shop/\n"
+        "├── pricing.py   # changed: bulk_discount, applied_discount\n"
+        "└── receipt.py   # changed: prints the discount that applies\n"
+        "```\n"
+    )
+
+    def rx(self, grader: str) -> "re.Pattern[str]":
+        return grader_regex(self.CASE, grader)
+
+    def section(self, name: str, body: str) -> str:
+        """GOOD with the body of one `## ` section replaced."""
+        head, rest = self.GOOD.split("## %s\n\n" % name, 1)
+        return head + "## %s\n\n" % name + body + "\n## " + rest.split("\n## ", 1)[1]
+
+    def test_good_body_passes(self):
+        for grader in ("closes-first-line", "section-order", "why-one-sentence", "special-things-1-to-3",
+                       "change-outline-shape", "plan-attached"):
+            with self.subTest(grader=grader):
+                self.assertIsNotNone(self.rx(grader).search(self.GOOD))
+        self.assertIsNone(self.rx("no-old-sections").search(self.GOOD))
+
+    def test_targets_and_types(self):
+        for name, g in graders(os.path.join(EVALS, self.CASE)).items():
+            with self.subTest(grader=name):
+                if g["type"] == "regex":
+                    self.assertEqual(g["target"], {"source": "file", "path": TASK_DIR + "/pr-body.md"})
+                elif g["type"] == "file_exists":
+                    self.assertEqual(g["path"], TASK_DIR + "/pr-body.md")
+                else:
+                    self.assertEqual((g["type"], g["tool"], g["min"], g["max"]), ("tool_used", "Bash", 0, 0))
+
+    def test_closes_is_the_first_line(self):
+        rx = self.rx("closes-first-line")
+        self.assertIsNone(rx.search("\n" + self.GOOD))
+        self.assertIsNone(rx.search(self.GOOD.replace("Closes #7", "Closes #70")))
+        self.assertIsNone(rx.search("## Why\n\n" + self.GOOD))
+
+    def test_section_order_and_old_sections(self):
+        order = self.rx("section-order")
+        swapped = self.GOOD.replace("## Verification", "## X").replace("## Change outline", "## Verification").replace(
+            "## X", "## Change outline")
+        self.assertIsNone(order.search(swapped))
+        self.assertIsNone(order.search(self.GOOD.replace("## Why", "## Summary")))
+        old = self.rx("no-old-sections")
+        self.assertIsNotNone(old.search(self.GOOD.replace("## Why", "## Summary")))
+        self.assertIsNotNone(old.search(self.GOOD.replace("## Change outline", "## Changes")))
+        self.assertIsNone(old.search("### Changes\n## Changelog\n"))
+
+    def test_why_is_one_sentence(self):
+        rx = self.rx("why-one-sentence")
+        for good in ("The demo uses `shop.receipt` and `make check`.\n",
+                     "Bulk buyers (e.g. wholesale customers) pay full price, i.e. they get no discount.\n"):
+            with self.subTest(why=good):
+                self.assertIsNotNone(rx.search(self.section("Why", good)))
+        for bad in ("Wholesale orders get no discount. This PR adds tiers.\n",
+                    "Wholesale orders get no discount\n",
+                    "- Wholesale orders get no discount.\n",
+                    "Wholesale orders get no discount.\nThis PR adds tiers.\n",
+                    "<!-- One sentence. -->\n"):
+            with self.subTest(why=bad):
+                self.assertIsNone(rx.search(self.section("Why", bad)))
+
+    def test_special_things_has_1_to_3_items_or_none(self):
+        rx = self.rx("special-things-1-to-3")
+        for good in ("None.\n", "- one\n", "- one\n- two\n- three\n", "- one\n  continued\n- two\n",
+                     "- one\n\n- two\n"):
+            with self.subTest(good=good):
+                self.assertIsNotNone(rx.search(self.section("Special things to note", good)))
+        for bad in ("- 1\n- 2\n- 3\n- 4\n", "", "Nothing special here.\n", "None.\n- one\n",
+                    "* one\n", "1. one\n"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(rx.search(self.section("Special things to note", bad)))
+
+    def test_change_outline_has_phase_lines_and_a_tree_or_diff(self):
+        rx = self.rx("change-outline-shape")
+        phases = self.GOOD.split("## Change outline\n\n", 1)[1].split("```", 1)[0]
+        self.assertIsNotNone(rx.search(self.section("Change outline", phases + self.TREE)))
+        self.assertIsNone(rx.search(self.section("Change outline", phases)))
+        self.assertIsNone(rx.search(self.section("Change outline", self.TREE)))
+        one_phase = phases.split("2. ", 1)[0]
+        self.assertIsNone(rx.search(self.section("Change outline", one_phase + self.TREE)))
+        python = "```python\ndef bulk_discount(item_count: int) -> float: ...\n```\n"
+        self.assertIsNone(rx.search(self.section("Change outline", phases + python)))
+        # A closing fence never counts as an opening one: a bullet after a python block is not a diff line.
+        self.assertIsNone(rx.search(self.section("Change outline", phases + python + "\n- note\n")))
+        self.assertIsNone(rx.search(self.section("Change outline", phases + python + "\n" + self.TREE)))
+        for info in ("txt", "plaintext", "", "diff"):
+            with self.subTest(info=info):
+                tree = self.TREE.replace("```text", "```" + info, 1)
+                self.assertIsNotNone(rx.search(self.section("Change outline", phases + tree)))
+        tilde = self.TREE.replace("```text", "~~~", 1).replace("```\n", "~~~\n")
+        self.assertIsNotNone(rx.search(self.section("Change outline", phases + tilde)))
+        # The visual must be inside the block, and the block inside the section.
+        no_visual = "```text\nshop/pricing.py\n```\n"
+        self.assertIsNone(rx.search(self.section("Change outline", phases + no_visual)))
+
+    def test_plan_is_attached(self):
+        rx = self.rx("plan-attached")
+        self.assertIsNotNone(rx.search(self.GOOD.replace(
+            "<details><summary>Implementation plan</summary>", "<details>\n<summary>Implementation plan</summary>")))
+        self.assertIsNone(rx.search(self.GOOD.split("<details>", 1)[0]))
+        self.assertIsNone(rx.search(self.GOOD.replace("## Phase 2: B", "")))
+
+    def test_template_passes_the_layout_graders(self):
+        text = re.sub(r"<!--.*?-->", "", read(os.path.join(ROOT, "skills", "describe-pr", "references", "pr-template.md")),
+                      flags=re.S).lstrip().replace("#<n>", "#7")
+        self.assertIsNotNone(self.rx("closes-first-line").search(text))
+        self.assertIsNotNone(self.rx("section-order").search(text))
+        self.assertIsNone(self.rx("no-old-sections").search(text))
+
+    def test_push_and_pr_create_patterns(self):
+        push = js_regex(graders(os.path.join(EVALS, self.CASE))["no-git-push"]["input_match"])
+        create = js_regex(graders(os.path.join(EVALS, self.CASE))["no-gh-pr-create"]["input_match"])
+        for cmd in ("git push -u origin feat/7-bulk-discount-tiers", "git -C /w/cwd push", "git push --force-with-lease"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(push.search('{"command":"%s"}' % cmd))
+        for cmd in ("git status --porcelain", "git log --oneline main..HEAD", "git commit -F x/commit-msg.txt"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(push.search('{"command":"%s"}' % cmd))
+        self.assertIsNotNone(create.search('{"command":"gh pr create --base main --title \'x\' --body-file y"}'))
+        self.assertIsNone(create.search('{"command":"gh pr view --json number"}'))
+
+
 class ScaffoldTest(unittest.TestCase):
     """Each scaffold builds a fixture that `loom-state` routes to the case's skill."""
 
@@ -547,6 +702,39 @@ class ScaffoldTest(unittest.TestCase):
         proc = subprocess.run(["make", "check"], cwd=fx.cwd, env=fx.env, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, universal_newlines=True, timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertEqual(fx.git("status", "--porcelain"), "")
+
+    def test_describe_pr_fixture(self):
+        """Both phases committed as implement makes them, so describe-pr reaches its PR body step."""
+        fx = Scaffolded(self, "describe-pr-quick")
+        state = fx.state()
+        self.assertEqual((state["implementation"]["total"], state["implementation"]["done"]), (2, 2))
+        self.assertIsNone(state["task"]["pr"])
+        plan = fx.read(TASK_DIR + "/04-plan.md")
+        self.assertRegex(plan, r"(?m)^- \[x\] 1\. [^\n]*\n- \[x\] 2\. ")
+        self.assertEqual(plan.count("- [x] Automated: make check"), 2)
+        self.assertIn("- [ ] Manual:", plan)  # implement leaves Manual lines for the user
+        names = re.findall(r"(?m)^## Phase (\d+): (.+)$", plan)
+        log = fx.read(TASK_DIR + "/log.md")
+        logged = re.findall(r"(?m)^## Phase (\d+) — done — ([0-9a-f]{7,})$", log)
+        commits = fx.git("log", "--reverse", "--format=%h%x00%s%x00%b%x01", "main..HEAD").split("\x01")
+        commits = [c.strip("\n").split("\x00") for c in commits if c.strip()]
+        self.assertEqual(len(commits), 2)
+        for (number, name), (log_n, log_hash), (short, subject, body) in zip(names, logged, commits):
+            with self.subTest(phase=number):
+                self.assertEqual(log_n, number)
+                self.assertEqual(log_hash, short)
+                self.assertEqual(body.strip(), "Phase %s: %s" % (number, name))
+                self.assertRegex(subject, r"^feat\(pricing\): .+ \(#7\)$")
+        # No remote, no PR, no body yet; no overview.md, so describe-pr asks nothing before the body.
+        self.assertEqual(fx.git("remote"), "")
+        for path in (TASK_DIR + "/pr-body.md", "docs"):
+            self.assertFalse(os.path.exists(os.path.join(fx.cwd, path)), path)
+        self.assertNotRegex(fx.read(TASK_DIR + "/00-ticket.md"), r"(?m)^pr:")
+        proc = subprocess.run(["make", "check"], cwd=fx.cwd, env=fx.env, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, universal_newlines=True, timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("Ran 12 tests", proc.stdout)
         self.assertEqual(fx.git("status", "--porcelain"), "")
 
     def test_guard_fixture(self):
