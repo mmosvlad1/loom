@@ -610,17 +610,18 @@ class MakefileTest(unittest.TestCase):
         self.assertIn("EVAL_PATH := $(EVAL_PATH):$(shell xcode-select -p 2>/dev/null)/usr/bin", darwin)
         self.assertNotIn("xcode-select", before)
 
-    def test_macos_warns_about_the_command_line_tools(self):
+    def test_macos_warns_without_homebrew_git(self):
         """A warning, not a skip: implement-manual still runs (LOOM_SPEC.md 24.2)."""
         recipe = self.recipe("eval")
-        guard = "ifeq ($(shell xcode-select -p 2>/dev/null),/Library/Developer/CommandLineTools)"
+        guard = "ifeq ($(shell command -v git 2>/dev/null),/usr/bin/git)"
         self.assertIn("ifeq ($(shell uname -s),Darwin)\n" + guard + "\n\t@echo ", recipe)
+        self.assertNotIn("CommandLineTools", self.text)
         warning = recipe.split(guard, 1)[1].split("endif", 1)[0]
-        for part in ("Command Line Tools", "implement-manual", "24.2",
-                     "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"):
+        for part in ("/usr/bin/git", "implement-manual", "24.2", "brew install git"):
             with self.subTest(part=part):
                 self.assertIn(part, warning)
         self.assertEqual(warning.count("\t"), 1)  # one echo line, then the run
+
 
 class WorkflowTest(unittest.TestCase):
     """loom's own CI (LOOM_SPEC.md 21): `make check` on PRs and main; evals only on demand."""

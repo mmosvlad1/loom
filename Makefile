@@ -29,18 +29,21 @@ EVAL_TOOLS = Write Edit 'Bash(git *)' 'Bash(make *)' 'Bash(loom-state *)' 'Bash(
 # PATH for the eval runs (seen live with Claude Code 2.1.318, LOOM_SPEC.md 24.2): the eval runtime
 # does not put the plugin's bin/ on the Bash PATH, so bare `loom-state` calls need it here.
 EVAL_PATH = $(CURDIR)/bin
-# macOS: with only the Command Line Tools selected, /usr/bin/python3 and make were xcrun shims that
-# failed inside the eval sandbox, so the developer directory comes before them. Bash `git` stays
-# pinned to /usr/bin/git: it failed there too (implement-manual then fails), while the macOS CI
-# runner, which has full Xcode, passed. The recipe warns about the Command Line Tools; it runs every case.
+# macOS: with only the Command Line Tools, /usr/bin/python3 and make were xcrun shims that failed
+# inside the eval sandbox, so the developer directory comes before them. Bash `git` cannot be moved
+# this way: the sandboxed shell resolves it to the /usr/bin/git shim regardless of PATH. That shim
+# failed with the Command Line Tools and with full Xcode, and worked once Homebrew git was
+# installed. The recipe warns when the first git on the caller's PATH is /usr/bin/git (make's own
+# PATH, before EVAL_PATH is added: EVAL_PATH holds the developer directory's git); it runs every
+# case either way.
 ifeq ($(shell uname -s),Darwin)
 EVAL_PATH := $(EVAL_PATH):$(shell xcode-select -p 2>/dev/null)/usr/bin
 endif
 
 eval:
 ifeq ($(shell uname -s),Darwin)
-ifeq ($(shell xcode-select -p 2>/dev/null),/Library/Developer/CommandLineTools)
-	@echo "make eval: xcode-select points to the Command Line Tools, where Bash git failed in the eval sandbox, so implement-manual will likely fail (LOOM_SPEC.md 24.2). The macOS CI runner has full Xcode and passes; to try that: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
+ifeq ($(shell command -v git 2>/dev/null),/usr/bin/git)
+	@echo "make eval: the first git on PATH is /usr/bin/git; in the eval sandbox /usr/bin/git (an xcrun shim) fails, so implement-manual will likely fail (LOOM_SPEC.md 24.2). Install git with Homebrew: brew install git"
 endif
 endif
 	PATH="$(EVAL_PATH):$$PATH" $(CLAUDE) plugin eval . \

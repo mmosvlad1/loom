@@ -63,7 +63,7 @@ Run the working copy with `claude --plugin-dir /path/to/loom` in a sandbox repos
 
   Results (JSON and an HTML report) go to `evals/results/`, which git ignores.
 
-  `make eval` runs every case. On a Mac with only the Command Line Tools selected, `git` failed in the Bash tool inside the eval sandbox, so `implement-manual` failed there; `make eval` then prints a warning. The macOS CI runner has full Xcode and passes every case. Selecting full Xcode (`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`) is the likely fix, not yet verified locally.
+  `make eval` runs every case. On macOS, install git with Homebrew first: `brew install git`. Inside the eval sandbox the Bash tool always runs `/usr/bin/git`, an xcrun shim. Without another git the shim fails there, so `implement-manual` cannot commit; full Xcode alone did not help. With Homebrew git installed, the shim runs Homebrew git and the case passed (2 of 2 local runs). Without it, `make eval` prints a warning and still runs every case.
 
   The **Evals** workflow (Actions → Evals → Run workflow) runs every case on a pinned `macos-26` runner, where all four pass (about 0.25 USD per run). It needs an `ANTHROPIC_API_KEY` repository secret. Its `claude_version` input installs another Claude Code version. Linux cannot run the skill cases: the eval sandbox there keeps `TMPDIR` read-only, so every Bash call fails (likely an upstream Claude Code bug, LOOM_SPEC.md §24.2).
 
