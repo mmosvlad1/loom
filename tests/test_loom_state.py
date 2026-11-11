@@ -242,7 +242,7 @@ class ArtifactsAndLineTest(RepoTestCase):
         proc = run_loom_state(self.repo, "--docs")
         self.assertEqual(proc.returncode, 2)
         self.assertEqual(proc.stdout, "")
-        self.assertIn("not implemented in v1", proc.stderr)
+        self.assertIn("not implemented yet (planned for v1.2)", proc.stderr)
 
     def fake_gh(self, script: str) -> dict:
         """Run loom-state --pr with a fake `gh` first on PATH."""

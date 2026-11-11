@@ -1019,7 +1019,7 @@ class DocsTemplateTest(unittest.TestCase):
         self.assertIn("the `Closes #<n>` line, the Why section, and the Verification section", oneshot)
         self.assertIn("No Special things to note, no Change outline, no Decisions, and no plan", oneshot)
 
-    # The PR layout (§13.6, §23.1 v1.1): section names in order, as the template writes them.
+    # The PR layout (§13.6, §23.1, done in v1.1): section names in order, as the template writes them.
     PR_SECTIONS = ["Why", "Special things to note", "Change outline", "Verification", "Decisions"]
 
     def test_pr_sections_in_order(self):
@@ -1116,9 +1116,27 @@ class DocsTemplateTest(unittest.TestCase):
         spec = spec_section("### 9.10 `describe-pr`", "### 9.11")
         self.assertIn("So does a failed `gh` when the ticket already has `pr:` (`PR #<n> state unknown`)", spec)
 
+    def test_process_metrics_line(self):
+        """describe-pr copies task.metrics.line into the summary's Implementation section (§11.6, §13.4)."""
+        body = skill_md("describe-pr")
+        self.assertIn("end the Implementation section with the line `Process metrics: <task.metrics.line>`", body)
+        self.assertIn("If `task.metrics` is `null`, write no Process metrics line", body)
+        template = section(reference("describe-pr", "summary-template.md"), "## Implementation")
+        self.assertIn("`Process metrics: <task.metrics.line>`", template)
+        self.assertIn("Never estimate the numbers", template)
+        self.assertIn("refresh its `Process metrics:` line from `task.metrics.line`", shared("pr-update.md"))
+        spec = spec_section("### 13.4 Task summary", "### 13.5 ADR")
+        self.assertIn("Process metrics", spec)
+        roadmap = spec_section("### 23.1 v1.2 (planned)", "### 23.2")
+        planned, done = roadmap.split("Done in v1.1", 1)
+        self.assertNotIn("Observability", planned)
+        self.assertIn("**Observability:**", done)
+        self.assertIn("**Docs freshness gate:**", planned)
+        self.assertNotIn("Docs freshness gate", done)
+
     def test_roadmap_records_the_pr_layout_as_done(self):
-        roadmap = spec_section("### 23.1 v1.1 (planned)", "### 23.2")
-        planned, done = roadmap.split("Done in v1.1:", 1)
+        roadmap = spec_section("### 23.1 v1.2 (planned)", "### 23.2")
+        planned, done = roadmap.split("Done in v1.1", 1)
         self.assertNotIn("PR layout", planned)
         self.assertIn("**PR layout:**", done)
         self.assertIn("§13.6", done)

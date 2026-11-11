@@ -201,7 +201,7 @@ class NoLoomJsonTest(unittest.TestCase):
             self.assertSilent(run_hook(SESSION, payload))
 
     def test_bad_input_never_crashes(self):
-        for script in (GUARD, FILTER, SESSION, "subagent_checks.py", "stop_lint.py"):
+        for script in (GUARD, FILTER, SESSION, "subagent_checks.py", "stop_lint.py", "subagent_events.py"):
             for raw in ("", "not json", "[]", '{"tool_input": 5}'):
                 proc = run_hook(script, None, raw=raw, cwd=self.plain)
                 self.assertEqual(proc.returncode, 0, (script, raw, proc.stderr))
@@ -525,7 +525,7 @@ class BrokenHelperImportTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         with open(os.path.join(tmp, "loomhook.py"), "w") as fh:
             fh.write("raise ImportError('broken helper')\n")
-        for script in (GUARD, FILTER, SESSION, "subagent_checks.py", "stop_lint.py"):
+        for script in (GUARD, FILTER, SESSION, "subagent_checks.py", "stop_lint.py", "subagent_events.py"):
             shutil.copy(os.path.join(HOOKS_DIR, script), tmp)
             proc = subprocess.run(
                 [sys.executable, os.path.join(tmp, script)], input=json.dumps(bash_payload("git commit", tmp)),

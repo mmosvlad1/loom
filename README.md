@@ -4,7 +4,7 @@ A Claude Code plugin for structured, agent-driven development: **Research → Pl
 
 loom turns a GitHub issue into a merged pull request through explicit phases. Each phase runs in a fresh session and writes a markdown artifact; the next phase reads only those artifacts. You stay in control at the checkpoints that matter: design approval, plan approval, manual verification, push, and merge.
 
-**Status:** early development. All skills exist: `setup`, `backlog`, `start-task`, `research-questions`, `research`, `design`, `plan`, `iterate`, `implement`, `describe-pr`, `finish-task`, and `next`, with the state script, the safety hooks, and the hooks that enforce checks. Milestone M6 added the eval suite (`evals/`, `make eval`) and loom's own CI. See [LOOM_SPEC.md](LOOM_SPEC.md) for the full specification.
+**Status:** version 1.1.0, early development: loom has not been used on a real project yet. All skills exist: `setup`, `backlog`, `start-task`, `research-questions`, `research`, `design`, `plan`, `iterate`, `implement`, `describe-pr`, `finish-task`, and `next`, with the state script, the safety hooks, and the hooks that enforce checks. Milestone M6 added the eval suite (`evals/`, `make eval`) and loom's own CI. Version 1.1.0 adds the new PR layout, one command per Bash call in every skill, inline PR review comments in `iterate`, and process metrics; see [CHANGELOG.md](CHANGELOG.md). See [LOOM_SPEC.md](LOOM_SPEC.md) for the full specification.
 
 ## Install
 
@@ -27,7 +27,7 @@ Or in two steps:
 4. **`/loom:backlog`** discusses ideas, helps fill `docs/product/vision.md`, and creates GitHub issues (labels `type:*`, `size:*`, `mode:*`).
 5. **`/loom:start-task #<n>`** picks the mode, creates the branch and `.loom/tasks/<n>-<slug>/00-ticket.md`.
 6. **`/clear`, then `/loom:next`**, again and again: `next` runs the next phase for the mode (research, design, plan, implement). Answer question rounds and approve with `/loom:iterate`.
-7. **`/loom:describe-pr`** writes the task summary and ADRs into `docs/`, pushes, and opens the PR (with confirmation). The PR body has a one-sentence Why, 1–3 Special things to note, and a Change outline (a file tree or an interface `diff`).
+7. **`/loom:describe-pr`** writes the task summary and ADRs into `docs/`, pushes, and opens the PR (with confirmation). The PR body has a one-sentence Why, 1–3 Special things to note, and a Change outline (a file tree or an interface `diff`). The task summary ends its Implementation section with a Process metrics line, e.g. `9 subagent runs (research 4, implement 5), 2 review rounds (1 changes-needed), 1 checks retry, subagent time 14 min`.
 8. **`/loom:finish-task`** waits for green checks, squash-merges (with confirmation), and archives the task directory.
 
 ## Highlights
@@ -36,6 +36,7 @@ Or in two steps:
 - GitHub Issues as the backlog, one branch and one squash-merged PR per task
 - Batched design questions in rounds instead of one question at a time
 - Checks enforced by hooks, not trusted from the agent
+- Every loom subagent run is recorded in `.loom/tasks/<n>-<slug>/events.jsonl` (agent, phase, result, duration); `loom-state --json` sums it up as `task.metrics`
 - `/clear` → `/loom:next` between phases
 - Durable knowledge (task summaries, ADRs, architecture) committed to `docs/`; working artifacts stay local
 
@@ -48,9 +49,9 @@ Run the working copy with `claude --plugin-dir /path/to/loom` in a sandbox repos
 
   | Case | Checks |
   |---|---|
-  | `research-full` | `/loom:research` writes `02-research.md` in review with `file:line` references and never reads `00-ticket.md` |
+  | `research-full` | `/loom:research` writes `02-research.md` in review with `file:line` references and never reads `00-ticket.md`; the subagent events hook writes `events.jsonl` |
   | `design-full` | `/loom:design` writes round 1 with every question open and an empty Resolved Decisions table |
-  | `implement-manual` | `/loom:implement` commits phase 1 and stops for manual verification before phase 2 |
+  | `implement-manual` | `/loom:implement` commits phase 1 and stops for manual verification before phase 2; `events.jsonl` has the reviewer's verdict and the implementer's checks result |
   | `guard-main` | the hook blocks `git commit` on `main` |
   | `describe-pr-quick` | `/loom:describe-pr` writes `pr-body.md` with Why, Special things to note, Change outline, Verification, and Decisions, and does not push or open the PR |
 

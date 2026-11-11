@@ -29,6 +29,18 @@
         ]
       }
     ],
+    "SubagentStart": [
+      {
+        "matcher": "^loom:",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/subagent_events.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "matcher": "^loom:implementer$",
@@ -37,6 +49,16 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/subagent_checks.py\"",
             "timeout": 600
+          }
+        ]
+      },
+      {
+        "matcher": "^loom:",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/subagent_events.py\"",
+            "timeout": 10
           }
         ]
       }

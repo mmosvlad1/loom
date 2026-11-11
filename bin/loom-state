@@ -53,6 +53,7 @@ BRANCH_RE = re.compile(r"^(feat|fix|chore|docs|refactor)/(\d+)-(.+)$")
 
 TICKET_FILE = "00-ticket.md"
 LOG_FILE = "log.md"
+EVENTS_FILE = "events.jsonl"
 PLAN_FILE = "04-plan.md"
 RESEARCH_FILE = "02-research.md"
 ARCHIVE_DIR = "_archive"
@@ -813,6 +814,234 @@ def fetch_pr(top: str, cfg: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], L
 
 
 # ---------------------------------------------------------------------------
+# Subagent events and process metrics (LOOM_SPEC.md 11.6)
+# ---------------------------------------------------------------------------
+
+# Phase names of events.jsonl in lifecycle order; `iterate` is the work after
+# the last implementation phase is done (fixes before and after the PR).
+EVENT_PHASES = ("research-questions", "research", "design", "plan", "implement", "iterate")
+REVIEWER_AGENT = "implementation-reviewer"
+
+
+def task_phase(
+    mode: Optional[str], artifacts: List[Dict[str, Any]], impl: Optional[Dict[str, Any]]
+) -> Tuple[Optional[str], Optional[int]]:
+    """The phase a task is in, as (phase, implementation phase number or None).
+
+    Pure function, used by the subagent events hook. First matching rule wins:
+    1. an implementation phase is in progress: implement, that phase;
+    2. implementation started (also with a blocked phase), not oneshot, and a
+       gate artifact of the mode is draft or in review (a design or plan change,
+       decide_next row 4): the first such gate;
+    3. an implementation phase is blocked: implement, that phase;
+    4. implementation started: implement, the first phase not done; all done: iterate;
+    5. oneshot: implement, phase 1;
+    6. an artifact of the mode's phases is draft: the latest such phase;
+    7. a gate artifact is in review: the first such gate;
+    8. the phase after the latest existing artifact; after the plan: implement,
+       the first phase not done.
+    An invalid mode gives (None, None).
+    """
+    impl = impl or {}
+    phases = impl.get("phases") or []
+    if impl.get("inProgress"):
+        return "implement", impl["inProgress"]
+    blocked = impl.get("blocked")
+    not_done = [p.get("number") for p in phases if p.get("status") != "done"]
+    status = {a.get("phase"): a.get("status") for a in artifacts}
+    started = bool(blocked) or any(p.get("status") != "pending" for p in phases)
+    if started and mode != "oneshot":
+        for gate in GATES_BY_MODE.get(mode, []):
+            if status.get(gate) in ("draft", "in-review"):
+                return gate, None
+    if blocked:
+        return "implement", blocked.get("phase")
+    if started:
+        return ("implement", not_done[0]) if not_done else ("iterate", None)
+    if mode == "oneshot":
+        return "implement", 1
+    if mode not in MODES:
+        return None, None
+    sequence = PHASES_BY_MODE[mode]
+    drafts = [p for p in sequence if status.get(p) == "draft"]
+    if drafts:
+        return drafts[-1], None
+    for gate in GATES_BY_MODE[mode]:
+        if status.get(gate) == "in-review":
+            return gate, None
+    existing = [i for i, p in enumerate(sequence) if p in status]
+    following = max(existing) + 1 if existing else 0
+    if following < len(sequence):
+        return sequence[following], None
+    return "implement", not_done[0] if not_done else 1
+
+
+def event_context(cwd: str) -> Optional[Dict[str, Any]]:
+    """Task directory and phase for the subagent events hook.
+
+    Returns {"dir": <absolute task directory>, "phase": ..., "implementationPhase": ...,
+    "check": <checks.check>},
+    or None outside a loom project, on the main branch, on a branch without a
+    task directory, and for an archived task. Reads only files and the branch
+    (no git status, no stale check), so the hook stays fast.
+    """
+    top = find_toplevel(cwd)
+    if not top:
+        return None
+    cfg, _ = load_config(top)
+    if cfg is None:
+        return None
+    branch = current_branch(top)
+    m = BRANCH_RE.match(branch or "")
+    if not m or branch == cfg["mainBranch"]:
+        return None
+    task_dir, archived, _ = find_task_dir(work_dir_abs(top, cfg), int(m.group(2)), m.group(3))
+    if not task_dir or archived:
+        return None
+    mode = parse_frontmatter(read_text(os.path.join(task_dir, TICKET_FILE)) or "").get("mode")
+    artifacts = []
+    for name, phase in ARTIFACT_FILES:
+        text = read_text(os.path.join(task_dir, name))
+        if text is not None:
+            fm = parse_frontmatter(text)
+            artifacts.append({"phase": fm.get("phase") or phase, "status": fm.get("status")})
+    plan_text = read_text(os.path.join(task_dir, PLAN_FILE))
+    plan_body = split_frontmatter(plan_text)[1] if plan_text is not None else None
+    impl, _ = implementation_progress(mode, plan_body, read_text(os.path.join(task_dir, LOG_FILE)))
+    phase, number = task_phase(mode, artifacts, impl)
+    check = cfg["checks"].get("check")
+    if not isinstance(check, str) or not check.strip():
+        check = DEFAULT_CONFIG["checks"]["check"]
+    return {"dir": task_dir, "phase": phase, "implementationPhase": number, "check": check}
+
+
+def read_events(path: str) -> List[Dict[str, Any]]:
+    """Valid lines of events.jsonl, in file order; malformed lines are skipped.
+
+    A valid line is a JSON object with `event` `start` or `stop` and a
+    non-empty string `agent_id`.
+    """
+    text = read_text(path)
+    if text is None:
+        return []
+    events: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if (
+            isinstance(item, dict)
+            and item.get("event") in ("start", "stop")
+            and isinstance(item.get("agent_id"), str)
+            and item["agent_id"]
+        ):
+            events.append(item)
+    return events
+
+
+def event_session(event: Dict[str, Any]) -> Optional[str]:
+    """The `session_id` of an event line; None when it is missing or not a string."""
+    value = event.get("session_id")
+    return value if isinstance(value, str) and value else None
+
+
+def _plural(count: int, singular: str, plural: str) -> str:
+    return "%d %s" % (count, singular if count == 1 else plural)
+
+
+def _duration_text(seconds: float) -> str:
+    whole = int(round(seconds))
+    if whole < 60:
+        return "%d s" % whole
+    return "%d min" % round(seconds / 60)
+
+
+def events_metrics(events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Aggregate subagent events into process metrics; None without a run.
+
+    Pure function. A run is one (session_id, agent_id); a missing session_id is
+    the value None. A run has one or more segments: each start line opens a
+    segment (Claude Code also fires SubagentStart when it resumes a subagent),
+    and the stop lines after it close it. Its agent and phase come from its
+    first start line (else its first stop line).
+    - checks retries: stop lines with stop_hook_active true (a stop hook kept
+      the subagent running);
+    - review rounds: stop lines of implementation-reviewer with
+      stop_hook_active not true (one verdict each); changes-needed counts those
+      with the result changes-needed;
+    - subagent time: the sum over all segments of the duration_s of the
+      segment's last stop line, so parallel runs add up and idle time between
+      segments does not count;
+    - unfinished: runs whose last line is a start line.
+    """
+    runs: Dict[Tuple[Optional[str], str], Dict[str, Any]] = {}
+    for event in events:
+        run = runs.setdefault((event_session(event), event["agent_id"]),
+                              {"first": event, "first_start": None, "segments": [], "last": None})
+        if event["event"] == "start":
+            run["first_start"] = run["first_start"] or event
+            run["segments"].append([])
+        else:
+            if not run["segments"]:
+                run["segments"].append([])  # a stop line without a start line
+            run["segments"][-1].append(event)
+        run["last"] = event["event"]
+    if not runs:
+        return None
+    for run in runs.values():
+        source = run["first_start"] or run["first"]
+        run["agent"] = source.get("agent")
+        run["phase"] = source.get("phase")
+    counts: Dict[str, int] = {}
+    for run in runs.values():
+        phase = run["phase"] if isinstance(run["phase"], str) and run["phase"] else "unknown"
+        counts[phase] = counts.get(phase, 0) + 1
+    order = list(EVENT_PHASES) + sorted(p for p in counts if p not in EVENT_PHASES)
+    by_phase = {p: counts[p] for p in order if p in counts}
+    stops = [(run, stop) for run in runs.values() for segment in run["segments"] for stop in segment]
+    verdicts = [stop for run, stop in stops if run["agent"] == REVIEWER_AGENT and stop.get("stop_hook_active") is not True]
+    changes_needed = sum(1 for stop in verdicts if stop.get("result") == "changes-needed")
+    retries = sum(1 for _, stop in stops if stop.get("stop_hook_active") is True)
+    unfinished = sum(1 for run in runs.values() if run["last"] == "start")
+    seconds = 0.0
+    for run in runs.values():
+        for segment in run["segments"]:
+            value = segment[-1].get("duration_s") if segment else None
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+                seconds += value
+    parts = ["%s (%s)" % (
+        _plural(len(runs), "subagent run", "subagent runs"),
+        ", ".join("%s %d" % (p, n) for p, n in by_phase.items()),
+    )]
+    if verdicts:
+        review_text = _plural(len(verdicts), "review round", "review rounds")
+        if changes_needed:
+            review_text += " (%d changes-needed)" % changes_needed
+        parts.append(review_text)
+    if retries:
+        parts.append(_plural(retries, "checks retry", "checks retries"))
+    if unfinished:
+        parts.append("%d unfinished" % unfinished)
+    parts.append("subagent time %s" % _duration_text(seconds))
+    return {
+        "runs": len(runs),
+        "byPhase": by_phase,
+        "reviewRounds": len(verdicts),
+        "changesNeeded": changes_needed,
+        "checkRetries": retries,
+        "unfinished": unfinished,
+        "subagentSeconds": round(seconds, 1),
+        "line": ", ".join(parts),
+    }
+
+
+def task_metrics(task_dir: str) -> Optional[Dict[str, Any]]:
+    """Process metrics from <task dir>/events.jsonl; None without the file or a valid line."""
+    return events_metrics(read_events(os.path.join(task_dir, EVENTS_FILE)))
+
+
+# ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
 
@@ -913,6 +1142,7 @@ def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
                 "archived": archived,
                 "url": ticket.get("url"),
                 "pr": _to_int(ticket.get("pr")),
+                "metrics": task_metrics(task_dir),
             }
             artifacts, w = build_artifacts(top, cfg, task_dir)
             state["artifacts"] = artifacts
@@ -1276,7 +1506,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not top or not os.path.isfile(config_path(top)):
         return 0  # not a loom project: silent no-op
     if args.docs:
-        sys.stderr.write("loom-state: --docs is not implemented in v1 (planned for v1.1)\n")
+        sys.stderr.write("loom-state: --docs is not implemented yet (planned for v1.2)\n")
         return 2
     state = compute_state(cwd, with_pr=args.pr)
     if state is None:

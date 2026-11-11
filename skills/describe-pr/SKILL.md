@@ -102,6 +102,7 @@ Write `<docs>/tasks/<n>-<slug>.md` from `summary-template.md`:
 - If the file exists (a re-run), update it in place. Keep text that is still true.
 - **Key Decisions**: the resolved decisions of `03-design.md` and `04-plan.md` that matter after the merge, with links to their ADRs (step 4).
 - **Implementation**: one line per implementation phase with its commit subject. Do not write hashes; the rebase and the squash merge change them.
+- **Process metrics**: if `task.metrics` in the state is not `null`, end the Implementation section with the line `Process metrics: <task.metrics.line>`. Copy `task.metrics.line` exactly. If `task.metrics` is `null`, write no Process metrics line. Never estimate the numbers yourself.
 - **Deviations from Plan**: from `log.md` (`Deviations:`, `Additions:`, `Fix:` lines, and `## Plan change` entries).
 - **Verification**: the checks and the manual steps. Mark a manual step as passed only if the user confirmed it.
 - **Follow-ups**: out-of-scope items, worthwhile nits, and open risks. Step 9 proposes them as issues.
