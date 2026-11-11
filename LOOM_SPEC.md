@@ -2,7 +2,7 @@
 
 > A Claude Code plugin for structured, agent-driven development: **Research → Plan → Implement**, with GitHub Issues as the backlog, artifacts as the hand-off between phases, and a full git flow from issue to squash merge.
 
-Status: **Draft, revision 2** · Last updated: 2026-11-10 · Describes plugin release **v1**
+Status: **Draft, revision 2** · Last updated: 2026-11-11 · Describes plugin release **1.1.0** (`CHANGELOG.md`)
 
 Changes in revision 2: fixes from the spec review (finish-task commands, agent `tools`, namespacing, versioning, config use, hook exit codes, oneshot conditions), decisions on the post-PR flow, setup bootstrap, approval gates, mode changes and resume, and new features: `loom-state`, `/loom:next`, enforced checks, harness evals, shared snippets, writing style.
 
@@ -156,11 +156,13 @@ loom/
 │       ├── guard_main.py           # §11.2
 │       ├── block_output_filtering.py  # §11.3
 │       ├── subagent_checks.py      # §11.4 (milestone M4)
-│       └── stop_lint.py            # §11.5 (milestone M4)
+│       ├── stop_lint.py            # §11.5 (milestone M4)
+│       └── subagent_events.py      # §11.6 (v1.1)
 ├── evals/                          # §20.2: one directory per case, _fixture/, results/ (ignored)
 ├── tests/                          # unit tests for loom-state, hook scripts, skills, evals (stdlib unittest)
 ├── .github/workflows/              # ci.yml (make check), eval.yml (make eval on macOS, on demand)
 ├── Makefile                        # test, validate, check, eval
+├── CHANGELOG.md                    # release notes per version (§21)
 ├── LICENSE
 ├── NOTICE
 └── README.md
@@ -193,7 +195,7 @@ loom/
 
 | Zone | Git | Purpose | Lifetime |
 |---|---|---|---|
-| `.loom/` | ignored | Working artifacts: ticket copy, research, design, plan, log | Until the task is finished, then archived locally |
+| `.loom/` | ignored | Working artifacts: ticket copy, research, design, plan, log; subagent events (§11.6) | Until the task is finished, then archived locally |
 | `docs/` | committed | Durable knowledge: vision, architecture, ADRs, task summaries | Permanent |
 
 `describe-pr` distills durable knowledge from `.loom/` into `docs/` before the PR is opened. Limitation: `.loom/` belongs to one checkout. It does not travel between machines or worktrees.
@@ -351,7 +353,8 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
   "mainBranch": "main",
   "onMain": false,
   "task": { "number": 42, "slug": "auth-flow", "dir": ".loom/tasks/42-auth-flow", "mode": "full",
-            "size": "L", "archived": false, "url": "https://github.com/o/r/issues/42", "pr": null },
+            "size": "L", "archived": false, "url": "https://github.com/o/r/issues/42", "pr": null,
+            "metrics": null },
   "artifacts": [
     { "file": "02-research.md", "phase": "research", "status": "in-review", "openQuestions": 0, "stale": false },
     { "file": "03-design.md", "phase": "design", "status": "in-review", "openQuestions": 3, "acceptedByDefault": 0 }
@@ -371,10 +374,24 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 - `task` is `null` when the branch matches no task directory. `artifacts` lists only existing files of 01–04 (the ticket is reported through `task`; `*.superseded.md` files are ignored).
 - `implementation.blocked` is `null` or `{ "phase": N, "reason": "…" }`. Phase status is `pending`, `in-progress`, `done`, or `blocked`.
 - `task.size` is `S`, `M`, `L`, or `null`, from the ticket frontmatter.
+- `task.metrics` is `null`, or the process metrics of `<task dir>/events.jsonl` (§11.6) when the file has at least one valid line:
+  ```json
+  { "runs": 9, "byPhase": { "research": 4, "implement": 5 }, "reviewRounds": 2, "changesNeeded": 1,
+    "checkRetries": 1, "unfinished": 0, "subagentSeconds": 842.5,
+    "line": "9 subagent runs (research 4, implement 5), 2 review rounds (1 changes-needed), 1 checks retry, subagent time 14 min" }
+  ```
+  - A run is one `session_id` and `agent_id` pair; a `null` `session_id` is an ordinary value. A run has one or more segments: each `start` line opens a segment (also when Claude Code resumes the subagent), and the `stop` lines after it close it. Its agent and phase come from its first `start` line (else its first `stop` line).
+  - `byPhase` counts runs per phase, in lifecycle order; a run without a phase counts as `unknown`.
+  - `reviewRounds` counts the `stop` lines of `implementation-reviewer` with `stop_hook_active` not `true`: each is one verdict, so a resumed reviewer that gives a second verdict counts twice. `changesNeeded` counts those with the result `changes-needed`.
+  - `checkRetries` counts the `stop` lines with `stop_hook_active` `true`: a stop hook (normally the checks of §11.4) kept the subagent running.
+  - `unfinished` counts runs whose last line is a `start` line (interrupted, or still running).
+  - `subagentSeconds` sums, over all segments, the `duration_s` of the segment's last `stop` line. Parallel runs add up, and idle time between segments does not count; it is not wall-clock time.
+  - `line` is the text for the task summary (§13.4). Parts with a count of 0 are left out (review rounds, changes-needed, checks retries, unfinished). The time is in rounded seconds below 60 seconds, else in rounded minutes.
+  - Malformed lines are skipped. The `--line` output does not change.
 - `warnings` collects problems that did not stop the computation (unreadable `loom.json`, missing status, invalid size, unclosed code fence, failed stale check, `gh` errors).
 - `--line`: one line for the statusline, e.g. `#42 · full · design:in-review · 3 open Q`, `#42 · full · impl 1/3`, or `#42 · archived`. Empty output when there is no task.
 - `--pr`: adds PR state from `gh pr view --json number,state,reviewDecision,statusCheckRollup,mergeStateStatus` as `{ number, state, reviewDecision, checks: passing|failing|pending|none, mergeStateStatus, behindMain }`; `behindMain` is computed with git after `git fetch origin <mainBranch>`. This calls `gh` and the network, so it is not used by the `SessionStart` hook. If `gh` is missing or unauthenticated, or the branch has no PR, `pr` is `null` and a warning is added.
-- `--docs`: reserved for the docs freshness check (§23). In v1 it prints "not implemented in v1" to stderr and exits 2.
+- `--docs`: reserved for the docs freshness check (§23.1, planned for v1.2). Until then it prints "not implemented yet (planned for v1.2)" to stderr and exits 2.
 - `--slug '<issue title>'`: prints the branch slug of §9.3 step 5 and exits 0. It is a pure string function, so it also works outside a loom project. A title that starts with `-` is taken as the title, not as an option. Before the ASCII step it transliterates the letters that Unicode NFKD keeps (`ß` → `ss`, `æ` → `ae`, `œ` → `oe`, `ø` → `o`, `đ` → `d`, `ł` → `l`, `þ` → `th`). One quirk is accepted: a first word that fits and a second word that would pass 40 characters leave only the first word (`a <50-character word>` → `a`). `start-task` uses it, so the slug never depends on the model.
 
 ### 8.3 Rules
@@ -391,7 +408,7 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 
 ### 8.4 Implementation
 
-A single Python script, `bin/loom-state`, with no dependencies outside the standard library (Python 3.9+, the stock macOS `python3`), with unit tests in `tests/`. The decision table is a pure function (`decide_next(state)`) that is tested with plain state dicts. Hook scripts import the same file instead of re-implementing its logic.
+A single Python script, `bin/loom-state`, with no dependencies outside the standard library (Python 3.9+, the stock macOS `python3`), with unit tests in `tests/`. The decision table is a pure function (`decide_next(state)`) that is tested with plain state dicts. The task phase of §11.6 (`task_phase()`) and the process metrics (`events_metrics()`) are pure functions too. Hook scripts import the same file instead of re-implementing its logic.
 
 ---
 
@@ -575,7 +592,7 @@ Steps 2–4 are `_shared/implementation-loop.md`; `iterate` runs the same loop f
 **Does:**
 1. Reads all artifacts and `log.md`. A working tree that is dirty only below `docsDir` is its own earlier partial run: it continues. Code changes stop it.
    A missing `gh` stops it. So does a failed `gh` when the ticket already has `pr:` (`PR #<n> state unknown`): the PR may exist. Otherwise other `gh` problems (not authenticated, no remote) do not stop it: it still writes the docs and `pr-body.md`, and step 7 reports the failing push or `gh pr create`.
-2. quick/full: writes `docs/tasks/<n>-<slug>.md` (§13.4).
+2. quick/full: writes `docs/tasks/<n>-<slug>.md` (§13.4). Its Implementation section ends with `Process metrics: <task.metrics.line>` when `task.metrics` (§8.2) is not `null`; without it the line is left out, never estimated.
 3. Creates ADRs for resolved decisions marked `ADR? = yes` (§13.5).
 4. Checks whether the task changed the architecture; if so, proposes an update to `docs/architecture/overview.md`.
 5. Commits `docs(#<n>): record decisions and summary` — only if something changed.
@@ -592,7 +609,7 @@ Steps 2–4 are `_shared/implementation-loop.md`; `iterate` runs the same loop f
 3. `gh pr checks --required --watch` (pending ≠ failed). Refuses to merge on failure; "no required checks" is reported separately and needs explicit confirmation.
 4. After confirmation: `gh pr merge --squash --delete-branch --subject '<PR title>' --match-head-commit <sha>` (no number: it selects the PR of the current branch; it deletes the local and remote branch). `--subject` keeps the Conventional Commits title, which already ends with `(#<n>)`, as the squash commit subject; without it GitHub may append ` (#<PR number>)`. `--match-head-commit` is the head whose checks step 3 watched. The title comes from `gh pr view --json title` and is single-quoted (`_shared/git-flow.md`).
 5. `git switch <mainBranch> && git pull && git fetch --prune`. Deletes the local branch with `git branch -D` only if it still exists.
-6. Moves the task directory to `.loom/tasks/_archive/`.
+6. Moves the task directory to `.loom/tasks/_archive/`. `events.jsonl` (§11.6) moves with it; the hook writes nothing for an archived task.
 7. If the merged task was the setup task and no ruleset exists, offers to enable it (§17.3).
 
 All steps are idempotent: re-running after a partial failure continues where it stopped. Every stop after the merge ends with `Next: /loom:finish-task #<n>`, which resumes on the main branch.
@@ -720,6 +737,7 @@ Known limits:
 - After `hooks.maxCheckAttempts` failures in a row (default 3) it exits 0, so the subagent can stop, with a `systemMessage` for the user; `implement` runs the checks again and records `blocked`.
 - The counter is always read, also when `stop_hook_active` is `false`; a counter file older than one hour is stale (an interrupted run) and counts as 0. The counter ends the loop: Claude Code's own cap of 8 consecutive stop-hook continuations resets on every tool call. `stop_hook_active` (`true` while the subagent continues because a stop hook blocked it) is recorded in the counter file for debugging only.
 - No `.claude/loom.json`, or another agent: silent no-op.
+- A second `SubagentStop` entry (§11.6, matcher `^loom:`) also matches the implementer. Matching hooks run in parallel; the events hook only appends a line and does not change this hook's exit code.
 
 ### 11.5 `Stop` — quick lint (optional)
 
@@ -728,6 +746,47 @@ Known limits:
 - Runs `checks.lint` (270-second timeout; hook `timeout` 300 seconds). On failure exits 2 so Claude sees the output; respects `stop_hook_active` to avoid loops: while it is `true`, the hook does nothing, so each stop gets at most one lint block.
 
 ---
+
+### 11.6 `SubagentStart` / `SubagentStop` — subagent events (v1.1)
+
+A *subagent run* is one execution of a loom agent, identified by its `session_id` and `agent_id` (as in §11.4). `subagent_events.py` records every run of the current task in `<task dir>/events.jsonl`; `loom-state` aggregates the file into `task.metrics` (§8.2), and `describe-pr` copies its line into the task summary (§13.4).
+
+- Matcher: `^loom:` on both events, so only loom's own agents count (plugin-scoped `agent_type`, e.g. `loom:codebase-locator`). The script checks the `loom:` prefix again. Hook `timeout`: 10 seconds.
+- `SubagentStart` appends a `start` line. Each `SubagentStop` appends a `stop` line. `SubagentStop` fires again each time a stop hook keeps the implementer running (§11.4), so one run can have several `stop` lines; `stop_hook_active` tells them apart. `SubagentStart` also fires when Claude Code resumes a subagent, so one run can have several segments, each opened by a `start` line.
+- The task directory is found as in `loom-state` (§8.3). On the main branch, on a branch without a task directory, for an archived task, outside a git repository, and without `.claude/loom.json`, the hook does nothing. It reads only files and the branch: no `git status`, no stale check.
+- Each line is one `O_APPEND` write, so parallel hooks never mix lines. A cut last line gets a newline first, so it stays one malformed line.
+- The hook never blocks or fails a subagent: exit 0 always, no stdout. On an unexpected error it writes a short message to stderr (the rule of §11).
+- The file is in the ignored task directory, so it is never committed. `finish-task` archives it with the task directory (§9.11).
+
+Line format (one compact JSON object per line, keys in this order):
+
+```json
+{"event":"start","ts":"2026-11-11T12:34:56.789Z","session_id":"5f0c…","agent_id":"a1b2c3","agent":"implementer","phase":"implement","implementation_phase":2}
+{"event":"stop","ts":"2026-11-11T12:41:02.120Z","session_id":"5f0c…","agent_id":"a1b2c3","agent":"implementer","phase":"implement","implementation_phase":2,"result":"pass","stop_hook_active":false,"duration_s":365.3}
+```
+
+- `ts`: UTC, ISO 8601 with milliseconds.
+- `session_id`: from the hook input; `null` when the input has none.
+- `agent`: `agent_type` without `loom:`.
+- `phase`: the task phase by the rule below, at the time of the event. `implementation_phase` is present only for `implement`.
+- `result` (`stop` only), parsed from `last_assistant_message`:
+  - `implementation-reviewer`: the verdict line of §10.2: `pass`, `changes-needed`, or `unknown`.
+  - `implementer`: the line of its `### Checks` section whose backticked command is `checks.check` from `.claude/loom.json` (default `make check`), e.g. `` `make check`: pass (42 passed) ``: `pass`, `fail`, or `unknown`.
+  - every other agent: `done`.
+- `duration_s` (`stop` only): seconds since the latest `start` line of the same run (same `session_id` and `agent_id`) in the file, so it covers the current segment; one decimal; `null` without a `start` line.
+
+Task phase (`task_phase()` in `loom-state`). The first matching rule wins:
+
+1. An implementation phase is in progress: `implement`, that implementation phase.
+2. Implementation started (an implementation phase is not `pending`, also a blocked one), the mode is not oneshot, and a gate artifact of the mode is `draft` or `in-review`: the first such gate (`design` in full mode, then `plan`). This is a design or plan change, which `/loom:iterate` handles (§9.12 rows 4, 6, and 7).
+3. An implementation phase is blocked: `implement`, that implementation phase.
+4. Implementation started: `implement`, the first implementation phase that is not done. All done: `iterate`.
+5. oneshot: `implement`, implementation phase 1.
+6. An artifact of the mode's phases is `draft`: the latest such phase. For example, research writes `draft` before its claim check (§9.5).
+7. A gate artifact is `in-review`: the first such gate (agents during a question round).
+8. The phase after the latest existing artifact of the mode. After the plan: `implement`, the first implementation phase that is not done.
+
+An invalid mode gives `null`. `iterate` covers all work after the last implementation phase: fixes before the PR and the post-PR fix path. `implement` writes `in-progress` into `log.md` before it launches the implementer, so implement-time agents get rule 1. Known limit: `/loom:iterate <feedback>` on research questions or research, and a research rerun over a finished research, count as the next phase.
 
 ## 12. Question Rounds Protocol
 
@@ -858,6 +917,8 @@ A skill writes `draft` while it works and `in-review` when it finishes. `iterate
 ## Phase 2: …
 ```
 
+**`events.jsonl`** — not an artifact: one JSON line per subagent event, written by the hook of §11.6 and read by `loom-state` for `task.metrics`. Skills never write it.
+
 **`log.md`** — machine-readable headings, parsed by `loom-state`:
 ```markdown
 ## Phase 1 — done — d4e5f6
@@ -880,7 +941,8 @@ In `_shared/visual-conventions.md`: proper tree glyphs (`├──`, `└──`
 ## Problem
 ## Outcome
 ## Key Decisions        ← links to ADRs
-## Implementation       ← phases → commit subjects (hashes change on rebase and squash merge)
+## Implementation       ← phases → commit subjects (hashes change on rebase and squash merge);
+                           then "Process metrics: <task.metrics.line>" (§8.2), only when task.metrics is not null
 ## Deviations from Plan
 ## Verification
 ## Follow-ups
@@ -1155,7 +1217,7 @@ Template: `skills/setup/references/templates/settings.json`. `setup` merges it i
 
 ### 20.1 Unit tests
 
-`tests/` covers `loom-state` (task lookup, statuses, decision table, stale research, log parsing) and the hook scripts (guard, output filtering, SubagentStop checks, Stop lint) with fixture directories, plus spec-driven lints of skills, agents, shared snippets, and templates (§13.2, §13.4–§13.6). Runs in loom's CI.
+`tests/` covers `loom-state` (task lookup, statuses, decision table, stale research, log parsing, task phase, process metrics) and the hook scripts (guard, output filtering, SubagentStop checks, Stop lint, subagent events) with fixture directories, plus spec-driven lints of skills, agents, shared snippets, and templates (§13.2, §13.4–§13.6), and of the release files (`plugin.json` version, `CHANGELOG.md`, §21). Runs in loom's CI.
 
 ### 20.2 Evals
 
@@ -1180,6 +1242,7 @@ evals/
     - No Read, Grep, Glob, or Bash input in the trace names the ticket, by the skill or by a subagent.
     - The trace never holds `Wholesale customers`, a phrase that occurs only in the ticket body. This catches the ticket's content reaching the session by any tool.
     - The skill read its shared snippets.
+    - `<task dir>/events.jsonl` exists and has a `start` line and a `stop` line of a research agent (`codebase-locator`, `codebase-analyzer`, `codebase-pattern-finder`, or `web-search-researcher`) with `"phase":"research"` (§11.6). Hooks run outside the eval sandbox, and `make eval` loads the plugin's `hooks/hooks.json`.
   - `design-full` (research approved):
     - `03-design.md` exists with `status: in-review`, a `## Open Questions — Round 1 of ~M` heading, and `**Q1.`.
     - Resolved Decisions has no table data rows and no list items.
@@ -1189,6 +1252,7 @@ evals/
     - `log.md` has `## Phase 1 — done — <hash>` and no phase 2 entry.
     - The Phase Overview ticks phase 1 only.
     - The last message has `Manual verification:` and `run the manual steps, then /clear, then /loom:next`.
+    - `<task dir>/events.jsonl` has a `stop` line of `implementation-reviewer` with `"result":"pass"` or `"changes-needed"`, and a `stop` line of `implementer` with `"result":"pass"` or `"fail"` (§11.6). Each fails when `last_assistant_message` does not hold the agent's report (the result is then `unknown`).
   - `guard-main` (on `main`, staged change, no skill):
     - A Bash `git commit` ran.
     - The trace holds the guard's deny reason.
@@ -1221,7 +1285,7 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
   /plugin marketplace add mmosvlad1/loom
   /plugin install loom@loom
   ```
-- **Versioning:** semver, **only in `plugin.json`**; bump on every release. Users update with `/plugin marketplace update`.
+- **Versioning:** semver, **only in `plugin.json`**; bump on every release. Users update with `/plugin marketplace update`. `CHANGELOG.md` (Keep a Changelog) lists the changes of every version. `1.0.0` (milestones M1–M6) was never tagged; `1.1.0` is the first version in `plugin.json` after `0.1.0`.
 - **Local development:** `claude --plugin-dir ./loom` runs the working copy; exercise it on a sandbox repository and with evals.
 - **loom's own CI:** `.github/workflows/ci.yml` runs `make check` on every PR and push to `main`: unit tests (including the check that every `template.md` has its required headings) and `claude plugin validate --strict`, which needs no credentials. One job `check`, `permissions: contents: read`, `actions/checkout@v7.0.1`, `actions/setup-node@v7.1.0`, and Claude Code pinned with `npm install -g @anthropic-ai/claude-code@2.1.318`. `.github/workflows/eval.yml` runs `make eval` on demand only (§20.2), on a pinned `macos-26` runner. It installs Claude Code 2.1.318 unless the `claude_version` input names another version. It keeps each run's `out/` directory (`--keep-temp`) and uploads `evals/results/` with `actions/upload-artifact@v7.0.2` (latest release, checked on 2026-11-10).
 - **Commands** appear as `/loom:<skill>`; agents as `loom:<agent>`.
@@ -1253,14 +1317,16 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
 
 ## 23. Roadmap and Out of Scope
 
-### 23.1 v1.1 (planned)
+### 23.1 v1.2 (planned)
 
-- **Observability:** `SubagentStart`/`SubagentStop` hooks append one line per subagent run (agent, phase, duration, result) to `<task dir>/events.jsonl`. `describe-pr` adds a "Process metrics" line to the task summary.
 - **Docs freshness gate:** `loom-state --docs` flags paths in `overview.md` and ADRs that no longer exist and modules added since the last summary; `describe-pr` asks to address them.
 
-Done in v1.1:
+Done in v1.1 (release 1.1.0, `CHANGELOG.md`):
 
 - **PR layout:** "Why" in one sentence, 1–3 "Special things to note", and a "Change outline" (file tree or interface `diff`). Specified in §13.6, written by `describe-pr`, kept by `_shared/pr-update.md`, and covered by the `describe-pr-quick` eval case (§20.2).
+- **Observability:** `SubagentStart`/`SubagentStop` hooks append a `start` line and a `stop` line per subagent run (agent, phase, duration, result) to `<task dir>/events.jsonl` (§11.6). `loom-state` aggregates them into `task.metrics` (§8.2), and `describe-pr` adds a "Process metrics" line to the task summary (§13.4). Covered by unit tests and the `research-full` eval case (§20.2).
+- **One command per Bash call:** every skill reads `_shared/bash-calls.md`; the agents with Bash carry the rule inline (§9.0).
+- **Inline PR review comments:** the post-PR fix path of `iterate` also reads review comments on code lines with a read-only `gh api` GET (§6.2).
 
 ### 23.2 Deferred, needs a separate discussion
 
@@ -1287,6 +1353,10 @@ Done in v1.1:
 
 Still open: nothing.
 
+Resolved (milestone M8, v1.1 observability):
+
+- **`SubagentStart`** (https://code.claude.com/docs/en/hooks): `agent_id` and `agent_type` are common input fields of the subagent events; the matcher filters on `agent_type` (plugin agents: `^my-plugin:reviewer$`). `SubagentStart` cannot block: exit 2 only shows stderr as a notice in the subagent's own transcript. Plain stdout of a `SubagentStart` hook is not added to the context. All hooks that match an event run in parallel. So `subagent_events.py` prints nothing and cannot change the outcome of `subagent_checks.py` (§11.6). The `SubagentStop` input is the one verified in milestone M4.
+
 Resolved (milestone M6):
 
 - **`claude plugin eval` format** (https://code.claude.com/docs/en/plugin-evals): a case is a directory below `evals/` with `prompt.md` or `case.yaml` and `graders/*.md`. `case.yaml` needs `schema_version: "1.1"` and `name`; run settings go under `execution:` (`model`, `max_turns`, `timeout_seconds`, `allowed_tools`, `prompt`, …); `context.scaffold_script` runs only with `--scaffold`. Model-free graders: `regex` (targets `last_message`, `trace`, `files`, or `{source: file, path}`; `match: not_contains`), `tool_used` (`tool`, `input_match`, `min`, `max`), `tool_order`, `file_exists`; `llm` and `baseline` call a model and loom does not use them. Results go to `evals/results/<timestamp>/`. Exit codes: 0 all cases at the threshold (default 1.0), 1 below it, 2 partial (cost ceiling). `--trust-plugin` is required outside a terminal; `--ablation none` skips the no-plugin arm.
@@ -1310,7 +1380,7 @@ Resolved (milestone M6):
 - **Evals in GitHub Actions** (`eval.yml`):
   - `ubuntu-24.04`, Claude Code 2.1.318 and 2.1.322: every skill case aborts at turn 0 with `Shell command failed for pattern "!`"…/bin/loom-state --json`"`. The trace shows the cause: `/bin/bash: line 1: /tmp/claude-eval-…/tmp/claude-1001/cwd-…: Read-only file system`. The bubblewrap sandbox keeps the run's `TMPDIR` read-only, so the Bash tool cannot write its cwd file. Every sandboxed Bash call fails, skill injections included. `guard-main` passes, because the hook denies the command before Bash runs. Managed settings `/etc/claude-code/managed-settings.json` with `{"sandbox":{"filesystem":{"allowWrite":["/tmp"]}}}` did not change it. The traces do not show whether Claude Code's sandbox profile or the runner's `/tmp` mount causes it; it looks like an upstream bug. Runs: https://github.com/mmosvlad1/loom/actions/runs/42907795225, 42908329427 (2.1.322), 42908552525 (managed settings).
   - `macos-latest` (image `macos-26-arm64`), Claude Code 2.1.318, haiku: all 4 cases pass 1/1, `implement-manual` included. Total cost 0.25 USD: research 0.15, implement 0.08, design 0.02, guard 0.002. Run: https://github.com/mmosvlad1/loom/actions/runs/42908741230. `eval.yml` therefore pins `macos-26`.
-- **`implement` stops at manual verification** (outside the eval sandbox, because of the local macOS limit above; the macOS runner later passed the case in the eval sandbox): `claude -p "/loom:implement" --plugin-dir . --model haiku --permission-mode default --setting-sources project,local --allowedTools "Read" "Edit" "Write" "Agent" "Bash(git *)" "Bash(make *)" "Bash(loom-state *)"` in the `implement-manual` fixture committed phase 1 once, ticked it, logged `## Phase 1 — done — <hash>`, did not start phase 2, and ended with `Manual verification:` and `Next: run the manual steps, then /clear, then /loom:next`. All five graders of the case pass on that output.
+- **`implement` stops at manual verification** (outside the eval sandbox, because of the local macOS limit above; the macOS runner later passed the case in the eval sandbox): `claude -p "/loom:implement" --plugin-dir . --model haiku --permission-mode default --setting-sources project,local --allowedTools "Read" "Edit" "Write" "Agent" "Bash(git *)" "Bash(make *)" "Bash(loom-state *)"` in the `implement-manual` fixture committed phase 1 once, ticked it, logged `## Phase 1 — done — <hash>`, did not start phase 2, and ended with `Manual verification:` and `Next: run the manual steps, then /clear, then /loom:next`. All five graders that the case had then pass on that output.
 - **`Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` in default permission mode** (the eval runtime cannot cover it): `claude -p "/loom:research" --plugin-dir <loom> --model haiku --permission-mode default --setting-sources project,local --allowedTools "Skill"` in the `research-full` fixture read `skills/_shared/frontmatter.md`, `writing-style.md`, `visual-conventions.md`, `final-answer.md`, and `skills/research/references/template.md` without a denial (only a later Write outside the grants was denied). Control: the same run with that rule removed from the skill's `allowed-tools` denied all four `_shared` reads ("Claude requested permissions to read from …").
 - **statusLine live check:** on 2026-11-11, Claude Code 2.1.318, macOS, an interactive session `LOOM_PLUGIN_ROOT=<loom checkout> claude --plugin-dir <loom checkout>` in a copy of the `design-full` fixture, with the committed `.claude/loom-statusline.py` and only the `statusLine` entry in `.claude/settings.json`, showed the line `#7 · full · research:approved`. The working directory of the `statusLine` command is not documented; the command finds the script through `git rev-parse --show-toplevel`, and the script runs `loom-state` in `workspace.current_dir`, so any working directory inside the repository works. Scope: this check used the `LOOM_PLUGIN_ROOT` override. The lookup through `installed_plugins.json`, the `loom` marketplace, and the plugin cache is covered only by the unit test against a fake plugins root.
 - **`claude plugin validate --strict` needs no credentials:** it passed with an empty `HOME` and no API key or token in the environment, so loom's CI runs it without a secret.

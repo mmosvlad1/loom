@@ -30,6 +30,10 @@ Mark decisions taken by the round cap: `(accepted by default)`. Write `None.` wh
 One line per implementation phase, in order: `1. <phase name> — <commit subject>`.
 Use the commit subject, not the hash: the rebase and the squash merge change hashes.
 Add one sentence per phase only if the name does not say what it built.
+Then, only if `task.metrics` in the loom-state output is not null, one line:
+`Process metrics: <task.metrics.line>`, copied exactly, e.g.
+`Process metrics: 9 subagent runs (research 4, implement 5), 2 review rounds (1 changes-needed), 1 checks retry, subagent time 14 min`.
+Without `task.metrics`, write no Process metrics line. Never estimate the numbers.
 -->
 
 ## Deviations from Plan

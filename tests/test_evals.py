@@ -468,6 +468,77 @@ class GraderRegexTest(unittest.TestCase):
         self.assertIsNone(rx.search('{"command":"git status --porcelain"}'))
         self.assertIsNone(rx.search('{"command":"git log --grep=commit"}'))
 
+    def test_research_events_graders(self):
+        """The events graders match the lines the subagent events hook writes (LOOM_SPEC.md 11.6)."""
+        import datetime
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "subagent_events_for_evals", os.path.join(ROOT, "scripts", "hooks", "subagent_events.py"))
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        def line(event, agent, phase="research"):
+            data = {"hook_event_name": event, "agent_id": "a1", "agent_type": "loom:" + agent,
+                    "last_assistant_message": "done", "stop_hook_active": False}
+            record = hook.build_record(data, {"phase": phase, "implementationPhase": None}, now, now)
+            return json.dumps(record, separators=(",", ":"))
+
+        start_rx = grader_regex("research-full", "events-research-start")
+        stop_rx = grader_regex("research-full", "events-research-stop")
+        for agent in ("codebase-locator", "codebase-analyzer", "codebase-pattern-finder"):
+            with self.subTest(agent=agent):
+                self.assertIsNotNone(start_rx.search(line("SubagentStart", agent)))
+                self.assertIsNone(start_rx.search(line("SubagentStop", agent)))
+                self.assertIsNotNone(stop_rx.search(line("SubagentStop", agent)))
+                self.assertIsNone(stop_rx.search(line("SubagentStart", agent)))
+        design_line = line("SubagentStart", "codebase-locator", "design")
+        # Another agent, another phase, and a phase on the next line do not count.
+        for wrong in (line("SubagentStart", "implementer"), design_line, design_line + '\n"phase":"research"'):
+            with self.subTest(line=wrong):
+                self.assertIsNone(start_rx.search(wrong))
+        events_path = "%s/events.jsonl" % TASK_DIR
+        g = graders(os.path.join(EVALS, "research-full"))
+        self.assertEqual(g["events-written"]["path"], events_path)
+        for name in ("events-research-start", "events-research-stop"):
+            self.assertEqual(g[name]["target"], {"source": "file", "path": events_path})
+
+    def test_implement_events_graders(self):
+        """The implement-manual events graders need a parsed result, not `unknown` (LOOM_SPEC.md 11.6)."""
+        import datetime
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "subagent_events_for_implement", os.path.join(ROOT, "scripts", "hooks", "subagent_events.py"))
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        def line(event, agent, message):
+            data = {"hook_event_name": event, "session_id": "s", "agent_id": "a1", "agent_type": "loom:" + agent,
+                    "last_assistant_message": message, "stop_hook_active": False}
+            context = {"phase": "implement", "implementationPhase": 1, "check": "make check"}
+            return json.dumps(hook.build_record(data, context, now, now), separators=(",", ":"))
+
+        reviewer = grader_regex("implement-manual", "events-reviewer-verdict")
+        implementer = grader_regex("implement-manual", "events-implementer-checks")
+        for verdict in ("pass", "changes-needed"):
+            with self.subTest(verdict=verdict):
+                self.assertIsNotNone(reviewer.search(
+                    line("SubagentStop", "implementation-reviewer", "## Verdict: %s\n" % verdict)))
+        for result in ("pass", "fail"):
+            with self.subTest(result=result):
+                self.assertIsNotNone(implementer.search(
+                    line("SubagentStop", "implementer", "### Checks\n`make check`: %s\n" % result)))
+        # A report that is not in last_assistant_message gives `unknown`: the graders fail.
+        self.assertIsNone(reviewer.search(line("SubagentStop", "implementation-reviewer", "done")))
+        self.assertIsNone(implementer.search(line("SubagentStop", "implementer", "done")))
+        self.assertIsNone(reviewer.search(line("SubagentStart", "implementation-reviewer", "")))
+        self.assertIsNone(implementer.search(line("SubagentStop", "implementation-reviewer", "## Verdict: pass\n")))
+        events_path = "%s/events.jsonl" % TASK_DIR
+        g = graders(os.path.join(EVALS, "implement-manual"))
+        for name in ("events-reviewer-verdict", "events-implementer-checks"):
+            self.assertEqual(g[name]["target"], {"source": "file", "path": events_path})
+
 
 class PrBodyGraderTest(unittest.TestCase):
     """The describe-pr-quick graders accept a body in the 13.6 layout and reject the old or loose ones."""

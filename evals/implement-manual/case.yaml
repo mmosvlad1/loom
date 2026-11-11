@@ -3,7 +3,8 @@ name: implement-manual
 description: >-
   Quick mode, plan approved; implementation phase 1 lists a Manual verification step.
   /loom:implement commits phase 1, ticks it, logs it as done, and stops for manual
-  verification before phase 2 (LOOM_SPEC.md 9.9 step 7, 20.2). Needs Bash git inside the
+  verification before phase 2 (LOOM_SPEC.md 9.9 step 7, 20.2). events.jsonl has a parsed result
+  for the implementer and the reviewer (11.6). Needs Bash git inside the
   eval sandbox. On macOS that needs Homebrew git: without it the /usr/bin/git shim failed
   there, with the Command Line Tools and with full Xcode (LOOM_SPEC.md 24.2).
 tags: [implement, quick, git]

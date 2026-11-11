@@ -32,7 +32,7 @@ def js_matcher_matches(matcher: str, value: str) -> bool:
 class HooksJsonTest(unittest.TestCase):
     def test_subagent_stop_entry(self):
         entries = hooks_config()["SubagentStop"]
-        self.assertEqual(len(entries), 1)
+        self.assertEqual(len(entries), 2)  # the checks, and the subagent events (tests/test_subagent_events.py)
         entry = entries[0]
         self.assertEqual(entry["matcher"], "^loom:implementer$")
         hook = entry["hooks"][0]

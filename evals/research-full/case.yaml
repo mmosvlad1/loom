@@ -3,6 +3,7 @@ name: research-full
 description: >-
   Full mode, research questions approved. /loom:research writes 02-research.md in review,
   with file:line references to the fixture code, and never reads 00-ticket.md (LOOM_SPEC.md 9.5, 20.2).
+  The subagent events hook writes events.jsonl with a start and a stop line of a research agent (11.6).
 tags: [research, full]
 runs: 1
 context:

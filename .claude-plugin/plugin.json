@@ -1,6 +1,6 @@
 {
   "name": "loom",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "description": "Structured, agent-driven development for Claude Code: Research, Plan, Implement, with GitHub Issues as the backlog and a full git flow from issue to squash merge.",
   "author": {
     "name": "Vlad"
