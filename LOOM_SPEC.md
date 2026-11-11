@@ -158,7 +158,7 @@ loom/
 │       └── stop_lint.py            # §11.5 (milestone M4)
 ├── evals/                          # §20.2: one directory per case, _fixture/, results/ (ignored)
 ├── tests/                          # unit tests for loom-state, hook scripts, skills, evals (stdlib unittest)
-├── .github/workflows/              # ci.yml (make check), eval.yml (make eval, on demand)
+├── .github/workflows/              # ci.yml (make check), eval.yml (make eval on macOS, on demand)
 ├── Makefile                        # test, validate, check, eval
 ├── LICENSE
 ├── NOTICE
@@ -1178,15 +1178,14 @@ evals/
     - The trace holds the guard's deny reason.
     - `main` still points to the fixture commit.
 - Every case has `runs: 1` and `model: haiku` (cost); `--runs 3` and `--model sonnet` override them.
-- `make eval` runs the suite with `--scaffold --ablation none --no-publish --trust-plugin`, a `--max-cost-usd` ceiling, and the narrowest `--allow-tools` set: `Write Edit 'Bash(git *)' 'Bash(make *)' 'Bash(loom-state *)' 'Bash(*/bin/loom-state *)'`. It is not part of `make check`. It puts the plugin's `bin/` on `PATH` (the eval runtime does not) and, on macOS only, the Command Line Tools first.
+- `make eval` runs the suite with `--scaffold --ablation none --no-publish --trust-plugin`, a `--max-cost-usd` ceiling, and the narrowest `--allow-tools` set: `Write Edit 'Bash(git *)' 'Bash(make *)' 'Bash(loom-state *)' 'Bash(*/bin/loom-state *)'`. It is not part of `make check`. It puts the plugin's `bin/` on `PATH` (the eval runtime does not) and, on macOS only, the developer directory (`xcode-select -p`) first.
 - In loom's CI: `make check` (unit tests and `claude plugin validate --strict`) on every PR and push to `main` (`.github/workflows/ci.yml`). The evals run only on demand (`.github/workflows/eval.yml`, `workflow_dispatch`, repository secret `ANTHROPIC_API_KEY`), never on a schedule: they cost tokens.
-- Platform limit: on macOS the eval sandbox breaks Bash `git` (§24.2), so `implement-manual` cannot commit there. It is expected to pass under the Linux bubblewrap sandbox; this is unverified until the first `eval.yml` run.
-  - The other cases carry the tag `local`. On macOS `make eval` defaults to `EVAL_FILTER=--tag local` and prints a note that it skips `implement-manual`. `make eval EVAL_FILTER=` runs every case.
-  - `--case` and `--tag` combine with AND (seen live). On macOS, `EVAL_ARGS='--case implement-manual'` with the default filter selects no case: the run prints `No eval cases found matching …`, exits 1, and costs nothing. Add `EVAL_FILTER=`.
+- `make eval` runs every case, locally and in the Evals workflow. The Evals workflow runs all 4 cases on a pinned `macos-26` runner. Linux cannot run the skill cases: the eval sandbox breaks every Bash call there (§24.2).
+- macOS needs Homebrew git (`brew install git`) for `implement-manual`. Inside the eval sandbox Bash `git` is always the `/usr/bin/git` shim; without another git it fails, with the Command Line Tools and with full Xcode (§24.2). When the first `git` on the caller's `PATH` (`command -v git`) is `/usr/bin/git`, `make eval` prints a warning that names `brew install git` and still runs every case.
 
 ### 20.3 When to run
 
-After every change to a skill, agent, shared snippet, or hook script. A prompt change is not done until its eval scenario passes: `make eval EVAL_ARGS='--case <name>'` (on macOS, add `EVAL_FILTER=` for a case without the `local` tag; that case runs on Linux through `eval.yml`).
+After every change to a skill, agent, shared snippet, or hook script. A prompt change is not done until its eval scenario passes: `make eval EVAL_ARGS='--case <name>'`. The Evals workflow runs every case.
 
 ---
 
@@ -1200,7 +1199,7 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
   ```
 - **Versioning:** semver, **only in `plugin.json`**; bump on every release. Users update with `/plugin marketplace update`.
 - **Local development:** `claude --plugin-dir ./loom` runs the working copy; exercise it on a sandbox repository and with evals.
-- **loom's own CI:** `.github/workflows/ci.yml` runs `make check` on every PR and push to `main`: unit tests (including the check that every `template.md` has its required headings) and `claude plugin validate --strict`, which needs no credentials. One job `check`, `permissions: contents: read`, `actions/checkout@v7.0.1`, `actions/setup-node@v7.1.0`, and Claude Code pinned with `npm install -g @anthropic-ai/claude-code@2.1.318`. `.github/workflows/eval.yml` runs `make eval` on demand only (§20.2) and uploads `evals/results/` with `actions/upload-artifact@v7.0.2` (latest release, checked on 2026-11-10).
+- **loom's own CI:** `.github/workflows/ci.yml` runs `make check` on every PR and push to `main`: unit tests (including the check that every `template.md` has its required headings) and `claude plugin validate --strict`, which needs no credentials. One job `check`, `permissions: contents: read`, `actions/checkout@v7.0.1`, `actions/setup-node@v7.1.0`, and Claude Code pinned with `npm install -g @anthropic-ai/claude-code@2.1.318`. `.github/workflows/eval.yml` runs `make eval` on demand only (§20.2), on a pinned `macos-26` runner. It installs Claude Code 2.1.318 unless the `claude_version` input names another version. It keeps each run's `out/` directory (`--keep-temp`) and uploads `evals/results/` with `actions/upload-artifact@v7.0.2` (latest release, checked on 2026-11-10).
 - **Commands** appear as `/loom:<skill>`; agents as `loom:<agent>`.
 
 ---
@@ -1261,10 +1260,7 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
 
 ### 24.2 To verify against current Claude Code docs during implementation
 
-Still open:
-
-- The first `eval.yml` run of `implement-manual` on Linux. The case has never run inside the Linux bubblewrap sandbox; it is expected to pass there (§20.2).
-- The working directory of the `statusLine` command is not documented. The command finds the script through `git rev-parse --show-toplevel`, and the script runs `loom-state` in `workspace.current_dir` from its input, so it does not depend on it. Only a unit test against a fake plugins root covers the script; an M6 live check must show the line in an interactive session.
+Still open: nothing.
 
 Resolved (milestone M6):
 
@@ -1278,14 +1274,20 @@ Resolved (milestone M6):
   - The Agent tool is named `Agent` in the trace. Subagent messages are in the trace with `parent_tool_use_id`, and `tool_used` counts subagent calls too (one Read by the skill plus one by a subagent counted 2). Subagents ran in the background; the trace then has one `result` line per wake-up, and the last one is the final message.
   - `--case` and `--tag` filters combine with AND. A selection with no case prints `No eval cases found matching …`, exits 1, and starts no run.
   - The plugin's `bin/` is not on the Bash `PATH` in eval runs (`command not found: loom-state`); the Bash `PATH` is the `PATH` of the `claude plugin eval` process. `make eval` adds `bin/`.
-  - macOS sandbox: `/usr/bin/python3`, `make`, and `git` are xcrun shims that fail inside the sandbox (`couldn't create cache file '/var/folders/…/xcrun_db-…'`, then `xcode-select: Failed to locate 'git'`). `python3` and `make` follow `PATH`, so `make eval` puts `$(xcode-select -p)/usr/bin` first. Bash `git` cannot be fixed from the plugin:
-    - the Bash tool resolves `git` to `/usr/bin/git` regardless of `PATH` (`whence -a git` lists only it);
-    - the eval runtime strips `DEVELOPER_DIR` from the Bash environment;
-    - the sandbox denies the xcrun stub's cache write in `/var/folders/…/T`.
+  - macOS sandbox (2026-11-11, Claude Code 2.1.318):
+    - With only the Command Line Tools selected, `/usr/bin/python3`, `make`, and `git` are xcrun shims that fail inside the sandbox (`couldn't create cache file '/var/folders/…/T/xcrun_db-…' (errno=Operation not permitted)`, then `xcode-select: Failed to locate 'git'`). `python3` and `make` follow `PATH`, so `make eval` puts `$(xcode-select -p)/usr/bin` first; zsh `whence -a python3 make` then lists the developer directory's copies first.
+    - Bash `git` does not follow `PATH`: `whence -a git` lists only `/usr/bin/git`, also with the Xcode and Homebrew directories first on `PATH` and after `hash -r`. The eval runtime strips `DEVELOPER_DIR` from the Bash environment. The sandbox denies the shim's cache write in `/var/folders/…/T` and its read of `/var/folders/…/T/xcrun_db`.
+    - Full Xcode does not fix it. With `xcode-select -p` at `/Applications/Xcode.app/Contents/Developer` (license accepted) and no other git installed, `make eval` passed `research-full`, `design-full`, and `guard-main`; `implement-manual` failed with the same xcrun error, and no `git` command succeeded. In the sandbox, `ls -l` of Xcode's `usr/bin/git` gives `Operation not permitted`, but running it by full path works (`git version 2.54.0 (Apple Git-157)`).
+    - Homebrew git fixes it. After `brew install git` (2.56.0, `/opt/homebrew/bin/git`), `git` still resolves to `/usr/bin/git` and the shim still prints the cache errors on stderr, but the command then runs with Homebrew git (`git version 2.56.0`; `git status`, `git diff`, and `git commit` work). How the shim finds Homebrew git is not proven. `implement-manual` then passed 2/2 locally (haiku, 0.12 USD). An earlier run failed for another reason: the model chained commands (`ls … && git status`) and ran `python3 -m …`, which `--allow-tools` does not grant.
+    - `git init` in the sandbox cannot copy the hook templates into `.git/hooks` (`Operation not permitted`). loom does not need it: the scaffold builds the fixture repository outside the sandbox.
 
-    A skill therefore cannot run `git` there: research falls back to reading `.git/HEAD`, and implement cannot commit. `loom-state` and hook scripts are unaffected (their `git` subprocesses follow `PATH`). The commit scenario passed outside the sandbox (below); under the Linux sandbox it is still open.
-- **`implement` stops at manual verification** (outside the eval sandbox, because of the macOS limit above): `claude -p "/loom:implement" --plugin-dir . --model haiku --permission-mode default --setting-sources project,local --allowedTools "Read" "Edit" "Write" "Agent" "Bash(git *)" "Bash(make *)" "Bash(loom-state *)"` in the `implement-manual` fixture committed phase 1 once, ticked it, logged `## Phase 1 — done — <hash>`, did not start phase 2, and ended with `Manual verification:` and `Next: run the manual steps, then /clear, then /loom:next`. All five graders of the case pass on that output.
+    Without Homebrew git a skill therefore cannot run `git` there: research falls back to reading `.git/HEAD`, and implement cannot commit. `loom-state` and hook scripts are unaffected (their `git` subprocesses follow `PATH`). The GitHub `macos-26` image ships Homebrew git, which likely explains why `implement-manual` passes there (below); this is not proven. `make eval` warns when the first `git` on the caller's `PATH` is `/usr/bin/git` and still runs every case (§20.2).
+- **Evals in GitHub Actions** (`eval.yml`):
+  - `ubuntu-24.04`, Claude Code 2.1.318 and 2.1.322: every skill case aborts at turn 0 with `Shell command failed for pattern "!`"…/bin/loom-state --json`"`. The trace shows the cause: `/bin/bash: line 1: /tmp/claude-eval-…/tmp/claude-1001/cwd-…: Read-only file system`. The bubblewrap sandbox keeps the run's `TMPDIR` read-only, so the Bash tool cannot write its cwd file. Every sandboxed Bash call fails, skill injections included. `guard-main` passes, because the hook denies the command before Bash runs. Managed settings `/etc/claude-code/managed-settings.json` with `{"sandbox":{"filesystem":{"allowWrite":["/tmp"]}}}` did not change it. The traces do not show whether Claude Code's sandbox profile or the runner's `/tmp` mount causes it; it looks like an upstream bug. Runs: https://github.com/mmosvlad1/loom/actions/runs/42907795225, 42908329427 (2.1.322), 42908552525 (managed settings).
+  - `macos-latest` (image `macos-26-arm64`), Claude Code 2.1.318, haiku: all 4 cases pass 1/1, `implement-manual` included. Total cost 0.25 USD: research 0.15, implement 0.08, design 0.02, guard 0.002. Run: https://github.com/mmosvlad1/loom/actions/runs/42908741230. `eval.yml` therefore pins `macos-26`.
+- **`implement` stops at manual verification** (outside the eval sandbox, because of the local macOS limit above; the macOS runner later passed the case in the eval sandbox): `claude -p "/loom:implement" --plugin-dir . --model haiku --permission-mode default --setting-sources project,local --allowedTools "Read" "Edit" "Write" "Agent" "Bash(git *)" "Bash(make *)" "Bash(loom-state *)"` in the `implement-manual` fixture committed phase 1 once, ticked it, logged `## Phase 1 — done — <hash>`, did not start phase 2, and ended with `Manual verification:` and `Next: run the manual steps, then /clear, then /loom:next`. All five graders of the case pass on that output.
 - **`Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` in default permission mode** (the eval runtime cannot cover it): `claude -p "/loom:research" --plugin-dir <loom> --model haiku --permission-mode default --setting-sources project,local --allowedTools "Skill"` in the `research-full` fixture read `skills/_shared/frontmatter.md`, `writing-style.md`, `visual-conventions.md`, `final-answer.md`, and `skills/research/references/template.md` without a denial (only a later Write outside the grants was denied). Control: the same run with that rule removed from the skill's `allowed-tools` denied all four `_shared` reads ("Claude requested permissions to read from …").
+- **statusLine live check:** on 2026-11-11, Claude Code 2.1.318, macOS, an interactive session `LOOM_PLUGIN_ROOT=<loom checkout> claude --plugin-dir <loom checkout>` in a copy of the `design-full` fixture, with the committed `.claude/loom-statusline.py` and only the `statusLine` entry in `.claude/settings.json`, showed the line `#7 · full · research:approved`. The working directory of the `statusLine` command is not documented; the command finds the script through `git rev-parse --show-toplevel`, and the script runs `loom-state` in `workspace.current_dir`, so any working directory inside the repository works. Scope: this check used the `LOOM_PLUGIN_ROOT` override. The lookup through `installed_plugins.json`, the `loom` marketplace, and the plugin cache is covered only by the unit test against a fake plugins root.
 - **`claude plugin validate --strict` needs no credentials:** it passed with an empty `HOME` and no API key or token in the environment, so loom's CI runs it without a secret.
 
 Resolved (milestone M5):

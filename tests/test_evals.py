@@ -591,23 +591,36 @@ class MakefileTest(unittest.TestCase):
     def test_eval_flags(self):
         recipe = self.recipe("eval")
         for flag in ("plugin eval .", "--scaffold", "--ablation none", "--no-publish", "--trust-plugin",
-                     "--max-cost-usd $(EVAL_MAX_COST)", "--allow-tools $(EVAL_TOOLS)", "$(EVAL_FILTER)",
-                     "$(EVAL_ARGS)", 'PATH="$(EVAL_PATH):$$PATH"'):
+                     "--max-cost-usd $(EVAL_MAX_COST)", "--allow-tools $(EVAL_TOOLS)", "$(EVAL_ARGS)", 'PATH="$(EVAL_PATH):$$PATH"'):
             with self.subTest(flag=flag):
                 self.assertIn(flag, recipe)
         for forbidden in ("--dangerously-skip-permissions", "bypassPermissions", "--mocks off"):
             self.assertNotIn(forbidden, self.text)
 
-    def test_macos_runs_only_local_cases_by_default(self):
-        darwin = self.text.split("ifeq ($(shell uname -s),Darwin)", 1)[1].split("endif", 1)[0]
-        self.assertIn("EVAL_FILTER ?= --tag local", darwin)
-        self.assertIn("xcode-select -p", darwin)
-        self.assertNotIn("xcode-select", self.text.split("ifeq ($(shell uname -s),Darwin)", 1)[0])
-        note = self.recipe("eval")
-        for part in ("implement-manual", "Bash git", "24.2", "EVAL_FILTER="):
-            self.assertIn(part, note)
-        local = {os.path.basename(d) for d in case_dirs() if "local" in case(os.path.basename(d)).get("tags", [])}
-        self.assertEqual(local, set(EXPECTED_STATE) - {"implement-manual"})
+    def test_every_case_runs_on_every_platform(self):
+        self.assertNotIn("EVAL_FILTER", self.text)
+        self.assertNotIn("--tag", self.text)
+        for name in EXPECTED_STATE:
+            with self.subTest(case=name):
+                self.assertNotIn("local", case(name).get("tags", []))
+
+    def test_macos_puts_the_developer_directory_on_path(self):
+        before, darwin = self.text.split("ifeq ($(shell uname -s),Darwin)", 1)
+        darwin = darwin.split("endif", 1)[0]
+        self.assertIn("EVAL_PATH := $(EVAL_PATH):$(shell xcode-select -p 2>/dev/null)/usr/bin", darwin)
+        self.assertNotIn("xcode-select", before)
+
+    def test_macos_warns_without_homebrew_git(self):
+        """A warning, not a skip: implement-manual still runs (LOOM_SPEC.md 24.2)."""
+        recipe = self.recipe("eval")
+        guard = "ifeq ($(shell command -v git 2>/dev/null),/usr/bin/git)"
+        self.assertIn("ifeq ($(shell uname -s),Darwin)\n" + guard + "\n\t@echo ", recipe)
+        self.assertNotIn("CommandLineTools", self.text)
+        warning = recipe.split(guard, 1)[1].split("endif", 1)[0]
+        for part in ("/usr/bin/git", "implement-manual", "24.2", "brew install git"):
+            with self.subTest(part=part):
+                self.assertIn(part, warning)
+        self.assertEqual(warning.count("\t"), 1)  # one echo line, then the run
 
 
 class WorkflowTest(unittest.TestCase):
@@ -640,11 +653,38 @@ class WorkflowTest(unittest.TestCase):
         for trigger in ("schedule", "push", "pull_request"):
             self.assertNotIn(trigger, on)
         self.assertIn("secrets.ANTHROPIC_API_KEY", text)
-        self.assertIn("bubblewrap socat", text)
-        self.assertIn("make eval", text)
+        self.assertIn("make eval EVAL_MAX_COST=", text)
         self.assertIn("--json", text)
+        self.assertIn("--keep-temp", text)
         self.assertIn("actions/upload-artifact@", text)
 
+    def test_evals_run_on_a_pinned_macos_runner(self):
+        """Linux is blocked upstream (read-only TMPDIR in the eval sandbox, LOOM_SPEC.md 24.2)."""
+        text = self.workflow("eval.yml")
+        self.assertEqual(re.findall(r"(?m)^\s*runs-on:\s*(\S+)\s*$", text), ["macos-26"])
+        code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+        for linux in ("ubuntu", "apt-get", "bubblewrap", "sysctl", "inputs.runner"):
+            self.assertNotIn(linux, code)
+        self.assertNotIn("runner:", text.split("\non:\n", 1)[1].split("\npermissions:", 1)[0])
+
+    def test_inputs_are_validated_before_use(self):
+        """Inputs reach shell and make only through env, after a whitelist check."""
+        text = self.workflow("eval.yml")
+        inputs = re.findall(r"^      (\w+):\n        description:", text, re.M)
+        self.assertEqual(set(inputs), {"case", "runs", "model", "max_cost_usd", "claude_version"})
+        for line in text.splitlines():
+            if re.search(r"\$\{\{\s*(github\.event\.)?inputs\.", line):
+                with self.subTest(line=line.strip()):
+                    self.assertRegex(line, r"^\s+[A-Z_]+: \$\{\{ inputs\.\w+ \}\}$")
+        steps = text.split("      - name: ")
+        for var, check in (("VERSION", 'case "$VERSION" in'), ("RUNS", 'case "$RUNS" in'),
+                           ("MAX_COST", 'case "$MAX_COST" in'), ("CASE", 'case "$CASE$MODEL" in')):
+            with self.subTest(var=var):
+                step = [st for st in steps if ": ${{ inputs." in st and ("%s:" % var) in st][0]
+                run = step.split("run: |", 1)[1]
+                first_use = min(i for i in (run.find("$%s" % var), run.find("${%s" % var)) if i >= 0)
+                self.assertLess(run.index(check), first_use + 1)
+        self.assertIn("--case '$CASE'", text)
 
 if __name__ == "__main__":
     unittest.main()

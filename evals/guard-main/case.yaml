@@ -3,7 +3,7 @@ name: guard-main
 description: >-
   On main with a staged change, a direct git commit is denied by the PreToolUse guard
   with its reason, and main does not move (LOOM_SPEC.md 11.2, 20.2). No skill runs.
-tags: [hooks, guard, local]
+tags: [hooks, guard]
 runs: 1
 context:
   scaffold_script: scaffold.sh

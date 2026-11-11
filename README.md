@@ -63,7 +63,9 @@ Run the working copy with `claude --plugin-dir /path/to/loom` in a sandbox repos
 
   Results (JSON and an HTML report) go to `evals/results/`, which git ignores.
 
-  On macOS the eval sandbox breaks `git` in the Bash tool, so `implement-manual` cannot commit there. `make eval` on macOS therefore runs only the cases tagged `local` (all but `implement-manual`) and prints a note. `make eval EVAL_FILTER=` runs every case. `--case` and `--tag` combine with AND, so on macOS `EVAL_ARGS='--case implement-manual'` needs `EVAL_FILTER=` too; without it the run finds no case and costs nothing. `implement-manual` is expected to pass on Linux, which is unverified until the first run of the **Evals** workflow (Actions → Evals → Run workflow). The workflow needs an `ANTHROPIC_API_KEY` repository secret.
+  `make eval` runs every case. On macOS, install git with Homebrew first: `brew install git`. Inside the eval sandbox the Bash tool always runs `/usr/bin/git`, an xcrun shim. Without another git the shim fails there, so `implement-manual` cannot commit; full Xcode alone did not help. With Homebrew git installed, the shim runs Homebrew git and the case passed (2 of 2 local runs). Without it, `make eval` prints a warning and still runs every case.
+
+  The **Evals** workflow (Actions → Evals → Run workflow) runs every case on a pinned `macos-26` runner, where all four pass (about 0.25 USD per run). It needs an `ANTHROPIC_API_KEY` repository secret. Its `claude_version` input installs another Claude Code version. Linux cannot run the skill cases: the eval sandbox there keeps `TMPDIR` read-only, so every Bash call fails (likely an upstream Claude Code bug, LOOM_SPEC.md §24.2).
 
 ## Credits
 

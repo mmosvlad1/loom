@@ -3,7 +3,7 @@ name: research-full
 description: >-
   Full mode, research questions approved. /loom:research writes 02-research.md in review,
   with file:line references to the fixture code, and never reads 00-ticket.md (LOOM_SPEC.md 9.5, 20.2).
-tags: [research, full, local]
+tags: [research, full]
 runs: 1
 context:
   scaffold_script: scaffold.sh

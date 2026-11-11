@@ -17,7 +17,8 @@ check: test validate
 
 # Eval suite (evals/, LOOM_SPEC.md 20.2). Not part of `check`: it calls the model and costs tokens.
 # Extra flags go in EVAL_ARGS, e.g. make eval EVAL_ARGS='--case design-full --runs 3 --keep-temp'.
-# --case and --tag combine with AND: on macOS, `--case implement-manual` also needs EVAL_FILTER=.
+# Linux: every skill case fails in the eval sandbox (read-only TMPDIR, likely an upstream Claude Code bug);
+# the Evals workflow (.github/workflows/eval.yml) runs every case on a macOS runner instead.
 EVAL_MAX_COST ?= 10
 EVAL_ARGS ?=
 # Gated tools for every case: artifact writes, git, the checks, and loom-state. The last rule
@@ -28,22 +29,23 @@ EVAL_TOOLS = Write Edit 'Bash(git *)' 'Bash(make *)' 'Bash(loom-state *)' 'Bash(
 # PATH for the eval runs (seen live with Claude Code 2.1.318, LOOM_SPEC.md 24.2): the eval runtime
 # does not put the plugin's bin/ on the Bash PATH, so bare `loom-state` calls need it here.
 EVAL_PATH = $(CURDIR)/bin
-# macOS: /usr/bin/python3 and make are xcrun shims that fail inside the eval sandbox, so the
-# Command Line Tools directory comes first. Bash `git` stays pinned to /usr/bin/git and fails there,
-# so by default only the cases tagged `local` run (implement-manual needs git). EVAL_FILTER= runs all.
+# macOS: with only the Command Line Tools, /usr/bin/python3 and make were xcrun shims that failed
+# inside the eval sandbox, so the developer directory comes before them. Bash `git` cannot be moved
+# this way: the sandboxed shell resolves it to the /usr/bin/git shim regardless of PATH. That shim
+# failed with the Command Line Tools and with full Xcode, and worked once Homebrew git was
+# installed. The recipe warns when the first git on the caller's PATH is /usr/bin/git (make's own
+# PATH, before EVAL_PATH is added: EVAL_PATH holds the developer directory's git); it runs every
+# case either way.
 ifeq ($(shell uname -s),Darwin)
 EVAL_PATH := $(EVAL_PATH):$(shell xcode-select -p 2>/dev/null)/usr/bin
-EVAL_FILTER ?= --tag local
-else
-EVAL_FILTER ?=
 endif
 
 eval:
 ifeq ($(shell uname -s),Darwin)
-ifneq ($(strip $(EVAL_FILTER)),)
-	@echo "make eval: skipping implement-manual on macOS (the eval sandbox breaks Bash git, LOOM_SPEC.md 24.2); EVAL_FILTER= runs it anyway."
+ifeq ($(shell command -v git 2>/dev/null),/usr/bin/git)
+	@echo "make eval: the first git on PATH is /usr/bin/git; in the eval sandbox /usr/bin/git (an xcrun shim) fails, so implement-manual will likely fail (LOOM_SPEC.md 24.2). Install git with Homebrew: brew install git"
 endif
 endif
 	PATH="$(EVAL_PATH):$$PATH" $(CLAUDE) plugin eval . \
 		--scaffold --ablation none --no-publish --trust-plugin \
-		--max-cost-usd $(EVAL_MAX_COST) --allow-tools $(EVAL_TOOLS) $(EVAL_FILTER) $(EVAL_ARGS)
+		--max-cost-usd $(EVAL_MAX_COST) --allow-tools $(EVAL_TOOLS) $(EVAL_ARGS)
