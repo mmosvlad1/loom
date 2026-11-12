@@ -73,8 +73,8 @@ Follow this rule exactly. An eval checks it.
   - `<task.dir>/03-design.md`, if it exists (always in full mode)
 - **Never read `01-research-questions.md`.** It is an input of the research phase only.
 - Do not read `*.superseded.md` files.
-- Read `<docsDir>/conventions.md` and `<docsDir>/architecture/overview.md` if they exist (`docsDir` from `.claude/loom.json`, default `docs`).
-- Read `.claude/loom.json` → `checks`. If a key is missing, use the default: `lint` = `make lint`, `typecheck` = `make typecheck`, `test` = `make test`, `check` = `make check`.
+- Read `docs.conventions` and `docs.overview` if they exist. Take the paths from `docs` in the state (the docs map); never build a doc path yourself.
+- Take the check commands from `checks` in the state (`lint`, `typecheck`, `test`, `check`). A `null` check does not exist in the project: never plan it, and never invent a command for it.
 - Read every file the arguments mention, in full.
 - Read the source files that the plan changes, as the research and the design reference them. You need them to write exact signatures and change points.
 
@@ -128,7 +128,7 @@ Use the template you read at the start (`${CLAUDE_SKILL_DIR}/references/template
 
 ### Verification lines
 
-- Start with `- [ ] Automated: <command>` lines: the checks from `.claude/loom.json` (e.g. `checks.test`), plus specific commands where they help (a single test file, a curl call, a CLI run).
+- Start with `- [ ] Automated: <command>` lines: the check commands from `checks` in the state (e.g. `checks.test`; never a `null` one), plus specific commands where they help (a single test file, a curl call, a CLI run).
 - Add a `- [ ] Manual: <step>` line only if the check cannot reasonably be automated. Prefer a test or a script.
 - `implement` stops after every implementation phase that has a `Manual:` line. An implementation phase without manual steps has no `Manual:` line at all.
 - Do not add commit steps. `implement` commits each implementation phase.

@@ -34,7 +34,7 @@ Read these files in full before you start:
 
 Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission.
 
-Below, `<main>` is `mainBranch`, `<branch>` is `branch`, `<n>` is `task.number`, and `<task dir>` is `task.dir`. `<workDir>` is the parent directory of `task.dir` (`workDir` in `.claude/loom.json`). Note these values now: after the merge you are on `<main>`, where `loom-state` reports no task.
+Below, `<main>` is `mainBranch`, `<branch>` is `branch`, `<n>` is `task.number`, and `<task dir>` is `task.dir`. `<workDir>` is the parent directory of `task.dir` (`workDir` in `.claude/loom.json`). `<required check>` is `ci.requiredCheck` from the state: the CI check that runs `checks.check` (default `check`). Note these values now: after the merge you are on `<main>`, where `loom-state` reports no task.
 
 ## 1. Check preconditions
 
@@ -112,14 +112,23 @@ Run each command; each one is safe when its work is already done:
 
 Only for the setup task: `<branch>` is `chore/<n>-loom-setup`, or the first `# ` heading of `00-ticket.md` is `Set up loom`. Otherwise skip this step.
 
-1. Read the rules that apply to `<main>`: `gh api repos/{owner}/{repo}/rules/branches/<main>`. This GET is read-only and needs no confirmation. The permission system still asks for it (the `Bash(gh api *)` ask rule); that is intended. (The list endpoint `…/rulesets` has no `conditions`, so it cannot tell which branch a ruleset targets.) If the result has any rule with a `ruleset_id`, a ruleset already protects `<main>`: skip this step.
-2. Read the default branch: `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` (read-only). If it is `<main>`, the ref is `~DEFAULT_BRANCH`; otherwise it is `refs/heads/<main>`.
-3. Offer the ruleset and ask for confirmation. It protects `<main>`:
+1. Read the rules that apply to `<main>`: `gh api repos/{owner}/{repo}/rules/branches/<main>`. This GET is read-only and needs no confirmation. The permission system still asks for it (the `Bash(gh api *)` ask rule); that is intended. (The list endpoint `…/rulesets` has no `conditions`, so it cannot tell which branch a ruleset targets.) If a rule of type `required_status_checks` lists `<required check>` as a `context` in `parameters.required_status_checks`, a ruleset already requires the check: skip this step. If the GET fails with HTTP 403 or 404, the rules are unknown: continue with item 2. Any other error (network, auth): stop with `Result: <the error>` and `Next: /loom:finish-task #<n>`.
+2. Read the classic branch protection of `<main>`: `gh api repos/{owner}/{repo}/branches/<main>/protection`. This GET is read-only too; the permission system asks for it in the same way. Take the first matching row:
+
+   | Result | Action |
+   |---|---|
+   | HTTP 404 (`Branch not protected`) | No classic protection. Continue. |
+   | HTTP 403 | Unknown: a private repository on GitHub Free, or no admin access. Continue: still offer the ruleset. The POST of step 6 reports whether rulesets are available. |
+   | `required_status_checks.contexts`, or a `context` in `required_status_checks.checks`, is `<required check>` | The classic protection already requires the check: skip this step. |
+   | Success otherwise | The protection does not require the check. Continue. |
+   | Any other error (network, auth) | Stop with `Result: <the error>` and `Next: /loom:finish-task #<n>`. |
+3. Read the default branch: `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` (read-only). If it is `<main>`, the ref is `~DEFAULT_BRANCH`; otherwise it is `refs/heads/<main>`.
+4. Offer the ruleset and ask for confirmation. It protects `<main>`:
    - changes reach `<main>` only through a PR, with 0 required approvals
-   - the required status check is `check` (the CI job)
+   - the required status check is `<required check>` (the CI check that runs `checks.check`)
    - force pushes and deletion are blocked
    - there are no bypass actors: nobody, also no admin, can bypass it
-4. After "yes", write this JSON to `<workDir>/_archive/<task dir name>/ruleset.json`, with `<main>` and `<ref>` replaced. If the file exists (a re-run), Read it before you Write it:
+5. After "yes", write this JSON to `<workDir>/_archive/<task dir name>/ruleset.json`, with `<main>`, `<ref>`, and `<required check>` replaced (a JSON string: escape `"` and `\`). If the file exists (a re-run), Read it before you Write it:
    ```json
    {
      "name": "loom: protect <main>",
@@ -136,12 +145,12 @@ Only for the setup task: `<branch>` is `chore/<n>-loom-setup`, or the first `# `
            "required_review_thread_resolution": false } },
        { "type": "required_status_checks", "parameters": {
            "strict_required_status_checks_policy": false,
-           "required_status_checks": [ { "context": "check" } ] } }
+           "required_status_checks": [ { "context": "<required check>" } ] } }
      ]
    }
    ```
-5. Run `gh api --method POST repos/{owner}/{repo}/rulesets --input <workDir>/_archive/<task dir name>/ruleset.json`.
-6. If GitHub refuses (403 or 404: rulesets on private repositories need a paid plan), add `Warning: ruleset not available; only the loom guard hook protects <main>`. If the call fails for another reason (network, auth), stop with `Result: <the error>` and `Next: /loom:finish-task #<n>`.
+6. Run `gh api --method POST repos/{owner}/{repo}/rulesets --input <workDir>/_archive/<task dir name>/ruleset.json`.
+7. If GitHub refuses (403 or 404: rulesets on private repositories need a paid plan), add `Warning: ruleset not available; only the loom guard hook protects <main>`. If the call fails for another reason (network, auth), stop with `Result: <the error>` and `Next: /loom:finish-task #<n>`.
 
 ## 8. Final message
 

@@ -1,8 +1,10 @@
 <!--
-Template of an ADR `<docsDir>/architecture/decisions/NNNN-<slug>.md`.
+Template of an ADR in `docs.decisions.dir` (from the loom-state output). The file name is `docs.decisions.pattern`
+(default `<NNNN>-<slug>.md`) with the number and the slug filled in.
 Guidance for describe-pr. Remove every guidance comment before you commit.
 - One ADR per resolved decision with `ADR? = yes` (architecture level: storage, protocols, agent structure, major libraries).
-- `NNNN` is the next free four-digit number in the decisions directory (0001 if it is empty). Never reuse a number.
+- `NNNN` is the next free number in the decisions directory, zero-padded to the length of the pattern's number
+  placeholder (`<NNNN>`: 0001 if it is empty). The title uses the same digits as the file name. Never reuse a number.
 - `<slug>`: the title in lowercase ASCII, non-alphanumerics replaced by `-`, at most 6 words.
 - The title states the decision: "Use SQLite for agent state", not "Storage".
 - The status line has exactly this form, with today's date from loom-state.

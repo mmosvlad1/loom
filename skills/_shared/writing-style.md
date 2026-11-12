@@ -65,7 +65,7 @@ Define a term the first time you use it. Then use it with that meaning only.
 | Final messages of skills | Yes, strictly |
 | Skill and agent prompts | Rule 1 always; others where they do not remove nuance |
 | Design rationale | Rules 1, 2, 6, 7 |
-| `vision.md`, `backlog` discussion | No |
+| The vision document, `backlog` discussion | No |
 
 ## Glossary
 
@@ -81,3 +81,5 @@ Define a term the first time you use it. Then use it with that meaning only.
 | **approve** | Set an artifact's status to `approved` | "accept" (the user accepts a recommendation), "sign off" |
 | **gate** | A phase that cannot start until a previous artifact is `approved` | "checkpoint", "blocker" |
 | **checks** | The commands in `loom.json` → `checks` | "tests" when you mean all checks, "CI" |
+| **docs role** | One kind of durable document that loom reads or writes: `vision`, `overview`, `decisions`, `conventions`, `tasks` | "doc type", "doc kind" |
+| **docs map** | `loom.json` → `docs`: the path of each docs role; skills read it as `docs` from `loom-state` | "doc config", "doc layout" |

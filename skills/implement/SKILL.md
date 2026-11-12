@@ -39,11 +39,12 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 ### Configuration
 
-Read `.claude/loom.json` at the git top level. If a key is missing, use the default:
+The state holds the resolved check commands (`checks`) and doc paths (`docs`). Take them from there, never from `.claude/loom.json`. Pass `checks` and `docs.conventions` to the agents as the configuration lines of `implementation-loop.md`.
+
+Read `.claude/loom.json` at the git top level for the other keys. If a key is missing, use the default:
 
 | Key | Default |
 |---|---|
-| `checks.check` | `make check` |
 | `implement.maxFixAttempts` | `2` |
 | `implement.autoAdvance` | `true` |
 | `hooks.maxCheckAttempts` | `3` |
@@ -129,6 +130,7 @@ For implementation phase N:
 1. **Start.** Append `## Phase N — in-progress` to `<task dir>/log.md` (create the file if it is missing), in the form of `log-format.md`. Skip this when the last entry of phase N is already `in-progress` (a resumed phase).
 2. **Loop.** Run the shared `implementation-loop.md` in phase mode:
    - Reference: the plan path `<task dir>/04-plan.md` and phase N. oneshot: the ticket path `<task dir>/00-ticket.md`; the reviewer compares the diff with the ticket.
+   - Configuration: the `Checks:` line (`checks` from the state) and the `Conventions:` line (`docs.conventions`) in the implementer prompt; the `Conventions:` line in the reviewer prompt.
    - Checks: the `SubagentStop` hook enforces `checks.check` on the implementer, and you run `checks.check` once more after it returns. Failing checks mean the hook gave up after `hooks.maxCheckAttempts` attempts: the phase is blocked.
    - Fix attempts: only `blocking` reviewer items go back, at most `implement.maxFixAttempts` times.
 3. **Blocked.** If the result is blocked:

@@ -59,6 +59,188 @@ class ConfigTest(RepoTestCase):
         self.assertTrue(s["onMain"])
 
 
+DEFAULT_DOCS = {
+    "dir": "docs", "vision": "docs/product/vision.md", "overview": "docs/architecture/overview.md",
+    "decisions": {"dir": "docs/architecture/decisions", "pattern": "<NNNN>-<slug>.md"},
+    "conventions": "docs/conventions.md", "tasks": "docs/tasks",
+}
+DEFAULT_CHECKS = {"lint": "make lint", "typecheck": "make typecheck", "test": "make test", "check": "make check"}
+
+
+class ResolvedConfigTest(RepoTestCase):
+    """docs, checks, ci, and pullRequest: defaults, custom values, invalid values (LOOM_SPEC.md 8.2, 19.1)."""
+
+    loom_config = {}
+
+    def resolved(self, config=None):
+        if config is not None:
+            self.write_config(config)
+        proc = run_loom_state(self.repo, "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        data = json.loads(proc.stdout)
+        return data, data["warnings"]
+
+    def test_defaults_in_every_output_also_without_a_task(self):
+        data, warnings = self.resolved()
+        self.assertTrue(data["onMain"])
+        self.assertIsNone(data["task"])
+        self.assertEqual(warnings, [])
+        self.assertEqual(data["docs"], DEFAULT_DOCS)
+        self.assertEqual(data["checks"], DEFAULT_CHECKS)
+        self.assertEqual(data["ci"], {"requiredCheck": "check"})
+        self.assertEqual(data["pullRequest"], {"requiredSections": []})
+        git(self.repo, "switch", "-q", "-c", "spike/x")  # a branch without a task
+        data, _ = self.resolved()
+        self.assertIsNone(data["task"])
+        self.assertEqual(data["docs"], DEFAULT_DOCS)
+
+    def test_defaults_follow_docs_dir(self):
+        data, warnings = self.resolved({"docsDir": "documentation/"})
+        self.assertEqual(warnings, [])
+        self.assertEqual(data["docs"]["dir"], "documentation")
+        self.assertEqual(data["docs"]["vision"], "documentation/product/vision.md")
+        self.assertEqual(data["docs"]["decisions"]["dir"], "documentation/architecture/decisions")
+        self.assertEqual(data["docs"]["tasks"], "documentation/tasks")
+
+    def test_custom_values(self):
+        data, warnings = self.resolved({
+            "docs": {"vision": "README.md", "overview": "./ARCHITECTURE.md",
+                     "decisions": {"dir": "docs/adr/", "pattern": "ADR-<NNN>-<slug>.md"},
+                     "conventions": "CONTRIBUTING.md", "tasks": "docs/loom-tasks"},
+            "ci": {"requiredCheck": "test (3.12)"},
+            "pullRequest": {"requiredSections": ["## Test plan", "### Risk "]},
+            "checks": {"lint": "make lint", "typecheck": None, "test": "make test", "check": "make check"},
+        })
+        self.assertEqual(warnings, [])
+        self.assertEqual(data["docs"], {
+            "dir": "docs", "vision": "README.md", "overview": "ARCHITECTURE.md",
+            "decisions": {"dir": "docs/adr", "pattern": "ADR-<NNN>-<slug>.md"},
+            "conventions": "CONTRIBUTING.md", "tasks": "docs/loom-tasks",
+        })
+        self.assertEqual(data["ci"], {"requiredCheck": "test (3.12)"})
+        self.assertEqual(data["pullRequest"], {"requiredSections": ["## Test plan", "### Risk"]})
+        self.assertEqual(data["checks"], dict(DEFAULT_CHECKS, typecheck=None))
+
+    def test_partial_docs_map_keeps_the_other_defaults(self):
+        data, warnings = self.resolved({"docs": {"tasks": "notes/tasks", "decisions": {"pattern": "<N>-<slug>.md"}}})
+        self.assertEqual(warnings, [])
+        expected = dict(DEFAULT_DOCS, tasks="notes/tasks",
+                        decisions={"dir": "docs/architecture/decisions", "pattern": "<N>-<slug>.md"})
+        self.assertEqual(data["docs"], expected)
+
+    def test_invalid_docs_paths_take_their_default(self):
+        cases = {
+            "vision": ["", "  ", "/abs/vision.md", "../vision.md", "docs/../../x.md", ".", "./", "README.txt",
+                       ".loom/tasks/x.md", ".loom/vision.md", ".claude/vision.md", ".git/vision.md", 5, None, ["a.md"]],
+            "tasks": ["", "/tmp/tasks", "a/../..", ".", ".loom/tasks", ".loom/tasks/sub", ".loom", ".claude",
+                      ".claude/tasks", ".git", "./.git/tasks", 3],
+        }
+        for role, values in cases.items():
+            for value in values:
+                with self.subTest(role=role, value=value):
+                    data, warnings = self.resolved({"docs": {role: value}})
+                    self.assertEqual(data["docs"][role], DEFAULT_DOCS[role])
+                    self.assertEqual(len(warnings), 1, warnings)
+                    self.assertIn("docs.%s" % role, warnings[0])
+
+    def test_reserved_dirs_and_a_custom_work_dir(self):
+        data, warnings = self.resolved({"workDir": "work/tasks", "docs": {"tasks": "work/tasks/done",
+                                                                         "decisions": {"dir": ".claude/adr"}}})
+        self.assertEqual(data["docs"]["tasks"], DEFAULT_DOCS["tasks"])
+        self.assertEqual(data["docs"]["decisions"], DEFAULT_DOCS["decisions"])
+        self.assertEqual(len(warnings), 2, warnings)
+        for value in (".github/ARCHITECTURE.md", ".loomx/a.md", "git/a.md", "claude.md"):
+            with self.subTest(value=value):
+                data, warnings = self.resolved({"docs": {"overview": value}})
+                self.assertEqual((data["docs"]["overview"], warnings), (value, []))
+
+    def test_invalid_decisions(self):
+        for decisions, expected in (
+            ("adr", DEFAULT_DOCS["decisions"]),
+            ({"dir": "../adr"}, DEFAULT_DOCS["decisions"]),
+            ({"dir": "adr", "pattern": "<NNNN>.md"}, {"dir": "adr", "pattern": "<NNNN>-<slug>.md"}),
+            ({"pattern": "adr/<NNNN>-<slug>.md"}, DEFAULT_DOCS["decisions"]),
+            ({"pattern": "<NNNN>-<slug>.txt"}, DEFAULT_DOCS["decisions"]),
+            ({"pattern": "<NNNNNNN>-<slug>.md"}, DEFAULT_DOCS["decisions"]),
+            ({"pattern": "<NN>-<NN>-<slug>.md"}, DEFAULT_DOCS["decisions"]),
+            ({"pattern": "<NNNN>-<slug>-<slug>.md"}, DEFAULT_DOCS["decisions"]),
+        ):
+            with self.subTest(decisions=decisions):
+                data, warnings = self.resolved({"docs": {"decisions": decisions}})
+                self.assertEqual(data["docs"]["decisions"], expected)
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn("docs.decisions", warnings[0])
+
+    def test_valid_patterns(self):
+        for pattern in ("<N>-<slug>.md", "<NNNNNN>_<slug>.md", "ADR-<NNN>-<slug>.md", "<slug>-<NN>.md"):
+            with self.subTest(pattern=pattern):
+                self.assertTrue(ls.valid_decisions_pattern(pattern))
+
+    def test_docs_not_an_object_and_unknown_keys(self):
+        data, warnings = self.resolved({"docs": "docs"})
+        self.assertEqual(data["docs"], DEFAULT_DOCS)
+        self.assertEqual(len(warnings), 1)
+        data, warnings = self.resolved({"docs": {"dir": "x", "decisions": {"dir": "adr", "glob": "*"}}})
+        self.assertEqual(data["docs"]["dir"], "docs")  # dir is docsDir, not a map key
+        self.assertEqual(data["docs"]["decisions"]["dir"], "adr")
+        self.assertEqual(len(warnings), 2, warnings)
+        self.assertTrue(any("docs.dir" in w for w in warnings))
+        self.assertTrue(any("docs.decisions.glob" in w for w in warnings))
+
+    def test_invalid_ci(self):
+        for ci in ("check", {"requiredCheck": ""}, {"requiredCheck": 5}, {"requiredCheck": None}):
+            with self.subTest(ci=ci):
+                data, warnings = self.resolved({"ci": ci})
+                self.assertEqual(data["ci"], {"requiredCheck": "check"})
+                self.assertEqual(len(warnings), 1, warnings)
+        data, warnings = self.resolved({"ci": {"requiredCheck": "build", "required": "x"}})
+        self.assertEqual(data["ci"], {"requiredCheck": "build"})
+        self.assertEqual(len(warnings), 1)
+
+    def test_invalid_required_sections(self):
+        data, warnings = self.resolved({"pullRequest": {"requiredSections": "## Test plan"}})
+        self.assertEqual(data["pullRequest"], {"requiredSections": []})
+        self.assertEqual(len(warnings), 1)
+        data, warnings = self.resolved({"pullRequest": {"requiredSections": [
+            "## Test plan", "Test plan", "# Title", "#### Deep", "##", "## ", "##No space", 5, None,
+            "## Test plan", "### Risks", "## Two\nlines"]}})
+        self.assertEqual(data["pullRequest"], {"requiredSections": ["## Test plan", "### Risks"]})
+        self.assertEqual(len(warnings), 10, warnings)
+        data, warnings = self.resolved({"pullRequest": []})
+        self.assertEqual(data["pullRequest"], {"requiredSections": []})
+        self.assertEqual(len(warnings), 1)
+
+    def test_null_and_invalid_checks(self):
+        data, warnings = self.resolved({"checks": {"lint": None, "typecheck": None, "test": None}})
+        self.assertEqual(warnings, [])
+        self.assertEqual(data["checks"], {"lint": None, "typecheck": None, "test": None, "check": "make check"})
+        data, warnings = self.resolved({"checks": {"lint": "make lint", "typecheck": 5, "test": False, "check": None}})
+        self.assertEqual(data["checks"], DEFAULT_CHECKS)
+        self.assertEqual(len(warnings), 3, warnings)
+        for key in ("checks.typecheck", "checks.test", "checks.check"):
+            with self.subTest(key=key):
+                self.assertTrue(any(key in w for w in warnings))
+        # An empty optional check keeps its 1.1.0 meaning: off, now with a warning to use null.
+        data, warnings = self.resolved({"checks": {"lint": "", "typecheck": "  ", "test": "make test"}})
+        self.assertEqual(data["checks"], dict(DEFAULT_CHECKS, lint=None, typecheck=None))
+        self.assertEqual(len(warnings), 2, warnings)
+        self.assertTrue(all("use null" in w for w in warnings), warnings)
+        data, warnings = self.resolved({"checks": {"check": "  "}})
+        self.assertEqual(data["checks"]["check"], "make check")
+        self.assertEqual(len(warnings), 1)
+
+    def test_hooks_see_the_resolved_config(self):
+        self.write_config({"checks": {"lint": None, "check": ""}, "docs": {"tasks": "notes/tasks"}})
+        cfg, warnings = ls.load_config(self.repo)
+        self.assertEqual(len(warnings), 1)
+        self.assertIsNone(cfg["checks"]["lint"])
+        self.assertEqual(cfg["checks"]["check"], "make check")
+        self.assertEqual(cfg["docs"]["tasks"], "notes/tasks")
+        self.assertEqual(ls.docs_change_paths(cfg), [
+            "docs", "docs/architecture/decisions", "docs/product/vision.md", "docs/architecture/overview.md",
+            "docs/conventions.md", "notes/tasks"])
+
+
 class TodayTest(RepoTestCase):
     """`today` gives skills the date without a `date` command injection."""
 
@@ -377,6 +559,19 @@ class WorkingTreeTest(RepoTestCase):
         s = self.state()
         self.assertEqual((s["workingTree"], s["workingTreeDocsOnly"]), ("dirty", True))
         write(self.path("src", "app.py"), "x = 1\n")
+        self.assertEqual(self.state()["workingTreeDocsOnly"], False)
+
+    def test_docs_only_flag_counts_every_docs_map_path(self):
+        self.write_config({"docs": {"vision": "README.md", "overview": "ARCHITECTURE.md",
+                                    "decisions": {"dir": "adr"}, "tasks": "notes/tasks"}})
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "docs map")
+        for path in ("README.md", "ARCHITECTURE.md", "adr/0001-x.md", "notes/tasks/42-x.md", "docs/other.md"):
+            write(self.path(*path.split("/")), "changed\n")
+            with self.subTest(path=path):
+                s = self.state()
+                self.assertEqual((s["workingTree"], s["workingTreeDocsOnly"]), ("dirty", True))
+        write(self.path("notes", "todo.md"), "x\n")  # next to a mapped path, not at or below it
         self.assertEqual(self.state()["workingTreeDocsOnly"], False)
 
     def test_all_done_docs_only_dirty_routes_to_describe_pr(self):

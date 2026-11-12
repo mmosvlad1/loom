@@ -2,7 +2,7 @@
 
 > A Claude Code plugin for structured, agent-driven development: **Research → Plan → Implement**, with GitHub Issues as the backlog, artifacts as the hand-off between phases, and a full git flow from issue to squash merge.
 
-Status: **Draft, revision 2** · Last updated: 2026-11-11 · Describes plugin release **1.1.0** (`CHANGELOG.md`)
+Status: **Draft, revision 2** · Last updated: 2026-11-11 · Describes plugin release **1.1.0** and the unreleased milestone M9a (`CHANGELOG.md`)
 
 Changes in revision 2: fixes from the spec review (finish-task commands, agent `tools`, namespacing, versioning, config use, hook exit codes, oneshot conditions), decisions on the post-PR flow, setup bootstrap, approval gates, mode changes and resume, and new features: `loom-state`, `/loom:next`, enforced checks, harness evals, shared snippets, writing style.
 
@@ -97,6 +97,8 @@ Prompts and artifacts use these terms with exactly one meaning each (see §14).
 | **approve** | Set an artifact's status to `approved` |
 | **gate** | A phase that cannot start until a previous artifact is `approved` |
 | **checks** | The commands in `loom.json` → `checks` |
+| **docs role** | One kind of durable document that loom reads or writes: `vision`, `overview`, `decisions`, `conventions`, `tasks` (§15) |
+| **docs map** | `loom.json` → `docs`: the path of each docs role (§19.1) |
 
 ---
 
@@ -354,6 +356,12 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
   "branch": "feat/42-auth-flow",
   "mainBranch": "main",
   "onMain": false,
+  "docs": { "dir": "docs", "vision": "docs/product/vision.md", "overview": "docs/architecture/overview.md",
+            "decisions": { "dir": "docs/architecture/decisions", "pattern": "<NNNN>-<slug>.md" },
+            "conventions": "docs/conventions.md", "tasks": "docs/tasks" },
+  "checks": { "lint": "make lint", "typecheck": "make typecheck", "test": "make test", "check": "make check" },
+  "ci": { "requiredCheck": "check" },
+  "pullRequest": { "requiredSections": [] },
   "task": { "number": 42, "slug": "auth-flow", "dir": ".loom/tasks/42-auth-flow", "mode": "full",
             "size": "L", "archived": false, "url": "https://github.com/o/r/issues/42", "pr": null,
             "metrics": null },
@@ -371,7 +379,11 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 }
 ```
 
-- `workingTreeDocsOnly` is `true` when the tree is `dirty` only below `docsDir` (besides the ignored `workDir` and `.loom/`), else `false`: an interrupted `describe-pr` writes docs before its commit.
+- `workingTreeDocsOnly` is `true` when the tree is `dirty` only in the **docs paths** (besides the ignored `workDir` and `.loom/`), else `false`: an interrupted `describe-pr` writes docs before its commit. The docs paths are `docsDir` and every path of `docs`; a change counts when it is at or below one of them. The `Stop` hook (§11.5) ignores the same paths.
+- `docs`: the resolved docs map (§15, §19.1). Paths are relative to the git top level. `dir` is `docsDir`. Skills read doc paths from here and never build them. The freshness check of `--docs` (§23.1) will use the same paths.
+- `checks`: the resolved check commands `lint`, `typecheck`, `test`, and `check` (§19.1). A `null` check does not exist in the project. Skills take the check commands from here, and pass them to the implementer (§9.9).
+- `ci` and `pullRequest`: the resolved values of these `loom.json` keys (§19.1). Skills read them from here, not from `loom.json`. `pullRequest` (configuration) is not `pr` (the PR state of `--pr`).
+- `docs`, `checks`, `ci`, and `pullRequest` are in every non-empty output, also without a task (`backlog` reads `docs` on the main branch, `finish-task` reads `ci` after the merge).
 - `today` is the local date (`YYYY-MM-DD`). Skills use it for `updated` instead of injecting a `date` command (§9.0).
 - `task` is `null` when the branch matches no task directory. `artifacts` lists only existing files of 01–04 (the ticket is reported through `task`; `*.superseded.md` files are ignored).
 - `implementation.blocked` is `null` or `{ "phase": N, "reason": "…" }`. Phase status is `pending`, `in-progress`, `done`, or `blocked`.
@@ -390,28 +402,17 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
   - `subagentSeconds` sums, over all segments, the `duration_s` of the segment's last `stop` line. Parallel runs add up, and idle time between segments does not count; it is not wall-clock time.
   - `line` is the text for the task summary (§13.4). Parts with a count of 0 are left out (review rounds, changes-needed, checks retries, unfinished). The time is in rounded seconds below 60 seconds, else in rounded minutes.
   - Malformed lines are skipped. The `--line` output does not change.
-- `warnings` collects problems that did not stop the computation (unreadable `loom.json`, missing status, invalid size, unclosed code fence, failed stale check, `gh` errors).
+- `warnings` collects problems that did not stop the computation (unreadable `loom.json`, invalid `docs`, `checks`, `ci`, or `pullRequest` values (§19.1), missing status, invalid size, unclosed code fence, failed stale check, `gh` errors).
 - `--line`: one line for the statusline, e.g. `#42 · full · design:in-review · 3 open Q`, `#42 · full · impl 1/3`, or `#42 · archived`. Empty output when there is no task.
 - `--pr`: adds PR state from `gh pr view --json number,state,reviewDecision,statusCheckRollup,mergeStateStatus` as `{ number, state, reviewDecision, checks: passing|failing|pending|none, mergeStateStatus, behindMain }`; `behindMain` is computed with git after `git fetch origin <mainBranch>`. This calls `gh` and the network, so it is not used by the `SessionStart` hook. If `gh` is missing or unauthenticated, or the branch has no PR, `pr` is `null` and a warning is added.
 - `--docs`: reserved for the docs freshness check (§23.1, planned for v1.2). Until then it prints "not implemented yet (planned for v1.2)" to stderr and exits 2.
-- **Planned (M9, §9.13):**
-  - `docs`: the resolved docs map (§15, §19.1). It is in every non-empty output, also without a task (`backlog` reads it on the main branch). Paths are relative to the git top level. Skills read doc paths from here and never build them:
-    ```json
-    "docs": { "dir": "docs", "vision": "docs/product/vision.md", "overview": "docs/architecture/overview.md",
-              "decisions": { "dir": "docs/architecture/decisions", "pattern": "<NNNN>-<slug>.md" },
-              "conventions": "docs/conventions.md", "tasks": "docs/tasks" }
-    ```
-    `dir` is `docsDir`. The freshness check of `--docs` (§23.1) uses the same paths.
-  - `ci` and `pullRequest`: the resolved values of these `loom.json` keys (§19.1). Like `docs`, they are in every non-empty output, also without a task, e.g. `"ci": { "requiredCheck": "check" }` and `"pullRequest": { "requiredSections": [] }`. Skills read them from here, not from `loom.json`. `pullRequest` (configuration) is not `pr` (the PR state of `--pr`).
-  - `workingTreeDocsOnly` counts a change as a docs change when it is below `docsDir` or at or below any path of `docs`. The `Stop` hook (§11.5) ignores the same paths.
-  - `task.setup`: `true` when the task is the setup task (branch `chore/<n>-loom-setup`), else `false`.
-  - Warnings for invalid `docs`, `ci`, and `pullRequest` values (§19.1).
+- **Planned (M9, §9.13):** `task.setup`: `true` when the task is the setup task (branch `chore/<n>-loom-setup`), else `false`.
 - `--slug '<issue title>'`: prints the branch slug of §9.3 step 5 and exits 0. It is a pure string function, so it also works outside a loom project. A title that starts with `-` is taken as the title, not as an option. Before the ASCII step it transliterates the letters that Unicode NFKD keeps (`ß` → `ss`, `æ` → `ae`, `œ` → `oe`, `ø` → `o`, `đ` → `d`, `ł` → `l`, `þ` → `th`). One quirk is accepted: a first word that fits and a second word that would pass 40 characters leave only the first word (`a <50-character word>` → `a`). `start-task` uses it, so the slug never depends on the model.
 
 ### 8.3 Rules
 
 - **Task lookup:** branch `^(feat|fix|chore|docs|refactor)/(\d+)-(.+)$` → issue number → task directory `<workDir>/<n>-*` (matched by number, so an edited issue title does not break it). If not found, it also looks in `<workDir>/_archive/` and reports `archived: true`. The mode comes from `00-ticket.md` frontmatter.
-- **Config:** reads `.claude/loom.json` at the git top-level; missing keys take the defaults of §19.1.
+- **Config:** reads `.claude/loom.json` at the git top-level; missing keys take the defaults of §19.1. An invalid value of a key in the §19.1 validation table takes its default and adds a warning. The hooks use the same resolved values.
 - **Statuses:** read from artifact frontmatter (a minimal parser for the §13.1 fields: scalars and inline lists).
 - **Open questions:** numbered `**Q<n>.` items under the latest `## Open Questions` heading; items marked "accepted by default" are counted separately (`acceptedByDefault`).
 - **Code fences:** lines inside fenced code blocks are ignored. Fences follow CommonMark (3+ backticks or tildes; closed only by the same character, at least as long, with nothing after it), except that any indentation is accepted. An unclosed fence adds a warning.
@@ -471,8 +472,8 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
       - `Makefile` (or stack-native scripts) with `lint`, `typecheck`, `test`, `check`
       - `.github/workflows/ci.yml`
       - `.claude/settings.json`: `extraKnownMarketplaces`, `enabledPlugins`, permission allowlist (§19.3), `statusLine` calling `loom-state --line` through `.claude/loom-statusline.py` (optional, §19.3); merged into an existing file, never replaced
-      - `docs/` skeleton: `product/vision.md`, `architecture/overview.md`, `architecture/decisions/`, `conventions.md`, `tasks/`
-      - short `CLAUDE.md` pointing to `docs/`
+      - docs skeleton, one file or directory per docs role at its path in the docs map (§15); by default below `docs/`: `product/vision.md`, `architecture/overview.md`, `architecture/decisions/`, `conventions.md`, `tasks/`. Before `.claude/loom.json` exists the map has its defaults; afterwards setup takes the paths from `docs` in the state.
+      - short `CLAUDE.md` pointing to the docs paths
       - `.loom/` entry in `.gitignore`
    3. Optionally creates the labels `type:*`, `size:*`, `mode:*` (`gh label create`, confirmation). The issue gets `type:chore`, `size:S`, `mode:oneshot` if they exist.
    4. Runs `checks.check`, then commits, then hands over to `/loom:describe-pr` (oneshot-style PR). The handover is a normal oneshot task, so `loom-state` routes it: the task directory `<workDir>/<n>-loom-setup/` with `00-ticket.md` (`mode: oneshot`, `size: S`), the commit `chore(loom): set up loom (#<n>)` with the body `Phase 1: oneshot`, and the `log.md` entry `## Phase 1 — done — <hash>`. `next` is then `/loom:describe-pr`.
@@ -497,10 +498,10 @@ Other untracked files of the empty repository (e.g. the files of `uv init`) go i
 **Purpose:** product-level planning, between tasks.
 
 **Does:**
-- **Discuss ideas:** reads `docs/product/vision.md`, open issues (`gh issue list`), and the code state; discusses options.
+- **Discuss ideas:** reads the vision (`docs.vision` in the state, §8.2), the overview and the task summaries, open issues (`gh issue list`), and the code state; discusses options.
 - **Create issues** in the format of `references/issue-format.md`: title, context, acceptance criteria, labels. Shows the list and waits for confirmation before `gh issue create`.
 - **Prioritize:** answers "what next?" from issue dependencies and what is done.
-- Helps fill `vision.md` when it is still a skeleton. The main branch takes no commits, so with an active task and a clean working tree it commits the vision on the task branch (`docs(#<n>): update product vision`); otherwise it offers a `type:docs` oneshot issue that carries the agreed text.
+- Helps fill the vision when it is still a skeleton. The main branch takes no commits, so with an active task and a clean working tree it commits the vision on the task branch (`docs(#<n>): update product vision`); otherwise it offers a `type:docs` oneshot issue that carries the agreed text.
 - Issue bodies are written to `<workDir>/_drafts/` (ignored by git), never elsewhere in the repository tree.
 - Without `.claude/loom.json` it points to `/loom:setup`. With an active task it says so; new issues do not change the task.
 
@@ -554,7 +555,9 @@ Current state, desired end state, out of scope, proposed architecture (before/af
 
 **Rule:** all questions are written as open. Recommendations are allowed, resolution is not.
 
-**Planned (M9, §9.13.4):** on a setup task, design also reads `references/onboarding.md`. It holds the onboarding discussion in the same layout. The topics: what the project is, project rules against loom rules, docs roles, gaps, checks, the required CI check, and PR sections. Design reads doc paths from `docs` in the state (§8.2).
+Design may read the overview, the ADRs, and the conventions. It takes their paths from `docs` in the state (§8.2).
+
+**Planned (M9, §9.13.4):** on a setup task, design also reads `references/onboarding.md`. It holds the onboarding discussion in the same layout. The topics: what the project is, project rules against loom rules, docs roles, gaps, checks, the required CI check, and PR sections.
 
 ### 9.7 `plan`
 
@@ -565,7 +568,9 @@ Writes the **Phase Overview** (one line per vertical slice) and full implementat
 
 **Rule:** implementation phases are vertical slices; each is verifiable by `loom.json` checks.
 
-**Planned (M9, §9.13.5):** on a setup task, the plan copies the content of every loom template it uses into its Changes: the implementer reads only the plan and the project. Plan reads doc paths from `docs` in the state (§8.2).
+Plan reads the conventions and the overview from their paths in `docs`, and the check commands from `checks`, in the state (§8.2). It never plans a `null` check.
+
+**Planned (M9, §9.13.5):** on a setup task, the plan copies the content of every loom template it uses into its Changes: the implementer reads only the plan and the project.
 
 ### 9.8 `iterate`
 
@@ -598,9 +603,9 @@ The single skill for changing anything that already exists. It detects the targe
 
 **Per implementation phase:**
 1. Writes `in-progress` for the phase in `log.md`.
-2. Launches `loom:implementer` with a short prompt: plan path + phase number (oneshot: ticket path). The implementer never commits.
+2. Launches `loom:implementer` with a short prompt: plan path + phase number (oneshot: ticket path), plus the resolved `checks` and `docs.conventions` from the state (`_shared/implementation-loop.md`). The implementer never reads `.claude/loom.json`, skips a `null` check, and never commits.
 3. Checks are enforced by the `SubagentStop` hook (§11.4): the implementer cannot finish while `checks.check` fails. The hook lets the implementer stop after `hooks.maxCheckAttempts` failures, so `implement` runs `checks.check` once more itself. Failing checks there mean the phase is `blocked`; `implement` never commits on failing checks.
-4. Launches `loom:implementation-reviewer` (oneshot: compares the diff with the ticket). The verdict has the categories of §10.2. Only `blocking` items go back to the implementer. At most `implement.maxFixAttempts` fix attempts (default 2); then `blocked: <reason>` in `log.md` and stop.
+4. Launches `loom:implementation-reviewer` with `docs.conventions` in its prompt (oneshot: compares the diff with the ticket). The verdict has the categories of §10.2. Only `blocking` items go back to the implementer. At most `implement.maxFixAttempts` fix attempts (default 2); then `blocked: <reason>` in `log.md` and stop.
 5. Commits: `<type>(<scope>): <summary> (#<n>)`, body `Phase N: <name>`; in oneshot mode the body is `Phase 1: oneshot`. `<type>` is the branch type; `<scope>` is the module that holds most of the change (`_shared/git-flow.md`).
 6. Ticks the phase checkboxes in `04-plan.md` (Phase Overview and `Automated:` lines; `Manual:` lines stay for the user) and writes `done` with commit hash, checks result, reviewer verdict, deviations, and additions to `log.md` (`implement/references/log-format.md`).
 7. **Auto-advance** if checks pass, no `blocking` items remain, and the phase lists no manual verification. Otherwise stops with a phase summary and the manual steps.
@@ -616,18 +621,20 @@ Steps 2–4 are `_shared/implementation-loop.md`; `iterate` runs the same loop f
 ### 9.10 `describe-pr`
 
 **Does:**
-1. Reads all artifacts and `log.md`. A working tree that is dirty only below `docsDir` is its own earlier partial run: it continues. Code changes stop it.
+1. Reads all artifacts and `log.md`. A working tree that is dirty only in the docs paths (`workingTreeDocsOnly`, §8.2) is its own earlier partial run: it continues. Code changes stop it.
    A missing `gh` stops it. So does a failed `gh` when the ticket already has `pr:` (`PR #<n> state unknown`): the PR may exist. Otherwise other `gh` problems (not authenticated, no remote) do not stop it: it still writes the docs and `pr-body.md`, and step 7 reports the failing push or `gh pr create`.
-2. quick/full: writes `docs/tasks/<n>-<slug>.md` (§13.4). Its Implementation section ends with `Process metrics: <task.metrics.line>` when `task.metrics` (§8.2) is not `null`; without it the line is left out, never estimated.
-3. Creates ADRs for resolved decisions marked `ADR? = yes` (§13.5).
-4. Checks whether the task changed the architecture; if so, proposes an update to `docs/architecture/overview.md`.
-5. Commits `docs(#<n>): record decisions and summary` — only if something changed.
+2. quick/full: writes the task summary `<docs.tasks>/<n>-<slug>.md` (§13.4). Its Implementation section ends with `Process metrics: <task.metrics.line>` when `task.metrics` (§8.2) is not `null`; without it the line is left out, never estimated.
+3. Creates ADRs for resolved decisions marked `ADR? = yes` (§13.5), in `docs.decisions.dir`, named and numbered by `docs.decisions.pattern`.
+4. Checks whether the task changed the architecture; if so, proposes an update to the overview (`docs.overview`).
+5. Commits `docs(#<n>): record decisions and summary` — only if something in the docs paths changed.
 6. `git rebase origin/<mainBranch>` after the same guarded `git fetch` as `iterate rebase` (no fetch without a remote `origin`); re-runs checks if the rebase brought changes. Failing checks stop it before the push; `/loom:iterate` fixes them.
-7. Drafts the PR title (Conventional Commits, ending with `(#<n>)`) and body (§13.6) in `<task dir>/pr-body.md`, shows them, and after confirmation runs `git push -u origin <branch>` and `gh pr create`.
+7. Drafts the PR title (Conventional Commits, ending with `(#<n>)`) and body (§13.6, with the sections of `pullRequest.requiredSections`) in `<task dir>/pr-body.md`, shows them, and after confirmation runs `git push -u origin <branch>` and `gh pr create`.
 8. Stores the PR number in `00-ticket.md` frontmatter (`pr: 57`).
 9. Proposes follow-ups from the summary as new issues, in the format of `${CLAUDE_PLUGIN_ROOT}/skills/backlog/references/issue-format.md` (confirmation required).
 
-**Planned (M9, §9.13):** describe-pr takes the paths of the task summary, the ADRs, and the overview from `docs` in the state (§8.2, §15), and numbers ADRs by `docs.decisions.pattern`. The PR body keeps the sections of `pullRequest.requiredSections` from the state (§13.6). On the onboarding task, the follow-ups include every `Follow-up:` line of the design's Out of Scope (§9.13.5).
+describe-pr takes every doc path from `docs` in the state (§8.2, §15) and `pullRequest.requiredSections` from the state, never from `loom.json`.
+
+**Planned (M9, §9.13.5):** on the onboarding task, the follow-ups include every `Follow-up:` line of the design's Out of Scope.
 
 ### 9.11 `finish-task`
 
@@ -638,12 +645,11 @@ Steps 2–4 are `_shared/implementation-loop.md`; `iterate` runs the same loop f
 4. After confirmation: `gh pr merge --squash --delete-branch --subject '<PR title>' --match-head-commit <sha>` (no number: it selects the PR of the current branch; it deletes the local and remote branch). `--subject` keeps the Conventional Commits title, which already ends with `(#<n>)`, as the squash commit subject; without it GitHub may append ` (#<PR number>)`. `--match-head-commit` is the head whose checks step 3 watched. The title comes from `gh pr view --json title` and is single-quoted (`_shared/git-flow.md`).
 5. `git switch <mainBranch> && git pull && git fetch --prune`. Deletes the local branch with `git branch -D` only if it still exists.
 6. Moves the task directory to `.loom/tasks/_archive/`. `events.jsonl` (§11.6) moves with it; the hook writes nothing for an archived task.
-7. If the merged task was the setup task and no ruleset exists, offers to enable it (§17.3).
-   **Planned (M9, §17.3):** the ruleset requires `ci.requiredCheck` from the state (default `check`). `finish-task` also reads classic branch protection and skips the offer when a ruleset or the protection already requires that check.
+7. If the merged task was the setup task, offers the ruleset (§17.3). The ruleset requires `ci.requiredCheck` from the state (default `check`). `finish-task` first reads the rulesets and the classic branch protection of the main branch, and skips the offer when one of them already requires that check.
 
 All steps are idempotent: re-running after a partial failure continues where it stopped. Every stop after the merge ends with `Next: /loom:finish-task #<n>`, which resumes on the main branch.
 
-Dirty working tree: changes only below `docsDir` are an interrupted docs refresh, so `finish-task` runs `_shared/pr-update.md` (docs commit, confirmed push) and continues. Code changes stop it with `Next: /loom:iterate`, which keeps them as a fix or stashes or discards them. With the PR already merged, it offers a stash before the cleanup.
+Dirty working tree: changes only in the docs paths (`workingTreeDocsOnly`) are an interrupted docs refresh, so `finish-task` runs `_shared/pr-update.md` (docs commit, confirmed push) and continues. Code changes stop it with `Next: /loom:iterate`, which keeps them as a fix or stashes or discards them. With the PR already merged, it offers a stash before the cleanup.
 
 ### 9.12 `next`
 
@@ -664,7 +670,7 @@ A file read with Read is not loaded as a skill, so `next` compensates (§24.2):
 | 2 | Branch matches no task, or task archived | suggest `/loom:start-task #n` (restore if archived) |
 | 3 | Any artifact has `blocked`, or an implementation phase is `blocked` and the plan gate holds (`04-plan.md` approved or missing, or oneshot) — also with a dirty tree | show the reason; suggest `/loom:iterate <fix>` |
 | 4 | Implementation started (`log.md` has a phase entry, or a plan phase is ticked), not oneshot, and `04-plan.md` exists and is not `approved` (a plan change) — with or without a blocked phase, also with a dirty tree | `/loom:iterate <feedback>` if the plan is `draft` (plan edit not finished); else `/loom:iterate <answers>` if it has open questions; else `/loom:iterate approve` |
-| 5 | `log.md` phase `in-progress`, or a dirty tree while implementation phases are left; with all phases done, a dirty tree with code changes (not only below `docsDir`) | run `implement` (resume flow); with all phases done: `/loom:finish-task` if the PR is merged, else `/loom:iterate <feedback>` (keep the changes as a fix, or stash or discard them) |
+| 5 | `log.md` phase `in-progress`, or a dirty tree while implementation phases are left; with all phases done, a dirty tree with code changes (not only in the docs paths) | run `implement` (resume flow); with all phases done: `/loom:finish-task` if the PR is merged, else `/loom:iterate <feedback>` (keep the changes as a fix, or stash or discard them) |
 | 6 | Gate artifact (design/plan) `in-review` with open questions | `/loom:iterate <answers>` |
 | 7 | Gate artifact `in-review`, no open questions | `/loom:iterate approve` |
 | 8 | PR open | PR routing table §6.2; phases left and the plan gate holds (approved, or oneshot): run `implement`, before every other open-PR route |
@@ -674,15 +680,15 @@ A file read with Read is not loaded as a skill, so `next` compensates (§24.2):
 
 Gate work (rows 6 and 7) comes before PR routing and "all implementation phases done": a design or plan that went back to review, for example after a plan change on an open PR, is never skipped. Before implementation starts, a `draft` gate artifact is unfinished work and falls to row 11, which reruns its phase (`/loom:plan` overwrites a draft plan). After implementation started, a draft or in-review plan is a plan change and row 4 handles it, before the dirty tree, PR routing, and describe-pr. Non-gate artifacts (research-questions, research) never block row 11. If research is `in-review`, `next` prints "research not reviewed" and continues. If research is stale, it warns and offers to rerun research.
 
-Row 5 and a dirty tree: `implement` resumes only while implementation phases are left. With all phases done, a tree that is dirty only below `docsDir` (`workingTreeDocsOnly`) is an interrupted `describe-pr` and falls through to the later rows (row 9, `/loom:describe-pr`, which continues its partial run; with an open PR, the PR routing of row 8, whose skills commit the docs through `_shared/pr-update.md`); code changes go to `/loom:iterate` (or `/loom:finish-task` when the PR is merged). A skill that refuses a dirty tree names the skill that handles the changes, never a `Next:` that leads back to the same refusal.
+Row 5 and a dirty tree: `implement` resumes only while implementation phases are left. With all phases done, a tree that is dirty only in the docs paths (`workingTreeDocsOnly`) is an interrupted `describe-pr` and falls through to the later rows (row 9, `/loom:describe-pr`, which continues its partial run; with an open PR, the PR routing of row 8, whose skills commit the docs through `_shared/pr-update.md`); code changes go to `/loom:iterate` (or `/loom:finish-task` when the PR is merged). A skill that refuses a dirty tree names the skill that handles the changes, never a `Next:` that leads back to the same refusal.
 
 ### 9.13 Onboarding an existing repository (planned, M9)
 
-**Status:** planned for v1.2, milestone M9. Nothing in this section is implemented in release 1.1.0. Other sections mark each M9 change with **Planned (M9, §…):**. Text without that marker describes release 1.1.0.
+**Status:** planned for v1.2, milestone M9, in two milestones (§9.13.8). Milestone M9a (config keys and their use in existing skills) is implemented and not released yet (`CHANGELOG.md`, `[Unreleased]`). Milestone M9b (the onboarding flow) is planned: other sections mark each M9b change with **Planned (M9, §…):**. Text without that marker describes the current behavior: release 1.1.0 plus M9a.
 
-Today `setup` on a repository with code runs one `oneshot` task: it detects the stack, reuses an existing `Makefile` and CI, adds config, and writes empty doc skeletons. It does not discuss the project, and skills hard-code the doc paths. M9 adds an onboarding flow that works for any project. It uses loom's own `full` mode, so the discussion, the gates, the artifacts, and the reviews come from the normal phases.
+Today `setup` on a repository with code runs one `oneshot` task: it detects the stack, reuses an existing `Makefile` and CI, adds config, and writes empty doc skeletons. It does not discuss the project. Since M9a, skills take the doc paths from the docs map, so a project can keep its own documentation structure (§15). M9 adds an onboarding flow that works for any project. It uses loom's own `full` mode, so the discussion, the gates, the artifacts, and the reviews come from the normal phases.
 
-Terms (M9a adds the docs terms and M9b the task terms to §3 and to the glossary of `_shared/writing-style.md`):
+Terms (M9a added the docs terms and M9b adds the task terms to §3 and to the glossary of `_shared/writing-style.md`):
 
 | Term | Meaning |
 |---|---|
@@ -846,7 +852,7 @@ A prompt change is done only when its eval case passes (§20.3). New cases cost 
 
 | Milestone | Changes | Tests and evals |
 |---|---|---|
-| **M9a** — config keys and their use in existing skills | `bin/loom-state`: parse and validate `docs`, `ci`, `pullRequest`, and `null` check commands (§19.1); output the resolved `docs`, `ci`, and `pullRequest`, and the wider `workingTreeDocsOnly` (§8.2). Hooks: `stop_lint.py` ignores every docs path and does nothing without `checks.lint`; `block_output_filtering.py` skips `null` commands. **Docs map:** `setup` (skeleton by role), `backlog`, `design`, `plan`, `implement` and `iterate` (they pass `docs.conventions` to the implementer and the reviewer), `describe-pr` and its templates, `_shared/pr-update.md`; agents `implementer` and `implementation-reviewer` take the conventions path from their prompt. **`ci.requiredCheck`:** `finish-task` builds the ruleset with it and skips the offer when a ruleset or classic branch protection already requires it (§17.3). **Checks for the implementer:** `implement` and `iterate` pass the resolved `checks` in the implementer prompt, like `docs.conventions`. `agents/implementer.md` no longer reads `.claude/loom.json`, skips a `null` key, and never invents a command for it. **`pullRequest.requiredSections`:** `describe-pr`, `pr-template.md`, and `_shared/pr-update.md`, whose check for the layout before v1.1 ignores the required headings. Glossary terms **docs role** and **docs map**. | Unit tests: defaults, custom values, invalid values, warnings; lints that no skill builds a role path or reads these keys from `loom.json` itself. No new eval case: the `describe-pr-quick` fixture gets a non-default `docs.tasks` and `pullRequest.requiredSections: ["## Test plan"]`, with a `file_exists` grader on the mapped summary path and a grader for `## Test plan` after `## Decisions`. The fixture keeps the default `docs.decisions`: it has no decision with `ADR? = yes`. Rerun `describe-pr-quick`, `design-full`, `implement-manual`. |
+| **M9a** (done) — config keys and their use in existing skills | `bin/loom-state`: parse and validate `docs`, `ci`, `pullRequest`, and `null` check commands (§19.1); output the resolved `docs`, `checks`, `ci`, and `pullRequest`, and the wider `workingTreeDocsOnly` (§8.2). Hooks: `stop_lint.py` ignores every docs path and does nothing without `checks.lint`; `block_output_filtering.py` skips `null` commands. **Docs map:** `setup` (skeleton by role), `backlog`, `design`, `plan`, `implement` and `iterate` (they pass `docs.conventions` to the implementer and the reviewer), `describe-pr` and its templates, `_shared/pr-update.md`; agents `implementer` and `implementation-reviewer` take the conventions path from their prompt. **`ci.requiredCheck`:** `finish-task` builds the ruleset with it and skips the offer when a ruleset or classic branch protection already requires it (§17.3). **Checks for the implementer:** `implement` and `iterate` pass the resolved `checks` in the implementer prompt, like `docs.conventions`. `agents/implementer.md` no longer reads `.claude/loom.json`, skips a `null` key, and never invents a command for it. **`pullRequest.requiredSections`:** `describe-pr`, `pr-template.md`, and `_shared/pr-update.md`, whose check for the layout before v1.1 ignores the required headings. Glossary terms **docs role** and **docs map**. | Unit tests: defaults, custom values, invalid values, warnings; lints that no skill builds a role path or reads these keys from `loom.json` itself. No new eval case: the `describe-pr-quick` fixture gets a non-default `docs.tasks` and `pullRequest.requiredSections: ["## Test plan"]`, with a `file_exists` grader on the mapped summary path and a grader for `## Test plan` after `## Decisions`. The fixture keeps the default `docs.decisions`: it has no decision with `ADR? = yes`. Rerun `describe-pr-quick`, `design-full`, `implement-manual`. |
 | **M9b** — onboarding flow | `setup`: path selection, `--oneshot`, kickoff, onboarding re-run, templates `setup-issue-onboarding.md` and `onboarding-questions.md`. `bin/loom-state`: `task.setup`. `research-questions`: stop on a setup task. `research`: the fixed list, GitHub facts, instruction files. `design`: `references/onboarding.md`, including the `CLAUDE.md` plan item with `@AGENTS.md`. `plan`: the template rule of §9.13.5. `implement`: copies larger templates into the task directory. `iterate`: no mode change on a setup task. `finish-task`: recognizes the setup task also by `task.setup`. Glossary terms **setup task** and **onboarding task**. | Unit tests for path selection, `task.setup`, and the skill texts. One new eval case, `design-onboarding`: a setup task in full mode with approved research, a fixture with `AGENTS.md` ("push and open PRs without confirmation") and a CI job named `test`. Graders: `03-design.md` in review with round 1, empty Resolved Decisions, a question that names `AGENTS.md`, no Read of `01-research-questions.md`. Rerun `research-full`, `design-full`, `implement-manual`. The kickoff needs `gh` and `origin`, which eval runs lack: static tests plus one live run on a sandbox repository. |
 
 `setup`, `backlog`, `plan`, `iterate`, and `finish-task` have no eval case; their changes get static tests in `tests/test_skills.py` and `tests/test_setup.py`.
@@ -873,6 +879,7 @@ Defined as `agents/*.md`, ported from HumanLayer's daemon-registered agents. Plu
 - `tools` lists only plain tool names. Command restrictions (e.g. read-only Bash for the locator and reviewer) are stated in the agent prompt and enforced by hooks where needed.
 - All research agents carry the "document what exists, never critique" rule.
 - The agents with Bash (`codebase-locator`, `implementer`, `implementation-reviewer`) carry the one-command rule of §9.0 inline.
+- The implementer gets the resolved `checks` and `docs.conventions` in its prompt, and the reviewer gets `docs.conventions` (§9.9). The implementer never reads `.claude/loom.json`. It skips a `null` check and never invents a command for it. Without these prompt lines it reads them from `loom-state --json`.
 
 ### 10.2 Reviewer verdict format
 
@@ -929,7 +936,7 @@ Known limits:
 
 Ported from HumanLayer's `block-test-output-filtering.sh`, adapted to `make`, `pytest`, `ruff`, `pyright`, `npm test`. Blocks check commands piped into `head`, `tail`, `grep`, etc., because filtered output hides failures. Denies with the reason: "Run checks unfiltered".
 
-- Check commands: the commands in `loom.json` → `checks`, plus `make lint|typecheck|test|check`, `pytest`, `ruff`, `pyright`, `mypy`, `npm test`, `npm run test|lint|typecheck`, and any of these behind `uv run` or `python -m`.
+- Check commands: the commands in `loom.json` → `checks` (a `null` check is skipped), plus `make lint|typecheck|test|check`, `pytest`, `ruff`, `pyright`, `mypy`, `npm test`, `npm run test|lint|typecheck`, and any of these behind `uv run` or `python -m`.
 - Filters: `head`, `tail`, `grep`, `sed`, `awk`, `cut`, `less`, `more`. `| tee <file>` is allowed.
 
 Known limits:
@@ -948,8 +955,8 @@ Known limits:
 ### 11.5 `Stop` — quick lint (optional)
 
 - Enabled by `hooks.stopLint` (default `false`).
-- Runs only if the working tree has code changes (not only `.loom/`, `workDir`, or `docsDir`).
-- Runs `checks.lint` (270-second timeout; hook `timeout` 300 seconds). On failure exits 2 so Claude sees the output; respects `stop_hook_active` to avoid loops: while it is `true`, the hook does nothing, so each stop gets at most one lint block.
+- Runs only if the working tree has code changes (not only `.loom/`, `workDir`, or the docs paths of §8.2: `docsDir` and every path of the docs map).
+- Runs `checks.lint` (270-second timeout; hook `timeout` 300 seconds). Without a lint command (`checks.lint` is `null`) it does nothing. On failure exits 2 so Claude sees the output; respects `stop_hook_active` to avoid loops: while it is `true`, the hook does nothing, so each stop gets at most one lint block.
 
 ---
 
@@ -1144,6 +1151,8 @@ In `_shared/visual-conventions.md`: proper tree glyphs (`├──`, `└──`
 
 ### 13.4 Task summary — `docs/tasks/<n>-<slug>.md` (quick, full)
 
+The directory is `docs.tasks` of the docs map (§15); the default is shown.
+
 ```markdown
 # #42 Auth flow
 ## Problem
@@ -1158,7 +1167,7 @@ In `_shared/visual-conventions.md`: proper tree glyphs (`├──`, `└──`
 
 ### 13.5 ADR — `docs/architecture/decisions/NNNN-<slug>.md`
 
-Created from resolved decisions marked `ADR? = yes` (architecture level: storage, protocols, agent structure, major libraries).
+Created from resolved decisions marked `ADR? = yes` (architecture level: storage, protocols, agent structure, major libraries). The directory is `docs.decisions.dir` and the file name follows `docs.decisions.pattern` of the docs map (§15); the default is shown. `NNNN` in the title is the number of the file name, with its digits.
 
 ```markdown
 # NNNN. Use SQLite for agent state
@@ -1192,7 +1201,7 @@ Closes #42
 - **Change outline** has one line per implementation phase (`1. <phase name> — <commit subject>`), then a file tree of the changed files or an interface `diff` block (signatures and public API only), whichever shows the shape of the change better (§13.3). Unchanged parts are omitted.
 - If the body would exceed 60,000 characters (GitHub limit: 65,536), the plan is replaced by its Phase Overview plus a note.
 - oneshot PRs contain only `Closes`, Why, and Verification.
-- **Planned (M9, §9.13.4):** `pullRequest.requiredSections` (§19.1) lists the headings that the project's PR template or a CI check requires, e.g. `## Test plan`. A required heading that the layout above already has is that section. Every other required heading comes after Decisions (oneshot: after Verification), before `<details>`, in the order of the list. `describe-pr` fills it from the task's artifacts, or writes `None.` when nothing applies. `_shared/pr-update.md` keeps these sections when it rewrites the body, and its check for the layout before v1.1 ignores them.
+- **Required sections:** `pullRequest.requiredSections` (§19.1) lists the headings that the project's PR template or a CI check requires, e.g. `## Test plan`. A required heading that the layout above already has (the same heading line) is that section. Every other required heading comes after Decisions (oneshot: after Verification), before `<details>`, in the order of the list. `describe-pr` fills it from the task's artifacts, or writes `None.` when nothing applies. `_shared/pr-update.md` keeps these sections when it rewrites the body, and its check for the layout before v1.1 ignores them.
 
 ---
 
@@ -1219,7 +1228,7 @@ loom uses an **STE-lite** style, inspired by ASD-STE100, defined in `_shared/wri
 | Final messages of skills | Yes, strictly |
 | Skill and agent prompts | Rule 1 always; others where they do not remove nuance |
 | Design rationale | Rules 1, 2, 6, 7 |
-| `vision.md`, `backlog` discussion | No |
+| The vision document, `backlog` discussion | No |
 
 ---
 
@@ -1240,22 +1249,22 @@ docs/
 ```
 
 - `CLAUDE.md` stays short because it loads into every session.
-- `conventions.md` holds project-specific rules (e.g. how LLM calls are tested). `plan` and `implement` read it.
+- `conventions.md` holds project-specific rules (e.g. how LLM calls are tested). `plan`, the implementer, and the reviewer read it.
 - `overview.md` is updated in the same PR as the change that affects it.
 - ADRs come from design decisions.
 
-**Planned (M9, §9.13): docs roles and the docs map.** The tree above becomes the default layout. An existing project can keep its own structure: `loom.json` → `docs` (§19.1) maps each docs role to a path, and `loom-state --json` reports the resolved paths (§8.2).
+**Docs roles and the docs map.** The tree above is the default layout. An existing project can keep its own structure: `loom.json` → `docs` (§19.1) maps each docs role to a path, and `loom-state --json` reports the resolved paths (§8.2).
 
 | Role | Default path | Read by | Written by |
 |---|---|---|---|
 | `vision` | `<docsDir>/product/vision.md` | backlog | setup (skeleton), backlog |
-| `overview` | `<docsDir>/architecture/overview.md` | backlog, design, plan | setup (skeleton), describe-pr (update) |
-| `decisions` | directory `<docsDir>/architecture/decisions`, file name pattern `<NNNN>-<slug>.md` | design | describe-pr |
+| `overview` | `<docsDir>/architecture/overview.md` | backlog, design, plan, describe-pr | setup (skeleton), describe-pr (update) |
+| `decisions` | directory `<docsDir>/architecture/decisions`, file name pattern `<NNNN>-<slug>.md` | design, describe-pr | setup (skeleton), describe-pr |
 | `conventions` | `<docsDir>/conventions.md` | design, plan, implementer, implementation-reviewer | setup (skeleton) |
-| `tasks` | `<docsDir>/tasks` (files `<n>-<slug>.md`) | backlog | describe-pr, `_shared/pr-update.md` |
+| `tasks` | `<docsDir>/tasks` (files `<n>-<slug>.md`) | backlog, `_shared/pr-update.md` | setup (skeleton), describe-pr, `_shared/pr-update.md` |
 
 - `CLAUDE.md` is not a docs role. It stays at the git top level.
-- Every skill that names a doc path today takes it from `docs` in the state: `setup`, `backlog`, `design`, `plan`, `implement` and `iterate` (they pass `docs.conventions` to the implementer and the reviewer), `describe-pr` with its templates, and `_shared/pr-update.md`. No skill builds a role path from `docsDir`.
+- Every skill that names a doc path takes it from `docs` in the state: `setup` (it writes the skeleton by docs role), `backlog`, `design`, `plan`, `implement` and `iterate` (they pass `docs.conventions` to the implementer and the reviewer), `describe-pr` with its templates, and `_shared/pr-update.md`. No skill builds a role path from `docsDir`, and no skill reads `docs` from `loom.json`; `tests/test_skills.py` checks both. Before `.claude/loom.json` exists, `setup` uses the default paths of its skeleton templates.
 - `docsDir` stays for compatibility. It is the root of the default paths, and changes below it still count as docs changes (§8.2). A path in the map may lie outside `docsDir`, e.g. `ARCHITECTURE.md` or `adr/`.
 - loom writes its own ADR layout (§13.5) also in a mapped directory. Only the file name follows the project's pattern. The `NNNN` in the ADR title is the number of the file name, with the digit count of the pattern.
 - The task summary file name stays `<n>-<slug>.md`.
@@ -1328,14 +1337,15 @@ check: lint typecheck test
 
 `loom.json` references these targets; CI runs `make check`. Recipe lines start with a tab. `pytest` exits with 5 when it collects no tests; a new project has none, so the `test` target accepts exit status 5 and no other failure. Node projects use the `lint`, `typecheck`, `test`, and `check` scripts of `package.json` instead (`setup/references/stacks/node.md`).
 
+`checks.lint`, `checks.typecheck`, and `checks.test` may be `null` when the project has no such check (§19.1). `checks.check` is always a command. The hooks, the plan, and the implementer skip a `null` check.
+
 **Planned (M9, §9.13.4):**
 - `checks.check` is the fast set. It must pass on the main branch and finish within the `SubagentStop` timeout (540 seconds, §11.4). The onboarding design chooses it and the CI-only steps.
 - The `conventions` document lists each CI-only step: what it runs, why it is CI-only, and how to run it locally. `loom.json` does not record CI-only steps: loom never runs them.
-- `checks.lint`, `checks.typecheck`, and `checks.test` may be `null` when the project has no such check (§19.1). `checks.check` is always a command.
 
 ### 17.2 CI workflow (v1)
 
-`.github/workflows/ci.yml`, on `pull_request` and `push` to the main branch. One job named `check` (the ruleset requires this name):
+`.github/workflows/ci.yml`, on `pull_request` and `push` to the main branch. One job named `check` (the ruleset requires this name: the default of `ci.requiredCheck`):
 
 | Step | Python example | Catches |
 |---|---|---|
@@ -1353,11 +1363,11 @@ CI runs the steps through the single entry point (`make check`, or the `check` s
 
 Offered by `finish-task` after the setup PR is merged, created with `gh api` after confirmation:
 - Merge to the main branch only through a PR.
-- Required status check: `check`. **Planned (M9, §19.1):** the check named in `ci.requiredCheck` (default `check`).
+- Required status check: the check named in `ci.requiredCheck` (§19.1, default `check`), from the state.
 - Required approvals: **0** (a solo developer cannot approve their own PR).
 - Block force pushes and deletion.
 
-**Planned (M9, §9.13.8):** before the offer, `finish-task` also reads classic branch protection: `gh api repos/{owner}/{repo}/branches/<main>/protection`, a read-only GET (the `Bash(gh api *)` ask rule prompts; a 404 means none). A 403 (a private repository on GitHub Free, or no admin access) means unknown: `finish-task` still offers the ruleset, and the POST reports whether rulesets are available. It skips the offer when a ruleset or the classic protection already requires `ci.requiredCheck`. Otherwise it offers the ruleset as above.
+Before the offer, `finish-task` reads the rules of the main branch (`gh api repos/{owner}/{repo}/rules/branches/<main>`) and its classic branch protection: `gh api repos/{owner}/{repo}/branches/<main>/protection`. Both are read-only GETs (the `Bash(gh api *)` ask rule prompts; for the protection, a 404 means none). A 403 (a private repository on GitHub Free, or no admin access) means unknown: `finish-task` still offers the ruleset, and the POST reports whether rulesets are available. It skips the offer when a ruleset or the classic protection already requires `ci.requiredCheck`. Otherwise it offers the ruleset as above.
 
 Availability (verified, §24.2): rulesets work on public repositories on GitHub Free; private repositories need GitHub Pro, Team, or Enterprise Cloud. If unavailable, loom relies on the guard hook only.
 
@@ -1427,9 +1437,9 @@ v1 ships recipes for **python-uv** and **node**. Adding a stack means adding one
 }
 ```
 
-Every component reads `mainBranch`, `workDir`, and `docsDir` from this file. None of them hard-codes `main` or `.loom/tasks`.
+Every component takes `mainBranch`, `workDir`, and `docsDir` from this file, directly or through `loom-state` (skills take the doc paths from `docs` in the state, §8.2). None of them hard-codes `main` or `.loom/tasks`.
 
-**Planned (M9, §9.13): new optional keys.** The template above does not change: a missing key takes its default, so a project that omits them keeps the behavior of release 1.1.0. The onboarding task writes the keys it needs. Example of these keys with non-default values:
+**Optional keys.** The template above does not list them: a missing key takes its default, so a project that omits them keeps the behavior of release 1.1.0. **Planned (M9, §9.13.5):** the onboarding task writes the keys it needs. Example of these keys with non-default values:
 
 ```json
 {
@@ -1449,15 +1459,16 @@ Every component reads `mainBranch`, `workDir`, and `docsDir` from this file. Non
 | Key | Default | Rule | Invalid value |
 |---|---|---|---|
 | `docs` | every role at its §15 default below `docsDir` | An object. Each key is optional. An unknown key gets a warning and is ignored. | Not an object: warning, all defaults |
-| `docs.vision`, `docs.overview`, `docs.conventions` | §15 | A relative path to a `.md` file: not empty, not absolute, not `.` or the git top level, no `..` segment, not below `workDir` | Warning, the default of that role |
+| `docs.vision`, `docs.overview`, `docs.conventions` | §15 | A relative path to a `.md` file: not empty, not absolute, not `.` or the git top level, no `..` segment, not at or below `workDir`, `.git/`, `.claude/`, or `.loom/` | Warning, the default of that role |
 | `docs.tasks` | `<docsDir>/tasks` | A relative directory path, by the same rules | Warning, the default |
-| `docs.decisions` | `{ "dir": "<docsDir>/architecture/decisions", "pattern": "<NNNN>-<slug>.md" }` | An object. `dir`: a relative directory path, by the same rules. `pattern`: a file name (no `/`) that ends in `.md`, has `<slug>` once, and has one number placeholder `<N…N>` of 1–6 `N`. The placeholder's length is the digit count of the zero-padded number (`<NNN>` → `007`). A missing field takes its default. | Warning, the default of that field |
+| `docs.decisions` | `{ "dir": "<docsDir>/architecture/decisions", "pattern": "<NNNN>-<slug>.md" }` | An object. `dir`: a relative directory path, by the same rules. `pattern`: a file name (no `/`) that ends in `.md`, has `<slug>` once, and has one number placeholder `<N…N>` of 1–6 `N`. The placeholder's length is the digit count of the zero-padded number (`<NNN>` → `007`). A missing field takes its default. An unknown field gets a warning and is ignored. | Warning, the default of that field (not an object: both defaults) |
+| `ci`, `pullRequest` | as below | An object. An unknown key gets a warning and is ignored. | Not an object: warning, the defaults |
 | `ci.requiredCheck` | `"check"` | The name of the CI check that runs `checks.check` (§17.2), as GitHub reports it | Warning, the default |
-| `pullRequest.requiredSections` | `[]` | A list of heading lines, each `## <text>` or `### <text>` (§13.6) | Warning; an invalid item is dropped |
-| `checks.lint`, `checks.typecheck`, `checks.test` | as above | A command, or `null` when the project has no such check. A `null` check is skipped: the `Stop` hook does nothing without `checks.lint`. | Warning, the default |
-| `checks.check` | `"make check"` | A command; never `null` | Warning, the default |
+| `pullRequest.requiredSections` | `[]` | A list of heading lines, each `## <text>` or `### <text>` (§13.6) | Not a list: warning, the default. An invalid or repeated item: warning, the item is dropped |
+| `checks.lint`, `checks.typecheck`, `checks.test` | as above | A command (a non-empty string), or `null` when the project has no such check. A `null` check is skipped: the `Stop` hook does nothing without `checks.lint`. | An empty or blank string: warning ("use null"), `null`, as in release 1.1.0. Another value: warning, the default |
+| `checks.check` | `"make check"` | A command (a non-empty string); never `null` | Warning, the default |
 
-`loom-state` validates these keys, reports problems in `warnings`, and outputs the resolved values as `docs`, `ci`, and `pullRequest` (§8.2). Skills read them from the state, never from the raw file. Agents get the values they need in their prompt.
+`loom-state` validates these keys, reports problems in `warnings`, and outputs the resolved values as `docs`, `checks`, `ci`, and `pullRequest` (§8.2). The hooks use the same resolved values. Skills read them from the state, never from the raw file. Agents get the values they need in their prompt (§9.9).
 
 ### 19.2 Issue labels
 
@@ -1505,7 +1516,7 @@ evals/
 └── results/                 # written by the runs; ignored by git
 ```
 
-- Each case's `scaffold.sh` runs `_fixture/build.py <scenario>`. It builds a tiny Python repository (`shop/`, stdlib `unittest` checks behind `make check`, the §19.1 `loom.json`), one commit on `main` with fixed dates (stable hashes), and the task directory of task #7 with the artifacts the scenario needs. `tests/test_evals.py` runs every scaffold and checks that `loom-state` routes it to the case's skill.
+- Each case's `scaffold.sh` runs `_fixture/build.py <scenario>`. It builds a tiny Python repository (`shop/`, stdlib `unittest` checks behind `make check`, the §19.1 `loom.json`, with the optional keys of `describe-pr-quick` below), one commit on `main` with fixed dates (stable hashes), and the task directory of task #7 with the artifacts the scenario needs. `tests/test_evals.py` runs every scaffold and checks that `loom-state` routes it to the case's skill.
 - Graders never call a model (`regex`, `tool_used`, `file_exists` only):
   - `research-full` (full mode, research questions approved):
     - `02-research.md` exists with `status: in-review` and `file:line` references.
@@ -1522,20 +1533,22 @@ evals/
     - Exactly one `git commit` (also as `git -C <dir> commit`).
     - `log.md` has `## Phase 1 — done — <hash>` and no phase 2 entry.
     - The Phase Overview ticks phase 1 only.
-    - The last message has `Manual verification:` and `run the manual steps, then /clear, then /loom:next`.
+    - The last message has `Manual verification:` and `run the manual steps, then /clear, then /loom:next` (the grader also accepts `step` for a single manual step).
     - `<task dir>/events.jsonl` has a `stop` line of `implementation-reviewer` with `"result":"pass"` or `"changes-needed"`, and a `stop` line of `implementer` with `"result":"pass"` or `"fail"` (§11.6). Each fails when `last_assistant_message` does not hold the agent's report (the result is then `unknown`).
   - `guard-main` (on `main`, staged change, no skill):
     - A Bash `git commit` ran.
     - The trace holds the guard's deny reason.
     - `main` still points to the fixture commit.
-  - `describe-pr-quick` (quick mode, both implementation phases done and committed, no remote, no PR):
+  - `describe-pr-quick` (quick mode, both implementation phases done and committed, no remote, no PR; its `loom.json` adds the non-default `docs.tasks` `notes/loom-tasks` and `pullRequest.requiredSections` `["## Test plan"]`, and keeps the default `docs.decisions`: the fixture has no decision with `ADR? = yes`):
     - `pr-body.md` exists, and its first line is `Closes #7`.
+    - The task summary exists at the mapped path `notes/loom-tasks/7-bulk-discount-tiers.md` (`file_exists`).
     - The headings `## Why`, `## Special things to note`, `## Change outline`, `## Verification`, and `## Decisions` come in this order; no `## Summary` or `## Changes`.
     - Why is one sentence. Special things to note has 1–3 items or `None.`. Change outline has the phase lines `1.` and `2.`, then a file tree or a `diff` block.
     - The plan is attached in `<details>`.
+    - The required section `## Test plan` comes after `## Decisions` and before `<details>`.
     - No Bash `git push` and no `gh pr create` (`tool_used`, max 0). The fixture has no remote, and `make eval` does not grant `gh`. The skill writes `pr-body.md` before it asks to push, and the run ends at that question.
     - The case needs `gh` installed (not authenticated): without it, `loom-state --pr` warns `gh is not installed`, and the skill stops before it writes the body.
-    - Passed 4 of 4 local runs (haiku, macOS, Homebrew git, about 0.02 USD each); not run on the CI runner yet. In one run Bash denied a chained `cd …; ls …`, so the docs commit and the rebase did not happen; the body was still written.
+    - Passed 4 of 4 local runs before M9a (haiku, macOS, Homebrew git, about 0.02 USD each); not run on the CI runner yet. In one run Bash denied a chained `cd …; ls …`, so the docs commit and the rebase did not happen; the body was still written. With the M9a fixture (mapped `docs.tasks`, required `## Test plan`) it passed 2 of 2 local runs (about 0.03 USD each).
 - Every case has `runs: 1` and `model: haiku` (cost); `--runs 3` and `--model sonnet` override them.
 - `make eval` runs the suite with `--scaffold --ablation none --no-publish --trust-plugin`, a `--max-cost-usd` ceiling, and the narrowest `--allow-tools` set: `Write Edit 'Bash(git *)' 'Bash(make *)' 'Bash(loom-state *)' 'Bash(*/bin/loom-state *)'`. It is not part of `make check`. It puts the plugin's `bin/` on `PATH` (the eval runtime does not) and, on macOS only, the developer directory (`xcode-select -p`) first.
 - In loom's CI: `make check` (unit tests and `claude plugin validate --strict`) on every PR and push to `main` (`.github/workflows/ci.yml`). The evals run only on demand (`.github/workflows/eval.yml`, `workflow_dispatch`, repository secret `ANTHROPIC_API_KEY`), never on a schedule: they cost tokens.
@@ -1596,7 +1609,7 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
   - Design discusses the project with the user: drafts of vision and overview, project rules against loom rules, docs roles, gaps, checks, and the required CI check.
   - The normal plan, implement, describe-pr, and finish-task phases follow. Gaps outside loom's needs become follow-up issues.
   - Empty repositories keep the fast `oneshot` setup.
-  - New `loom.json` keys let skills use an existing structure: a docs map, the required CI check, and required PR sections.
+  - New `loom.json` keys let skills use an existing structure: a docs map, the required CI check, and required PR sections. Done in milestone M9a (not released yet, `CHANGELOG.md`).
   - Specified in §9.13, with the milestones M9a and M9b in §9.13.8.
 
 Done in v1.1 (release 1.1.0, `CHANGELOG.md`):

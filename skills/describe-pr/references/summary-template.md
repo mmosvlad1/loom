@@ -1,5 +1,5 @@
 <!--
-Template of the task summary `<docsDir>/tasks/<n>-<slug>.md` (quick and full mode only).
+Template of the task summary `<docs.tasks>/<n>-<slug>.md` (quick and full mode only; `docs.tasks` from the loom-state output).
 Guidance for describe-pr. Remove every guidance comment before you commit.
 - The file is committed and permanent. Write for a reader who never saw the task directory.
 - Apply the shared `writing-style.md` strictly. Link files with paths relative to the repository root.
@@ -20,7 +20,7 @@ Guidance for describe-pr. Remove every guidance comment before you commit.
 
 <!--
 One line per resolved decision of 03-design.md and 04-plan.md that matters after the merge.
-Link the ADR when one exists: `- Agent state lives in SQLite ([ADR 0003](../architecture/decisions/0003-use-sqlite-for-agent-state.md)).`
+Link the ADR when one exists, with a path relative to this file: `- Agent state lives in SQLite ([ADR 0003](<relative path to the ADR>)).`
 Mark decisions taken by the round cap: `(accepted by default)`. Write `None.` when there are none.
 -->
 

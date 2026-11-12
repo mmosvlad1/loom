@@ -41,13 +41,13 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 ### Configuration
 
-Read `.claude/loom.json` at the git top level. If a key is missing, use the default:
+The state holds the resolved check commands (`checks`) and doc paths (`docs`). Take them from there, never from `.claude/loom.json`. Pass `checks` and `docs.conventions` to the agents as the configuration lines of `implementation-loop.md`.
+
+Read `.claude/loom.json` at the git top level for the other keys. If a key is missing, use the default:
 
 | Key | Default |
 |---|---|
 | `mainBranch` | `main` (also in the state as `mainBranch`) |
-| `docsDir` | `docs` |
-| `checks.check` | `make check` |
 | `rounds.cap` | `{ "S": 2, "M": 3, "L": 5 }` |
 | `implement.maxFixAttempts` | `2` |
 
@@ -283,9 +283,9 @@ Used by this section, [Fix a blocked phase](#fix-a-blocked-phase), [Post-PR fix]
 
 Run the shared `implementation-loop.md` in Fix mode. `implement` runs the same loop in phase mode, so both skills mark a phase done or blocked by the same rules:
 
-1. Launch `loom:implementer` with a short prompt: the plan path `<task dir>/04-plan.md` and the phase number N (oneshot: the ticket path `<task dir>/00-ticket.md`), the word `Fix`, and the fix items. The implementer never commits.
+1. Launch `loom:implementer` with a short prompt: the plan path `<task dir>/04-plan.md` and the phase number N (oneshot: the ticket path `<task dir>/00-ticket.md`), the word `Fix`, the fix items, and the `Checks:` and `Conventions:` lines of `implementation-loop.md`. The implementer never commits.
 2. Run `checks.check` yourself, once. The `SubagentStop` hook already enforced it on the implementer, so a failure here means the hook gave up: the result is blocked.
-3. Launch `loom:implementation-reviewer` in fix mode: the same plan path and phase number (or ticket path), the fix items, and the implementer's report.
+3. Launch `loom:implementation-reviewer` in fix mode: the same plan path and phase number (or ticket path), the fix items, the `Conventions:` line, and the implementer's report.
 4. If the verdict has `blocking` items, send only those back to `loom:implementer` in Fix mode, at most `implement.maxFixAttempts` times (default 2). Record `nit` items, deviations, and additions for `log.md`.
 5. If the result is blocked (failing checks, an open problem that needs a decision, or blocking items after the last attempt):
    - Do not commit. Leave the change in the working tree.
@@ -377,7 +377,7 @@ Every implementation phase is done, and the working tree has code changes: the u
    1. Phase N is the last `done` implementation phase, unless the user names another one (oneshot: 1).
    2. Fix items: the user's argument, one item per stated fix; without an argument, one item `user edits: <file>` per changed file.
    3. Run `checks.check`, as `git-flow.md` describes.
-   4. Launch `loom:implementation-reviewer` in fix mode: the plan path `<task dir>/04-plan.md` and phase N (oneshot: the ticket path), the fix items, and the diff.
+   4. Launch `loom:implementation-reviewer` in fix mode: the plan path `<task dir>/04-plan.md` and phase N (oneshot: the ticket path), the fix items, the `Conventions:` line, and the diff.
    5. If the checks fail or the verdict has `blocking` items, run [the fix loop](#the-fix-loop) with the failing lines and the `blocking` items as the fix items. A blocked result stops here, as the fix loop describes.
    6. Commit a fix commit, as step 5 of [Fix an implemented phase](#fix-an-implemented-phase) describes (`<task dir>/commit-msg.txt`, Read before Write, `git commit -F`). Stage the changed files from step 1 that the user kept, plus the `Files changed` of every fix-loop run. If no implementer ran, there is no `Files changed` list; the step 1 files are the whole set.
    7. Append the fix entry of `log-format.md` to `log.md`, as step 6 of [Fix an implemented phase](#fix-an-implemented-phase) describes.

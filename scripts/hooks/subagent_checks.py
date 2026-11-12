@@ -116,8 +116,7 @@ def main() -> None:
         return
     command = check_command(cfg)
     if command is None:
-        loomhook.system_message("loom: .claude/loom.json has no checks.check; the implementer's checks were not enforced.")
-        return
+        return  # loom-state always resolves checks.check to a command; a guard only
     limit = max_attempts(cfg)
     path = counter_path(str(data.get("session_id") or ""), str(data.get("agent_id") or ""))
     failures = read_failures(path)

@@ -514,6 +514,19 @@ class ConfiguredChecksTest(RepoTestCase):
         self.assertIsNone(decision(run_hook(FILTER, bash_payload("./scripts/other.sh | tail", self.repo))))
 
 
+class NullChecksTest(RepoTestCase):
+    """A null check does not exist in the project: the filter hook skips it (LOOM_SPEC.md 11.3, 19.1)."""
+
+    loom_config = {"checks": {"lint": None, "typecheck": None, "test": "./scripts/t.sh", "check": "make check"}}
+
+    def test_null_checks_are_skipped(self):
+        self.assertEqual(decision(run_hook(FILTER, bash_payload("./scripts/t.sh | tail", self.repo)))[0], "deny")
+        self.assertEqual(decision(run_hook(FILTER, bash_payload("make lint | head", self.repo)))[0], "deny")
+        self.assertIsNone(decision(run_hook(FILTER, bash_payload("null | tail", self.repo))))
+        proc = run_hook(FILTER, bash_payload("ls | head", self.repo))
+        self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "", ""))
+
+
 class BrokenHelperImportTest(unittest.TestCase):
     """A hook whose helper module cannot load exits 0 with a stderr message."""
 

@@ -2,6 +2,29 @@
 
 This file lists the notable changes of every loom version. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and loom uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version is set only in `.claude-plugin/plugin.json`.
 
+## [Unreleased]
+
+### Added
+
+- Milestone M9a: new optional `.claude/loom.json` keys (LOOM_SPEC.md §19.1). A project that omits them keeps the behavior of 1.1.0.
+  - `docs`, the docs map: the path of each docs role (`vision`, `overview`, `decisions` with a file name pattern, `conventions`, `tasks`). A project can keep its own documentation structure.
+  - `ci.requiredCheck`: the CI check that runs `checks.check` (default `check`).
+  - `pullRequest.requiredSections`: headings that the project's PR template or a CI check requires, e.g. `## Test plan`.
+  - `checks.lint`, `checks.typecheck`, and `checks.test` may be `null` when the project has no such check.
+- `loom-state --json` validates these keys, reports invalid values in `warnings`, and outputs the resolved `docs`, `checks`, `ci`, and `pullRequest` in every output, also without a task.
+- `finish-task` also reads the classic branch protection of the main branch (read-only `gh api` GET). It skips the ruleset offer when a ruleset or the protection already requires the check.
+- Glossary terms **docs role** and **docs map**.
+
+### Changed
+
+- Skills take every doc path from `docs` in the state and never build one from `docsDir`: `setup` writes the docs skeleton by docs role; `backlog`, `design`, `plan`, `describe-pr` (and its templates), and `_shared/pr-update.md` read and write the mapped paths. `describe-pr` numbers ADRs by `docs.decisions.pattern`.
+- `implement` and `iterate` pass the resolved check commands and `docs.conventions` in the implementer prompt, and `docs.conventions` in the reviewer prompt. The implementer no longer reads `.claude/loom.json`; it skips a `null` check and never invents a command for it.
+- The ruleset that `finish-task` offers requires `ci.requiredCheck` instead of a fixed `check`.
+- `describe-pr` keeps the required PR sections after Decisions (oneshot: after Verification). `_shared/pr-update.md` keeps them, and its check for the PR layout before v1.1 ignores them.
+- `workingTreeDocsOnly` and the `Stop` hook count a change as a docs change when it is below `docsDir` or at or below any path of the docs map. The `Stop` hook does nothing when `checks.lint` is `null`; the output filtering hook skips `null` checks.
+- An empty `checks.lint`, `checks.typecheck`, or `checks.test` still turns the check off, now with a warning to use `null`. An empty or other invalid `checks.check`, and any other invalid check value, takes its default with a warning.
+- Eval case `describe-pr-quick`: the fixture maps `docs.tasks` to `notes/loom-tasks` and requires `## Test plan`; two new graders check the mapped task summary and the required section.
+
 ## [1.1.0] - 2026-11-11
 
 ### Added

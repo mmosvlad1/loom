@@ -10,6 +10,6 @@ Rules for every Bash call of a loom skill. A permission rule such as `Bash(git *
 - Add no pipe, redirection, subshell, or shell variable (such as `$TMPDIR`).
 - Call a tool by the name the skill uses: `loom-state --json`, not `python3 bin/loom-state --json`. Do not wrap a command in `python3 -m`, `bash -c`, or `sh -c`.
 - Read and find files with the Read, Grep, and Glob tools, not with `cat`, `head`, `ls`, `grep`, or `find` through Bash.
-- Exception: run a command that a skill gives, and `checks.check` from `.claude/loom.json`, exactly as written, in one Bash call. This also applies when the command chains commands or has a pipe.
+- Exception: run a command that a skill gives, and `checks.check` from the `loom-state --json` output, exactly as written, in one Bash call. This also applies when the command chains commands or has a pipe.
 
 For `checks.check`, also follow "Checks" in the shared `git-flow.md`.

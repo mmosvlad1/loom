@@ -563,7 +563,9 @@ class PrBodyGraderTest(unittest.TestCase):
         "## Verification\n\n"
         "- `make check`: pass (12 tests)\n\n"
         "## Decisions\n\n"
-        "- Task summary: [docs/tasks/7-bulk-discount-tiers.md](docs/tasks/7-bulk-discount-tiers.md)\n\n"
+        "- Task summary: [notes/loom-tasks/7-bulk-discount-tiers.md](notes/loom-tasks/7-bulk-discount-tiers.md)\n\n"
+        "## Test plan\n\n"
+        "- `make check` covers the bulk tiers and the tie rule.\n\n"
         "<details><summary>Implementation plan</summary>\n\n"
         "## Phase Overview\n\n- [x] 1. A\n- [x] 2. B\n\n## Phase 1: A\n\n### Changes\n\n## Phase 2: B\n\n"
         "</details>\n"
@@ -586,7 +588,7 @@ class PrBodyGraderTest(unittest.TestCase):
 
     def test_good_body_passes(self):
         for grader in ("closes-first-line", "section-order", "why-one-sentence", "special-things-1-to-3",
-                       "change-outline-shape", "plan-attached"):
+                       "change-outline-shape", "plan-attached", "required-section-after-decisions"):
             with self.subTest(grader=grader):
                 self.assertIsNotNone(self.rx(grader).search(self.GOOD))
         self.assertIsNone(self.rx("no-old-sections").search(self.GOOD))
@@ -596,6 +598,9 @@ class PrBodyGraderTest(unittest.TestCase):
             with self.subTest(grader=name):
                 if g["type"] == "regex":
                     self.assertEqual(g["target"], {"source": "file", "path": TASK_DIR + "/pr-body.md"})
+                elif g["type"] == "file_exists" and name == "summary-at-mapped-path":
+                    # The fixture maps docs.tasks (LOOM_SPEC.md 19.1); the file name stays <n>-<slug>.md.
+                    self.assertEqual(g["path"], "notes/loom-tasks/7-bulk-discount-tiers.md")
                 elif g["type"] == "file_exists":
                     self.assertEqual(g["path"], TASK_DIR + "/pr-body.md")
                 else:
@@ -665,6 +670,19 @@ class PrBodyGraderTest(unittest.TestCase):
         # The visual must be inside the block, and the block inside the section.
         no_visual = "```text\nshop/pricing.py\n```\n"
         self.assertIsNone(rx.search(self.section("Change outline", phases + no_visual)))
+
+    def test_required_section_comes_after_decisions(self):
+        rx = self.rx("required-section-after-decisions")
+        self.assertIsNotNone(rx.search(self.GOOD))
+        moved = self.GOOD.replace("## Test plan\n\n- `make check` covers the bulk tiers and the tie rule.\n\n", "")
+        self.assertIsNone(rx.search(moved))
+        before = moved.replace("## Decisions\n", "## Test plan\n\nNone.\n\n## Decisions\n")
+        self.assertIsNone(rx.search(before))
+        after_details = moved + "\n## Test plan\n\nNone.\n"
+        self.assertIsNone(rx.search(after_details))
+        self.assertIsNone(rx.search(self.GOOD.replace("## Test plan", "## Test Plan")))
+        self.assertIsNotNone(rx.search(self.GOOD.replace("## Test plan\n\n- `make check` covers the bulk tiers "
+                                                         "and the tie rule.", "## Test plan\n\nNone.")))
 
     def test_plan_is_attached(self):
         rx = self.rx("plan-attached")
@@ -797,9 +815,17 @@ class ScaffoldTest(unittest.TestCase):
                 self.assertEqual(log_hash, short)
                 self.assertEqual(body.strip(), "Phase %s: %s" % (number, name))
                 self.assertRegex(subject, r"^feat\(pricing\): .+ \(#7\)$")
+        # The optional loom.json keys of the case (LOOM_SPEC.md 19.1, 20.2): a mapped docs.tasks and one
+        # required PR section; docs.decisions keeps its default (no decision has ADR? = yes).
+        self.assertEqual(state["warnings"], [])
+        self.assertEqual(state["docs"]["tasks"], "notes/loom-tasks")
+        self.assertEqual(state["docs"]["decisions"], {"dir": "docs/architecture/decisions", "pattern": "<NNNN>-<slug>.md"})
+        self.assertEqual(state["pullRequest"], {"requiredSections": ["## Test plan"]})
+        self.assertNotIn("ADR? = yes", fx.read(TASK_DIR + "/04-plan.md").replace(" ", ""))
+        self.assertNotRegex(fx.read(TASK_DIR + "/04-plan.md"), r"\|\s*yes\s*\|\s*$")
         # No remote, no PR, no body yet; no overview.md, so describe-pr asks nothing before the body.
         self.assertEqual(fx.git("remote"), "")
-        for path in (TASK_DIR + "/pr-body.md", "docs"):
+        for path in (TASK_DIR + "/pr-body.md", "docs", "notes"):
             self.assertFalse(os.path.exists(os.path.join(fx.cwd, path)), path)
         self.assertNotRegex(fx.read(TASK_DIR + "/00-ticket.md"), r"(?m)^pr:")
         proc = subprocess.run(["make", "check"], cwd=fx.cwd, env=fx.env, stdout=subprocess.PIPE,

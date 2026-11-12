@@ -33,9 +33,11 @@ Read these files in full before you start:
 
 Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission.
 
-The writing style applies to issues, commits, and the final message. It does not apply to the discussion with the user or to `vision.md`: talk naturally there.
+The writing style applies to issues, commits, and the final message. It does not apply to the discussion with the user or to the vision document: talk naturally there.
 
-Below, `<main>` is `mainBranch`, `<docs>` is `docsDir` from `.claude/loom.json` (default `docs`), and `<drafts>` is `<workDir>/_drafts` (`workDir` from `.claude/loom.json`, default under `.loom/`). With an active task, `<n>` is `task.number` and `<task dir>` is `task.dir`. Issue bodies always go to `<drafts>`, also with an active task. If a file in `<drafts>` or `<task dir>/commit-msg.txt` already exists, Read it before you Write it (`git-flow.md`).
+Below, `<main>` is `mainBranch`, and `<drafts>` is `<workDir>/_drafts` (`workDir` from `.claude/loom.json`, default under `.loom/`). With an active task, `<n>` is `task.number` and `<task dir>` is `task.dir`. Issue bodies always go to `<drafts>`, also with an active task. If a file in `<drafts>` or `<task dir>/commit-msg.txt` already exists, Read it before you Write it (`git-flow.md`).
+
+Doc paths come from `docs` in the state (the docs map): `<vision>` is `docs.vision`, `<overview>` is `docs.overview`, and `<tasks>` is `docs.tasks`. Never build a doc path yourself.
 
 ## 1. Check preconditions
 
@@ -50,8 +52,8 @@ Below, `<main>` is `mainBranch`, `<docs>` is `docsDir` from `.claude/loom.json` 
 
 Read all of this before you discuss anything:
 
-1. `<docs>/product/vision.md`. It is a **skeleton** if it still has the comment `Skeleton written by /loom:setup`, or if its sections are empty.
-2. `<docs>/architecture/overview.md`, and the list of `<docs>/tasks/` (finished tasks).
+1. `<vision>`. It is a **skeleton** if it still has the comment `Skeleton written by /loom:setup`, or if its sections are empty.
+2. `<overview>`, and the list of `<tasks>` (finished tasks).
 3. Open issues: `gh issue list --state open --limit 100 --json number,title,labels,body`.
 4. Recently closed issues: `gh issue list --state closed --limit 30 --json number,title,closedAt`.
 5. Recent work: `git log --oneline -20 <main>`.
@@ -63,7 +65,7 @@ Take the argument:
 
 | Argument | Activity |
 |---|---|
-| Empty, and `vision.md` is a skeleton | [Fill the vision](#fill-the-vision) first; then offer [Prioritize](#prioritize). |
+| Empty, and the vision is a skeleton | [Fill the vision](#fill-the-vision) first; then offer [Prioritize](#prioritize). |
 | Empty, or a question such as "what next?" | [Prioritize](#prioritize) |
 | An idea, a feature, a problem | [Discuss](#discuss), then [Create issues](#create-issues) |
 | `vision` | [Fill the vision](#fill-the-vision) |
@@ -107,7 +109,7 @@ Answer "what should I work on next?" from the issues, not from memory.
 
 ## Fill the vision
 
-`vision.md` holds what the product is, for whom, its goals, and its non-goals. Help the user write it:
+The vision (`<vision>`) holds what the product is, for whom, its goals, and its non-goals. Help the user write it:
 
 1. Ask a few open questions, a few at a time: what the product does, who uses it, the problem it solves, what success looks like, and what it deliberately does not do. Use what the README and the code already say.
 2. Draft the file in the sections of the skeleton (What, For Whom, Goals, Non-Goals). Remove the skeleton comments. Show the draft. Ask for confirmation or changes.
@@ -115,8 +117,8 @@ Answer "what should I work on next?" from the issues, not from memory.
 
 | Situation | Route |
 |---|---|
-| A task is active (`task` set, not archived) and `workingTree` is `clean` | Write `<docs>/product/vision.md`. Write `docs(#<n>): update product vision` to `<task dir>/commit-msg.txt`. Run `git add -- <docs>/product/vision.md`, then `git commit -F <task dir>/commit-msg.txt`. The vision goes into this task's PR. |
-| On `<main>`, no active task, or `workingTree` is `dirty` | Do not write the file. Offer an issue in `issue-format.md` form: title `Write the product vision`, labels `type:docs`, `size:S`, `mode:oneshot`. Its Context holds the confirmed vision text in a fenced `markdown` block; its acceptance criterion is that `<docs>/product/vision.md` contains that text. Create it as [Create issues](#create-issues) describes. |
+| A task is active (`task` set, not archived) and `workingTree` is `clean` | Write `<vision>`. Write `docs(#<n>): update product vision` to `<task dir>/commit-msg.txt`. Run `git add -- <vision>`, then `git commit -F <task dir>/commit-msg.txt`. The vision goes into this task's PR. |
+| On `<main>`, no active task, or `workingTree` is `dirty` | Do not write the file. Offer an issue in `issue-format.md` form: title `Write the product vision`, labels `type:docs`, `size:S`, `mode:oneshot`. Its Context holds the confirmed vision text in a fenced `markdown` block; its acceptance criterion is that `<vision>` contains that text. Create it as [Create issues](#create-issues) describes. |
 
 ## 4. Final message
 

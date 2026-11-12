@@ -7,8 +7,8 @@ The project starts to use the loom plugin for issue-to-PR work. loom needs its c
 - [ ] `.claude/loom.json` exists and its `checks` commands pass locally
 - [ ] `.github/workflows/ci.yml` runs one job named `check` on pull requests and on pushes to the main branch
 - [ ] `.claude/settings.json` registers the loom marketplace, enables `loom@loom`, and allowlists the routine commands
-- [ ] `docs/` has the skeleton: `product/vision.md`, `architecture/overview.md`, `architecture/decisions/`, `conventions.md`, `tasks/`
-- [ ] `CLAUDE.md` is short and points to `docs/`
+- [ ] The docs skeleton exists: one document or directory per docs role (vision, overview, decisions, conventions, tasks)
+- [ ] `CLAUDE.md` is short and points to the docs
 - [ ] `.gitignore` ignores the loom work directory
 
 ## Out of Scope

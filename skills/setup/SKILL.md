@@ -46,7 +46,8 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 - `<current>`: the current branch, `git symbolic-ref --short HEAD` (it works on an empty repository too). Do not take `branch` from the state: the state is empty before `.claude/loom.json` exists.
 - `<main>`: `mainBranch` from `.claude/loom.json` if the file exists. Otherwise the default branch on GitHub: `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`. If that is empty (an empty GitHub repository), `git symbolic-ref --short refs/remotes/origin/HEAD` without the `origin/` prefix. If that fails too, ask the user, and propose `main`.
-- `<workDir>` and `<docs>`: `workDir` and `docsDir` from `.claude/loom.json`, else the template defaults.
+- `<workDir>`: `workDir` from `.claude/loom.json`, else the template default.
+- **Docs paths**: one path per docs role, from `docs` in the state (the docs map) when `.claude/loom.json` exists. Before the file exists, the state is empty. The template `loom.json` has no `docs` key, so every role then takes its default: the path of its skeleton file relative to `templates/`. Never build a doc path in another way. After step 7 writes `.claude/loom.json`, `loom-state --json` reports the same paths in `docs`.
 - `<n>`: the number of the issue "Set up loom". `<branch>` is `chore/<n>-loom-setup`. `<task dir>` is `<workDir>/<n>-loom-setup`.
 - `<drafts>`: `<workDir>/_drafts`. Write issue bodies and the first commit message there. The work directory is ignored by git, and `loom-state` never takes `_drafts` for a task directory.
 - **Dirty**: `git status --porcelain --untracked-files=all` lists a path outside `<workDir>`. Always pass `--untracked-files=all` in this skill: plain `git status` collapses an untracked directory into its parent (`?? .loom/`), which hides whether the files are below `<workDir>`. Paths below `<workDir>` do not count: until the setup PR is merged, `<main>` has no `.gitignore` line for it, so the work directory of an earlier run shows as untracked there.
@@ -108,14 +109,23 @@ Prefer what exists. For each target file, record one state: **missing**, **ident
 | `.github/workflows/ci.yml` | The recipe's CI template with its placeholders filled. Reuse an existing workflow if the user agrees. |
 | `.claude/settings.json` | `templates/settings.json`, merged (see [Merge settings.json](#merge-settingsjson)). |
 | `.claude/loom-statusline.py` | `templates/loom-statusline.py`, unchanged, if the user wants the status line. |
-| `<docs>/product/vision.md`, `<docs>/architecture/overview.md`, `<docs>/conventions.md` | The templates in `templates/docs/`. Only missing files; an existing file is kept as it is. |
-| `<docs>/architecture/decisions/.gitkeep`, `<docs>/tasks/.gitkeep` | Empty files, only when the directory is missing or empty. |
+| The docs skeleton: one target per docs role (table below) | Only missing files; an existing file is kept as it is. |
 | `CLAUDE.md` | `templates/CLAUDE.md` with its placeholders filled. If the file exists, propose a short loom section (commands, docs links, workflow) instead of replacing it. |
 | `.gitignore` | The line `.loom/` (or `<workDir>/` when `workDir` is not below `.loom/`), if `git check-ignore -q <workDir>` fails. Plus the recipe's lines, if missing. |
 
+The docs skeleton, by docs role. The paths come from the docs paths (see Values):
+
+| Docs role | Target | What setup writes |
+|---|---|---|
+| `vision` | `docs.vision` | `templates/docs/product/vision.md` |
+| `overview` | `docs.overview` | `templates/docs/architecture/overview.md` |
+| `conventions` | `docs.conventions` | `templates/docs/conventions.md` |
+| `decisions` | `<docs.decisions.dir>/.gitkeep` | `templates/docs/architecture/decisions/.gitkeep` (empty), only when the directory is missing or empty |
+| `tasks` | `<docs.tasks>/.gitkeep` | `templates/docs/tasks/.gitkeep` (empty), only when the directory is missing or empty |
+
 Run `git check-ignore -v -- <path>` for every target file. A global or repository ignore rule can hide one (a global `core.excludesFile` that ignores `CLAUDE.md` is common). Name each ignored target and its rule in the plan.
 
-Fill `CLAUDE.md` from the README and the user's notes: the project name, one or two sentences about the project, the check commands, `<main>`, and `<docs>` in the doc links. Keep it short; it loads into every session.
+Fill `CLAUDE.md` from the README and the user's notes: the project name, one or two sentences about the project, the check commands, `<main>`, and the docs paths in the doc links. Keep it short; it loads into every session.
 
 ### Setup issue and labels
 
@@ -184,11 +194,11 @@ Run `git switch -c <branch>`. The uncommitted `.gitignore` change goes with you 
 
 Write the files of the plan, exactly as shown, in this order:
 
-1. `.claude/loom.json` first: `loom-state` and the hooks read it.
+1. `.claude/loom.json` first: `loom-state` and the hooks read it. Then run `loom-state --json`. Take `checks` and the docs paths (`docs`) from it for the rest of this run.
 2. The stack: run the confirmed recipe commands (`uv init --bare`, `uv lock`, `uv add --dev …`, or the Node install), then write the checks entry point (`Makefile` or `package.json` scripts).
 3. `.github/workflows/ci.yml`.
 4. `.claude/settings.json` (merged) and, if confirmed, `.claude/loom-statusline.py`.
-5. The docs skeleton, then `CLAUDE.md`.
+5. The docs skeleton (by docs role), then `CLAUDE.md`.
 
 Write each file with the Write or Edit tool. Never use shell redirection to write a file. On a resume, write only the targets that are still missing or different.
 
@@ -209,7 +219,7 @@ Fill in the template's stack and work directory values before you merge:
 
 ## 8. Checks
 
-Run `checks.check` from `.claude/loom.json` exactly as configured, from the git top level, as `git-flow.md` describes.
+Run `checks.check` from `loom-state --json` exactly as configured, from the git top level, as `git-flow.md` describes.
 
 - Pass: continue.
 - Fail: stop. Do not commit. Show the key failure lines. `Result: checks fail on <branch>: <the key lines>`, `Next: fix the failures, then /loom:setup` (a re-run continues on this branch).
@@ -259,7 +269,7 @@ Next: /clear, then /loom:describe-pr
 
 An earlier run stopped on `<branch>` (for example after failing checks). Continue where it stopped. Never write a second `in-progress` entry after a `done` entry.
 
-1. `<task dir>` is `<workDir>/<n>-loom-setup`. Read `.claude/loom.json` if it exists for `<main>`, `<workDir>`, and `<docs>`. Compare with `origin/<main>`, not the local `<main>`: a fresh clone may have no local `<main>`. Run `git fetch origin <main>` first.
+1. `<task dir>` is `<workDir>/<n>-loom-setup`. Read `.claude/loom.json` if it exists for `<main>` and `<workDir>`; the docs paths come from `docs` in the state. Compare with `origin/<main>`, not the local `<main>`: a fresh clone may have no local `<main>`. Run `git fetch origin <main>` first.
    - If `gh pr list --head <branch> --state merged --json number` lists a PR, stop: `Result: the setup PR of #<n> is merged; the cleanup is left`, `Next: /loom:finish-task #<n>`.
    - If `gh pr list --head <branch> --state open --json number` lists a PR, stop: `Result: the setup PR is open`, `Next:` from `next.command` (`loom-state` routes the open PR).
 2. `log.md` has `## Phase 1 — done`: the setup commit exists. Write nothing. Go to step 10 (`next.command` is `/loom:describe-pr`).

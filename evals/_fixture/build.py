@@ -20,7 +20,8 @@ Scenarios:
   design-full       full mode, research approved
   implement-manual  quick mode, plan approved; implementation phase 1 has a Manual line
   guard-main        on main with a staged change and no task
-  describe-pr-quick quick mode, both implementation phases done and committed, no remote, no PR
+  describe-pr-quick quick mode, both implementation phases done and committed, no remote, no PR;
+                    loom.json maps docs.tasks to notes/loom-tasks and requires the PR section ## Test plan
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ import json
 import os
 import subprocess
 import sys
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 TASK = "7-bulk-discount-tiers"
 BRANCH = "feat/" + TASK
@@ -53,6 +54,12 @@ LOOM_JSON = {
     "rounds": {"cap": {"S": 2, "M": 3, "L": 5}},
     "implement": {"maxFixAttempts": 2, "autoAdvance": True},
 }
+
+# describe-pr-quick adds optional keys of LOOM_SPEC.md 19.1: a docs map with a
+# non-default `tasks` path outside docsDir, and one required PR section. It keeps
+# the default `docs.decisions`: the fixture has no decision with `ADR? = yes`.
+DESCRIBE_PR_LOOM_JSON = dict(LOOM_JSON, docs={"tasks": "notes/loom-tasks"},
+                             pullRequest={"requiredSections": ["## Test plan"]})
 
 # ---------------------------------------------------------------------------
 # Project files (committed on main)
@@ -640,7 +647,7 @@ def git(*args: str, date: Optional[str] = None) -> str:
     return proc.stdout.strip()
 
 
-def build_repo() -> None:
+def build_repo(config: Optional[Dict[str, Any]] = None) -> None:
     """Project files, one commit on main, and local git identity for later commits."""
     write("shop/__init__.py", '"""A tiny shop library."""\n')
     write("shop/cart.py", CART_PY)
@@ -652,7 +659,7 @@ def build_repo() -> None:
     write("Makefile", MAKEFILE)
     write("README.md", README_MD)
     write(".gitignore", GITIGNORE)
-    write(".claude/loom.json", json.dumps(LOOM_JSON, indent=2) + "\n")
+    write(".claude/loom.json", json.dumps(config or LOOM_JSON, indent=2) + "\n")
     git("init", "-q", "-b", "main")
     # Later commits (implement, the guard scenario) run without global config.
     git("config", "user.name", "Shop Dev")
@@ -692,8 +699,8 @@ def scenario_design_full() -> None:
     research("[01-research-questions.md]")
 
 
-def scenario_implement_manual() -> None:
-    build_repo()
+def scenario_implement_manual(config: Optional[Dict[str, Any]] = None) -> None:
+    build_repo(config)
     git("switch", "-q", "-c", BRANCH)
     ticket("quick")
     research("[00-ticket.md]")
@@ -701,8 +708,11 @@ def scenario_implement_manual() -> None:
 
 
 def scenario_describe_pr_quick() -> None:
-    """Quick mode after implement: both phases committed and logged, plan ticked, no remote, no PR."""
-    scenario_implement_manual()
+    """Quick mode after implement: both phases committed and logged, plan ticked, no remote, no PR.
+
+    Its loom.json maps the task summaries to `notes/loom-tasks` and requires `## Test plan`.
+    """
+    scenario_implement_manual(DESCRIBE_PR_LOOM_JSON)
     hashes = []
     for files, subject, body, date in PHASE_COMMITS:
         for path, text in files.items():
