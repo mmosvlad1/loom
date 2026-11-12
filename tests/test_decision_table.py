@@ -648,7 +648,7 @@ class SetupTaskRoutingTest(unittest.TestCase):
         s["task"]["archived"] = True
         self.assertNext(s, "/loom:start-task #3", "archived")
 
-    # Row 2c, full: the kickoff did not finish its questions file.
+    # Row 2c, full: the questions file of the kickoff is not there for research.
     def test_row2c_full_without_artifacts(self):
         for overrides in ({}, {"workingTree": "dirty"}, {"pr": open_pr()}, {"workingTree": None}):
             with self.subTest(overrides=overrides):
@@ -671,13 +671,64 @@ class SetupTaskRoutingTest(unittest.TestCase):
         s = setup_state("full", [art("research-questions", "approved"), art("research", "in-review")])
         self.assertNext(s, "/loom:design")
 
-    def test_row2c_full_any_artifact_of_02_to_04_is_not_hit(self):
+    def test_row2c_full_finished_research_design_or_plan_is_not_hit(self):
         for phase in ("research", "design", "plan"):
             for questions in ([], [art("research-questions", "draft")]):
                 with self.subTest(phase=phase, questions=bool(questions)):
                     s = setup_state("full", questions + [art(phase, "approved" if phase != "plan" else "in-review")])
                     self.assertNotEqual(decide(s)["command"], "/loom:setup")
         self.assertNext(setup_state("full", [art("research", "approved")]), "/loom:design")
+        # A finished later artifact needs the questions file no more: the later rows apply.
+        self.assertNext(setup_state("full", [art("research", "in-review")]), "/loom:design")
+        for phase in ("design", "plan"):
+            for status in ("in-review", "approved"):
+                with self.subTest(phase=phase, status=status):
+                    s = setup_state("full", [art("research", "draft"), art(phase, status)])
+                    self.assertNotEqual(decide(s)["command"], "/loom:setup")
+
+    def test_row2c_full_unfinished_later_artifacts_still_need_the_questions_file(self):
+        # Each of 02-04 missing, draft, or without a status: row 2c (§9.12).
+        for later in ([art("research", "draft"), art("design", "draft")], [art("plan", "draft")],
+                      [art("research", None)], [art("research", None), art("design", None), art("plan", "draft")]):
+            with self.subTest(later=[(a["phase"], a["status"]) for a in later]):
+                self.assertNext(setup_state("full", later), "/loom:setup", "01-research-questions.md is missing")
+                s = setup_state("full", [art("research-questions", "in-review")] + later)
+                self.assertNext(s, "/loom:setup", "not approved")
+
+    def test_setup_task_never_routes_to_research_questions(self):
+        # Every combination of absent / draft / in-review / approved / no status for 01-04.
+        import itertools
+        phases = ("research-questions", "research", "design", "plan")
+        absent = object()
+        choices = (absent, "draft", "in-review", "approved", None)
+        count = 0
+        for combo in itertools.product(choices, repeat=4):
+            artifacts = [art(p, s) for p, s in zip(phases, combo) if s is not absent]
+            for tree in ("clean", "dirty"):
+                count += 1
+                s = setup_state("full", artifacts, workingTree=tree)
+                with self.subTest(combo=[None if c is absent else (c or "no status") for c in combo], tree=tree):
+                    self.assertNotEqual(decide(s)["command"], "/loom:research-questions")
+        self.assertEqual(count, 5 ** 4 * 2)
+        # Mode oneshot: phase 1 in every state, with or without a leftover questions file or research.
+        for status in ("pending", "in-progress", "done", "blocked"):
+            for artifacts in ([], [art("research-questions", "draft")], [art("research", None)]):
+                for pr in (None, open_pr()):
+                    with self.subTest(status=status, artifacts=len(artifacts), pr=bool(pr)):
+                        s = setup_state("oneshot", artifacts, implementation=oneshot_impl(status), pr=pr)
+                        self.assertNotEqual(decide(s)["command"], "/loom:research-questions")
+
+    def test_row2c_full_draft_research_without_an_approved_questions_file(self):
+        # A draft research has no finished input yet; without row 2c, row 11 would name research-questions.
+        for questions, text in (([], "is missing"), ([art("research-questions", "in-review")], "is in-review"),
+                                ([art("research-questions", "draft")], "is draft")):
+            with self.subTest(questions=text):
+                s = setup_state("full", questions + [art("research", "draft")])
+                self.assertNext(s, "/loom:setup", text)
+                self.assertEqual(warn(s), [])
+        s = setup_state("full", [art("research-questions", "approved"), art("research", "draft")])
+        self.assertNext(s, "/loom:research")
+        self.assertNext(state("full", [art("research", "draft")]), "/loom:research-questions")
 
     # Row 2c, oneshot: the fast path stopped before or during its commit.
     def test_row2c_oneshot_phase1_pending_or_in_progress(self):

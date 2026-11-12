@@ -1,6 +1,6 @@
 ---
 name: research-questions
-description: Full mode only. Reads the task's 00-ticket.md, does light research with loom agents, and writes 01-research-questions.md - 2 to 8 descriptive questions about the code as it exists, plus verbatim context pointers - without revealing what will be built.
+description: Full mode only, never on the setup task. Reads the task's 00-ticket.md, does light research with loom agents, and writes 01-research-questions.md - 2 to 8 descriptive questions about the code as it exists, plus verbatim context pointers - without revealing what will be built.
 disable-model-invocation: true
 argument-hint: "[files or notes to consider]"
 model: inherit
@@ -36,7 +36,7 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 ## 1. Check preconditions
 
-Read the state above. Stop at the first failed check. Report it in the `final-answer.md` format, with a `Result:` line instead of `Artifact` and `Status`.
+Read the state above. Stop at the first failed check. Report it in the `final-answer.md` format, with a `Result:` line instead of `Artifact` and `Status`. A `Next:` from `next.command` is mapped as `final-answer.md` describes.
 
 | Check | Stop message (`Result:` line) | `Next:` |
 |---|---|---|
@@ -44,6 +44,7 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 | `onMain` is `true` | `on the main branch; no task` | `/loom:start-task #<n>` |
 | `task` is `null` | `branch <branch> matches no task` | `/loom:start-task #<n>` |
 | `task.archived` is `true` | `task #<n> is archived` | `/loom:start-task #<n>` (offers a restore) |
+| `task.setup` is `true` (the setup task) | `research-questions does not run on the setup task (#<n>); /loom:setup owns its first steps` | from `next.command` (on an onboarding task: `/loom:research` after a finished kickoff, `/loom:setup` after a stopped one) |
 | `task.mode` is not `full` | `research-questions runs only in full mode (mode: <mode>)` | from `next.command` |
 | `01-research-questions.md` exists with status `in-review` or `approved` | ask the user first (see below) | — |
 

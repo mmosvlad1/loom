@@ -1897,10 +1897,13 @@ def mode_is_valid(task: Dict[str, Any]) -> bool:
 def setup_unfinished(task: Dict[str, Any], artifacts: List[Dict[str, Any]], impl: Dict[str, Any]) -> Optional[str]:
     """Why the setup run of a setup task did not finish (LOOM_SPEC.md 9.12 row 2c), or None.
 
-    full: no artifact of 02-04 exists, and 01-research-questions.md is missing
-    or not approved (the kickoff did not finish its questions file). oneshot:
-    implementation phase 1 is pending or in progress (the fast path stopped
-    before or during its commit); a blocked phase 1 stays with row 3.
+    full: 01-research-questions.md is missing or not approved, and each of
+    02-research.md, 03-design.md, and 04-plan.md is missing, draft, or
+    without a status (the questions file of the kickoff is not there for
+    research; a finished later artifact, in-review or approved, needs it no
+    more). So a setup task never routes to /loom:research-questions.
+    oneshot: implementation phase 1 is pending or in progress (the fast path
+    stopped before or during its commit); a blocked phase 1 stays with row 3.
     """
     if not task.get("setup"):
         return None
@@ -1908,13 +1911,15 @@ def setup_unfinished(task: Dict[str, Any], artifacts: List[Dict[str, Any]], impl
     if mode == "full":
         arts = {a.get("phase"): a for a in artifacts}
         questions_file, questions_phase = ARTIFACT_FILES[0]
-        if any(phase in arts for _, phase in ARTIFACT_FILES[1:]):
-            return None
+        for _, phase in ARTIFACT_FILES[1:]:
+            later = arts.get(phase)
+            if later is not None and later.get("status") not in ("draft", None):
+                return None
         questions = arts.get(questions_phase)
         if questions is None:
-            return "the kickoff did not finish its questions file (%s is missing)" % questions_file
+            return "the questions file of the kickoff is not there for research (%s is missing)" % questions_file
         if questions.get("status") != "approved":
-            return "the kickoff did not finish its questions file (%s is %s, not approved)" % (
+            return "the questions file of the kickoff is not there for research (%s is %s, not approved)" % (
                 questions_file, questions.get("status") or "without status")
     if mode == "oneshot":
         status = _phase_status(impl, 1)

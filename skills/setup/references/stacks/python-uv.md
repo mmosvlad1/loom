@@ -57,6 +57,7 @@ If `.github/workflows/` already has a workflow that runs the checks on pull requ
 - Show it. Ask the user whether to keep it or to add `ci.yml` from the template.
 - Keep: loom needs no job named `check`. Write the check name of the job that runs the checks into `ci.requiredCheck` of `.claude/loom.json`, as GitHub reports it: the job `name` (its key when it has no `name`), with a matrix suffix if any, e.g. `test (3.12)`. Never rename a job: branch protection may require the old name.
 - A new `ci.yml` from the template has the job `check`, the default of `ci.requiredCheck`. Write no `ci` key then.
+- The kept job must run `checks.check` (`make check`) exactly as configured; CI-only steps may run in addition. The skill's "Reused workflow" says what to do when it does not.
 - Never delete or rewrite an existing workflow without confirmation.
 
 ## `.gitignore`

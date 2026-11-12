@@ -1,6 +1,6 @@
 ---
 name: iterate
-description: The single loom skill that changes existing work - answers question rounds, applies feedback to an artifact, approves an artifact, fixes an implemented phase, changes an approved plan, fixes failing PR checks or review comments, rebases on the main branch or continues a stopped rebase, or changes the mode before implement starts (an invalid mode at any time).
+description: The single loom skill that changes existing work - answers question rounds, applies feedback to an artifact, approves an artifact, fixes an implemented phase, changes an approved plan, fixes failing PR checks or review comments, rebases on the main branch or continues a stopped rebase, or changes the mode before implement starts (an invalid mode at any time; never on the setup task).
 disable-model-invocation: true
 argument-hint: "[answers | feedback | approve | rebase | mode full|quick|oneshot]"
 model: inherit
@@ -92,7 +92,7 @@ Take the first matching row:
 
 | # | Argument and state | Section |
 |---|---|---|
-| 1 | The argument is `mode <m>` or `--<m>` (`oneshot`, `quick`, `full`), or clearly asks to change the mode; or `task.mode` is not `oneshot`, `quick`, or `full` (an invalid mode) and `rebaseInProgress` is `false` | [Mode change](#mode-change) |
+| 1 | The argument is `mode <m>` or `--<m>` (`oneshot`, `quick`, `full`), or clearly asks to change the mode; or `task.mode` is not `oneshot`, `quick`, or `full` (an invalid mode) and `rebaseInProgress` is `false`; or `task.setup` is `true`, `task.mode` is not `oneshot` or `full`, and `rebaseInProgress` is `false` | [Mode change](#mode-change) |
 | 2 | The argument starts with `approve` | [Approve](#approve) |
 | 3 | Open round, and the argument is `ok` or contains answers, or it is empty while `rebaseInProgress` is `false` | [Answer a round](#answer-a-round) |
 | 4 | `workingTree` is `null` (`git status` failed), whatever the argument is. Exception: implementation has not started, and the argument is feedback on an artifact or on the approved plan (rows 11 and 16 edit only the task directory). | Stop: `Result: git status failed: <the error from its warning>`, `Next: fix the git error, then /loom:next` |
@@ -110,7 +110,7 @@ Take the first matching row:
 | 16 | The argument is feedback on an artifact | [Feedback on an artifact](#feedback-on-an-artifact) |
 
 - Rows 1-3 change only files in the task directory, so they run also with an unknown working tree. Every later row reads or changes the working tree, or commits. Row 4 stops them while `git status` fails: `loom-state` then routes to `/loom:iterate <feedback>`, and only the git fix ends that loop.
-- An invalid mode goes to row 1: every later row depends on the mode. `loom-state` routes it to `/loom:iterate mode <oneshot|quick|full>`. During a stopped rebase, `loom-state` routes to `/loom:iterate rebase` first, so row 1 waits for that rebase (row 5).
+- An invalid mode goes to row 1: every later row depends on the mode. `loom-state` routes it to `/loom:iterate mode <oneshot|quick|full>`; on the setup task it routes to `/loom:setup`, and `quick` is an invalid mode there too. During a stopped rebase, `loom-state` routes to `/loom:iterate rebase` first, so row 1 waits for that rebase (row 5).
 - A stopped rebase (row 5) goes to Rebase after rows 1-4: an explicit mode, `approve`, and answers edit only the task directory, and nothing else can run until the rebase is continued or aborted.
 - Gate work comes before PR routing: approval (row 2), an open round (row 3), and an unfinished plan change (row 9) win over a blocked phase (row 10) and an open PR (row 13).
 - A plan change comes before the open PR (row 11 before row 13): feedback that adds, removes, or changes an implementation phase changes the plan, also with a PR open. After `/loom:iterate approve`, `loom-state` routes the new phases to `/loom:implement`, which updates the PR at the end. `loom-state` matches this: after implementation started, a plan that is not approved routes to `/loom:iterate <feedback>` (draft), `<answers>`, or `approve`, before the dirty tree, PR routing, and `/loom:describe-pr`.
@@ -460,6 +460,8 @@ If `rebaseInProgress` is `true`, an earlier rebase stopped on conflicts (HEAD is
 ## Mode change
 
 Change `mode` in `00-ticket.md`.
+
+**Setup task.** If `task.setup` is `true`, refuse every mode change, also the repair of an invalid mode. `setup` owns the ticket of the setup task: it fixes the mode of its path (`full` on the onboarding path, `oneshot` on the fast path), and its re-run writes that mode into the ticket again. Change nothing. Stop: `Result: the mode of setup task #<n> is fixed by /loom:setup (mode: <task.mode>)`, and `Next: /loom:setup`. While `rebaseInProgress` is `true`, `Next:` comes from `next.command` instead (`/loom:iterate rebase`): setup stops while a rebase is stopped.
 
 **Invalid mode.** If `task.mode` is not `oneshot`, `quick`, or `full`, the ticket's mode is broken. Repairing it is allowed at any time, also after implementation started:
 

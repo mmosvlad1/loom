@@ -1493,7 +1493,7 @@ class FinishTaskTest(unittest.TestCase):
                        "`gh pr merge --squash --delete-branch --subject '<title>' --match-head-commit <head sha>`",
                        "gh pr view --json headRefOid,title", "Give no PR number", "git fetch --prune",
                        "refs/heads/<branch>", "git branch -D <branch>", "<workDir>/_archive", "Ask for confirmation.",
-                       "`chore/<n>-loom-setup`", "`Set up loom`", "gh api repos/{owner}/{repo}/rules/branches/<main>",
+                       "`task.setup`", "`Set up loom`", "gh api repos/{owner}/{repo}/rules/branches/<main>",
                        "read-only and needs no confirmation", "`~DEFAULT_BRANCH`", "no bypass actors",
                        "gh api --method POST repos/{owner}/{repo}/rulesets",
                        '"required_approving_review_count": 0', '"context": "<required check>"', "non_fast_forward", "deletion"):
@@ -1618,7 +1618,7 @@ class SetupSkillTest(unittest.TestCase):
         self.assertIn(STATE_INJECTION, skill_md("setup"))
         self.assertEqual(skill_rules("setup"), [
             'Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json)', "Bash(loom-state --json)",
-            "Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)",
+            "Bash(loom-state --setup-path *)", "Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)",
         ])
 
     def test_reads_every_template_before_any_question(self):
@@ -1662,7 +1662,9 @@ class SetupSkillTest(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, body)
         finish = skill_md("finish-task")
-        self.assertIn("`<branch>` is `chore/<n>-loom-setup`, or the first `# ` heading of `00-ticket.md` is `Set up loom`", finish)
+        # §9.11: the task branch takes the setup task from `task.setup`, the main branch from the ticket title.
+        self.assertIn("`task.setup` was `true` in the state at the start", finish)
+        self.assertIn("The first `# ` heading of `<task dir>/00-ticket.md` is `Set up loom`", finish)
         self.assertTrue(ls.BRANCH_RE.match("chore/7-loom-setup"))
         self.assertIn("The title is `Set up loom`", skill_md("start-task"))
 
@@ -1708,7 +1710,9 @@ class SetupSkillTest(unittest.TestCase):
 
     def test_preconditions_find_branches_and_origin(self):
         pre = section(self.body(), "## 1. Check preconditions")
-        order = ["`<current>` matches `chore/<k>-loom-setup`", "git branch --list 'chore/*-loom-setup'",
+        # §9.13.1: --setup-path finds the setup branches (path `switch`) right after the git, origin, and gh checks.
+        order = ["`gh repo view --json nameWithOwner,visibility,defaultBranchRef` fails",
+                 "Run `loom-state --setup-path <main>`", "| `switch` |", "`<current>` matches `chore/<k>-loom-setup`",
                  "git ls-remote --exit-code --heads origin <main>", "the working tree is dirty (see Values)"]
         self.assertEqual([pre.index(o) for o in order], sorted(pre.index(o) for o in order))
         self.assertIn("Next: push <main> yourself (git push -u origin <main>), then /loom:setup", pre)
@@ -2267,7 +2271,9 @@ class HardeningTest(unittest.TestCase):
     def test_git_flow_names_the_phase_commit_readers(self):
         text = shared("git-flow.md")
         self.assertIn("The resume flow of `implement`, `iterate`, and the reviewer find phase commits by it", text)
-        self.assertIn("`loom-state` does not read commits", text)
+        # loom-state reads commit subjects only for --setup-path (§9.13.1): both setup subjects are fixed.
+        self.assertIn("`loom-state` takes a phase's commit from its `log.md` heading, not from the commits", text)
+        self.assertIn("never change these two subjects", text)
 
     def test_post_pr_fix_after_a_rebase_pushes_once(self):
         section_text = skill_md("iterate").split("## Post-PR fix", 1)[1].split("### Collect the fix items", 1)[0]
@@ -2305,6 +2311,492 @@ class HardeningTest(unittest.TestCase):
 
 def template_text(name: str) -> str:
     return read(os.path.join(SKILLS_DIR, "setup", "references", "templates", name))
+
+
+# ---------------------------------------------------------------------------
+# M9b: the onboarding flow in setup and the setup task in other skills (§9.13)
+# ---------------------------------------------------------------------------
+
+SETUP_ONBOARDING = os.path.join(SKILLS_DIR, "setup", "references", "onboarding.md")
+SETUP_PATH_RULE = "Bash(loom-state --setup-path *)"
+
+
+def spec_setup_paths() -> List[str]:
+    """The `path` values of `--setup-path`, from the §8.2 bullet."""
+    interface = spec_section("### 8.2 Interface", "### 8.3 Rules")
+    line = re.search(r"`path` is (.+?), by the table of §9\.13\.1", interface).group(1)
+    return re.findall(r"`([a-z-]+)`", line)
+
+
+def table_rows(text: str) -> List[List[str]]:
+    """The body rows of the Markdown tables in a text, as lists of cells."""
+    rows = []
+    for line in text.splitlines():
+        if line.startswith("| ") and not line.startswith("|---"):
+            rows.append([c.strip() for c in line.strip().strip("|").split(" | ")])
+    return rows
+
+
+def bold_items(text: str) -> List[Tuple[int, str]]:
+    """Numbered list items that start with a bold name: (number, name without a trailing colon or period)."""
+    return [(int(m.group(1)), m.group(2).rstrip(":.").strip())
+            for m in re.finditer(r"(?m)^(\d+)\. \*\*(.+?)\*\*", text)]
+
+
+def sentence_with(text: str, needle: str) -> List[str]:
+    """Every sentence (split at '. ' or a line end) that contains the needle."""
+    return [s for line in text.splitlines() for s in re.split(r"(?<=\.)\s+", line) if needle in s]
+
+
+class OnboardingSetupSkillTest(unittest.TestCase):
+    """setup: path selection, the fast path additions, and the onboarding path (§9.1, §9.13.1, §9.13.2)."""
+
+    def body(self) -> str:
+        return split_frontmatter(skill_md("setup"))[1]
+
+    def onboarding(self) -> str:
+        return read(SETUP_ONBOARDING)
+
+    def test_allowed_tools_has_the_setup_path_rule(self):
+        self.assertIn(SETUP_PATH_RULE, skill_rules("setup"))
+        self.assertTrue(any(rule_allows(r, "Bash", "loom-state --setup-path main") for r in skill_rules("setup")))
+        self.assertIn("`setup` adds `%s` to its `allowed-tools`" % SETUP_PATH_RULE,
+                      spec_section("### 9.1 `setup`", "### 9.2 `backlog`"))
+        for name in skill_dirs():
+            if name != "setup":
+                with self.subTest(skill=name):
+                    self.assertNotIn("--setup-path", skill_md(name))
+
+    def test_every_path_value_is_handled(self):
+        paths = spec_setup_paths()
+        self.assertEqual(paths, ["switch", "rerun", "fast", "onboarding", "onboarding-rerun", "fast-resume"])
+        choose = self.body().split("### Choose the path", 1)[1].split("\n### ", 1)[0]
+        handled = set()
+        for row in table_rows(choose):
+            handled.update(re.findall(r"`([a-z-]+)`", row[0]))
+        self.assertEqual(handled, set(paths))
+        # fast and onboarding have a row on a setup branch and one outside it.
+        self.assertEqual(sum(1 for row in table_rows(choose) if "`fast`" in row[0]), 2)
+        self.assertEqual(sum(1 for row in table_rows(choose) if "`onboarding`" in row[0]), 2)
+
+    def test_path_selection_order(self):
+        body = self.body()
+        pre = section(body, "## 1. Check preconditions")
+        order = ["`git rev-parse --show-toplevel` fails", "`git remote get-url origin` fails",
+                 "`gh repo view --json nameWithOwner,visibility,defaultBranchRef` fails",
+                 "### Choose the path", "Run `loom-state --setup-path <main>`", "### Other preconditions",
+                 "| `task` is set and not archived |", "the working tree is dirty (see Values)",
+                 "### Start from `<main>`", "git pull --ff-only origin <main>", "git rev-list --count origin/<main>..<main>"]
+        self.assertEqual([pre.index(o) for o in order], sorted(pre.index(o) for o in order))
+        self.assertIn("before any question to the user", pre)
+        rows = table_rows(pre.split("### Choose the path", 1)[1].split("### Other preconditions", 1)[0])
+        outside = next(r for r in rows if r[0].startswith("`rerun`"))
+        self.assertIn("Run [Other preconditions](#other-preconditions) and [Start from `<main>`](#start-from-main)", outside[1])
+        self.assertIn("run `loom-state --setup-path <main>` once more, on the updated `<main>`", outside[1])
+        on_branch = next(r for r in rows if "`<current>` matches" in r[0])
+        self.assertIn("Skip [Other preconditions](#other-preconditions)", on_branch[1])
+        self.assertIn("never stops on an active task and never offers a stash", on_branch[1])
+        switch = next(r for r in rows if r[0] == "`switch`")
+        self.assertIn("`loom-state --setup-path <main>` again", switch[1])
+        self.assertIn("They run only for `rerun`, and for `fast` and `onboarding` outside a setup branch.", pre)
+
+    def test_local_main_ahead_of_origin_stops(self):
+        start = self.body().split("### Start from `<main>`", 1)[1].split("\n## ", 1)[0]
+        self.assertLess(start.index("git pull --ff-only origin <main>"), start.index("git rev-list --count origin/<main>..<main>"))
+        self.assertIn("`Next: push <main> or reset it to origin/<main> yourself, then /loom:setup`", start)
+        self.assertIn("The one exception is the bootstrap commit of an empty repository", start)
+
+    def test_oneshot_forces_the_fast_path(self):
+        fm, body = split_frontmatter(skill_md("setup"))
+        self.assertIn("--oneshot", fm["argument-hint"])
+        choose = body.split("### Choose the path", 1)[1].split("\n### ", 1)[0]
+        self.assertIn("With `--oneshot`, the path `onboarding` counts as `fast`.", choose)
+        self.assertIn("`Result: setup task #<n> is an onboarding task`", choose)
+        self.assertIn("delete the branch <branch> (local and on origin) and <task dir>, then /loom:setup --oneshot", choose)
+        spec = spec_section("#### 9.13.1 Two setup paths", "#### 9.13.2")
+        self.assertIn("`Result: setup task #<n> is an onboarding task`", spec)
+
+    def test_plan_names_the_path_and_the_switch(self):
+        plan = section(self.body(), "## 3. Plan and confirm")
+        self.assertIn("1. **Path**: `<path>` and `<reason>`", plan)
+        self.assertIn("the user can answer `onboarding`", plan)
+        self.assertIn("never takes the onboarding path", plan)
+        self.assertIn("The answer `onboarding` switches the path", plan)
+        kickoff = self.onboarding().split("### Plan and confirm", 1)[1].split("### Kickoff steps", 1)[0]
+        self.assertIn("1. **Path**: `onboarding` and `<reason>`", kickoff)
+        self.assertIn("the user can answer `fast`", kickoff)
+
+    def test_onboarding_files_are_read_only_on_that_path(self):
+        body = self.body()
+        before = body.split("## 1. Check preconditions", 1)[0]
+        main_list, onboarding_part = before.split("**Onboarding path only.**", 1)
+        for rel in ("references/onboarding.md", "references/onboarding-questions.md",
+                    "references/templates/setup-issue-onboarding.md"):
+            with self.subTest(file=rel):
+                self.assertIn("${CLAUDE_SKILL_DIR}/%s" % rel, onboarding_part)
+                self.assertNotIn("${CLAUDE_SKILL_DIR}/%s" % rel, main_list)
+        self.assertIn("before any other question. The fast path never reads them", onboarding_part)
+        # The kickoff and the re-run live in the reference file, so the fast path does not load them.
+        for needle in ("chore(loom): start loom setup", "## Kickoff", "## Onboarding re-run", "### Kickoff settings"):
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, body)
+                self.assertIn(needle, self.onboarding())
+
+    def test_kickoff_steps_match_9_13_2(self):
+        spec = spec_section("#### 9.13.2 Kickoff (`setup`)", "#### 9.13.3")
+        steps = self.onboarding().split("### Kickoff steps", 1)[1].split("\n### ", 1)[0]
+        self.assertEqual(bold_items(steps), bold_items(spec))
+        self.assertEqual([n for n, _ in bold_items(steps)], list(range(2, 12)))
+        self.assertIn("Kickoff step 1 is step 1 of the skill", self.onboarding())
+
+    def test_kickoff_plan_content(self):
+        plan = self.onboarding().split("### Plan and confirm", 1)[1].split("### Kickoff steps", 1)[0]
+        order = ["**Path**", "**Research questions**", "**Labels**", "**Issue**", "**Branch**", "**Files**",
+                 "**Ignored files**", "**Kickoff commit**"]
+        self.assertEqual([plan.index(o) for o in order], sorted(plan.index(o) for o in order))
+        for needle in ("Show one plan. Then ask for confirmation once.", "the user can add project-specific questions",
+                       "rewrite each one in descriptive form", "A question never reveals what will be built",
+                       "Show the rewritten questions, and ask for confirmation again",
+                       "`git check-ignore -v -- <path>`", "A global ignore rule for `.claude/` is common",
+                       "commit it anyway (`git add -f -- <path>` in kickoff step 9), or stop",
+                       "loom needs `.claude/loom.json` committed", "a `diff` block of kickoff step 8",
+                       "Without \"yes\": stop with `Result: setup not applied; nothing changed`"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, plan)
+
+    def test_kickoff_issue_ticket_and_minimal_config(self):
+        steps = self.onboarding().split("### Kickoff steps", 1)[1].split("\n### ", 1)[0]
+        for needle in ("`templates/setup-issue-onboarding.md`", "`## Notes` section with the notes verbatim",
+                       "--title 'Set up loom' --body-file <drafts>/setup-issue-onboarding.md",
+                       "--label 'type:chore' --label 'size:M' --label 'mode:full'", "Add only labels that exist now.",
+                       "`git switch -c <branch>`", "`mode: full`, `size: M`", "`ticket-template.md`",
+                       "only `version` and `mainBranch`, plus `workDir`", "`task.setup` is `true`"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, steps)
+        import json
+        block = re.search(r"```json\n(.*?)```", steps, re.DOTALL).group(1)
+        self.assertEqual(json.loads(re.sub(r"(?m)^ {3}", "", block)), {"version": 1, "mainBranch": "<main>"})
+        self.assertLess(steps.index("**`.gitignore`**"), steps.index("**Issue**"))
+
+    def test_kickoff_settings_are_permissions_only(self):
+        settings = self.onboarding().split("### Kickoff settings", 1)[1].split("\n### ", 1)[0]
+        for needle in ("writes only the `permissions` key", "without the rules for the check commands",
+                       "Leave out `Bash(make *)`", "no `extraKnownMarketplaces`, no `enabledPlugins`, no `statusLine`",
+                       "Implementation phase 1 adds them", "\"Merge settings.json\" in step 7 of the skill",
+                       "keep the stricter rule", "Never replace the file, and never remove a key."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, settings)
+        self.assertIn("### Merge settings.json", self.body())
+        spec = spec_section("### 19.3 `.claude/settings.json`", "## 20. Testing the Harness")
+        self.assertIn("without the rules for the check commands", spec)
+
+    def test_kickoff_commit(self):
+        commit = self.onboarding().split("### Kickoff commit", 1)[1].split("\n### ", 1)[0]
+        order = ["`<task dir>/commit-msg.txt`", "Run `git add -- <paths>`", "Leave every ignored path out of it",
+                 "only after the user chose \"commit it anyway\" in the plan, with its own `git add -f -- <path>`",
+                 "git status --porcelain --untracked-files=all", "git commit -F <task dir>/commit-msg.txt"]
+        self.assertEqual([commit.index(o) for o in order], sorted(commit.index(o) for o in order))
+        for needle in ("It has no body: the kickoff commit has no `Phase` line.", "Never pass `--no-verify`.",
+                       "`Result: kickoff commit failed: <the error>`", "`Next: fix it, then /loom:setup`",
+                       "a `commit-msg` hook that checks the subject", "Never use `git add -A` or `git add .`.",
+                       "`.gitignore` when it has uncommitted changes"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, commit)
+
+    def test_commit_subjects_match_loom_state(self):
+        kickoff = ls.KICKOFF_SUBJECT.replace("%d", "<n>")
+        fast = ls.FAST_SETUP_SUBJECT.replace("%d", "<n>")
+        self.assertEqual((kickoff, fast), ("chore(loom): start loom setup (#<n>)", "chore(loom): set up loom (#<n>)"))
+        self.assertIn("`%s`" % kickoff, self.onboarding())
+        self.assertIn("`%s`" % fast, self.body())
+        flow = shared("git-flow.md")
+        self.assertIn("| Kickoff commit | `setup` (onboarding path, before research) | `%s` | none: no `Phase` line |" % kickoff, flow)
+        self.assertIn("`%s`" % fast, flow)
+        self.assertIn("`%s`" % kickoff, spec_section("### 16.2 Commits", "### 16.3"))
+
+    def test_no_verify_is_never_used(self):
+        paths = glob.glob(os.path.join(SKILLS_DIR, "**", "*.md"), recursive=True)
+        paths += glob.glob(os.path.join(AGENTS_DIR, "*.md"))
+        found = 0
+        for path in paths:
+            for sentence in sentence_with(read(path), "--no-verify"):
+                found += 1
+                with self.subTest(file=os.path.relpath(path, ROOT), sentence=sentence[:80]):
+                    self.assertRegex(sentence, r"(?i)\bnever\b")
+        self.assertGreaterEqual(found, 2)
+
+    def test_research_questions_file(self):
+        part = self.onboarding().split("### Research questions file", 1)[1].split("\n### ", 1)[0]
+        for needle in ("from `onboarding-questions.md`", "`status: approved`", "`based_on: []`",
+                       "the paths of `<found>`, verbatim", "`instructionFiles`, `workflows`, `prTemplates`, `docsDirs`",
+                       "Write `None.` for an empty list.", "item 8, 9, and so on",
+                       "The limit of 2-8 questions of research-questions does not apply"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, part)
+        self.assertEqual(sorted(ls.found_paths([])), sorted(["instructionFiles", "workflows", "prTemplates", "docsDirs"]))
+
+    def test_kickoff_final_message(self):
+        final = self.onboarding().split("### Final message", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("`next.command` must be `/loom:research`", final)
+        self.assertIn("Next: /clear, then /loom:next", final)
+
+    def test_onboarding_rerun_order(self):
+        rerun = self.onboarding().split("## Onboarding re-run", 1)[1]
+        order = ["**Merged PR first.**", "gh pr list --head <branch> --state merged --json number", "**Ticket.**",
+                 "`mode: full`", "**Missing kickoff items.**", "**Research questions file.**",
+                 "**Open PR last.**", "gh pr list --head <branch> --state open --json number"]
+        self.assertEqual([rerun.index(o) for o in order], sorted(rerun.index(o) for o in order))
+        self.assertEqual([n for n, _ in bold_items(rerun)], [1, 2, 3, 4, 5])
+        for needle in ("`Next: git switch <main>, then git pull --ff-only, then /loom:finish-task #<n>`",
+                       "`Result: the setup PR is open`", "`Next: /loom:next` (it reads the PR state)",
+                       "`Next:` from `next.command`", "is missing or its `status` is not `approved`",
+                       "never writes the files of the implementation phases",
+                       "git log --format=%s origin/<main>..HEAD"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, rerun)
+
+    def test_fast_path_resume_restores_before_the_open_pr_stop(self):
+        resume = self.body().split("## Resume on the setup branch", 1)[1]
+        order = ["gh pr list --head <branch> --state merged --json number", "change only the `mode:` line",
+                 "`mode: oneshot`", "`log.md` has `## Phase 1 — done`", "write it from the issue",
+                 "Append the done entry", "gh pr list --head <branch> --state open --json number",
+                 "go to step 10"]
+        self.assertEqual([resume.index(o) for o in order], sorted(resume.index(o) for o in order))
+        self.assertIn("`Result: the setup PR is open`", resume)
+        self.assertIn("`Next: /loom:next`", resume)
+        self.assertIn("The restore comes first", resume)
+
+    def test_fast_path_claude_md_imports_agents_md(self):
+        body = self.body()
+        self.assertIn("plus the line `@AGENTS.md` (or `@.claude/AGENTS.md`) when the repository has one", body)
+        agents = body.split("**`AGENTS.md`.**", 1)[1].split("\n### ", 1)[0]
+        for needle in ("`AGENTS.md` or `.claude/AGENTS.md` at the git top level",
+                       "it has none of `CLAUDE.md`, `.claude/CLAUDE.md`, and `CLAUDE.local.md`",
+                       "The line is `@AGENTS.md` for `AGENTS.md`, and `@.claude/AGENTS.md` for `.claude/AGENTS.md`",
+                       "on its own line", "Never change an `AGENTS.md` file itself."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, agents)
+        spec = spec_section("#### 9.13.7 Agent instruction files", "#### 9.13.8")
+        self.assertIn("(`@.claude/AGENTS.md`)", spec)
+        self.assertIn("none of `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`", spec)
+        self.assertIn("gets the line `@AGENTS.md` when the repository has an `AGENTS.md`",
+                      spec_section("### 9.1 `setup`", "### 9.2 `backlog`"))
+
+    def test_reused_workflow_runs_the_check(self):
+        body = self.body()
+        reused = body.split("### Reused workflow", 1)[1].split("\n### ", 1)[0]
+        for needle in ("CI must run `checks.check` exactly as configured", "CI-only steps",
+                       "It runs `checks.check`", "say so in the plan", "Never rename the job"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, reused)
+        self.assertIn("[Reused workflow](#reused-workflow)", body)
+        self.assertIn("**Planned (M9, §9.13.4):** `setup` checks that the workflow runs `checks.check`",
+                      spec_section("### 17.1 Single entry point", "### 17.2"))
+        for recipe in ("python-uv.md", "node.md"):
+            with self.subTest(recipe=recipe):
+                self.assertIn("\"Reused workflow\"", reference("setup", os.path.join("stacks", recipe)))
+
+
+class SetupPathRulesTest(unittest.TestCase):
+    """setup: the rules of §9.13.1 and §9.13.2 that keep a re-run on its path and out of loops."""
+
+    def body(self) -> str:
+        return split_frontmatter(skill_md("setup"))[1]
+
+    def onboarding(self) -> str:
+        return read(SETUP_ONBOARDING)
+
+    def choose_rows(self) -> List[List[str]]:
+        choose = self.body().split("### Choose the path", 1)[1].split("\n### ", 1)[0]
+        return table_rows(choose)
+
+    def test_a_path_switch_in_the_answer_keeps_the_setup_branch(self):
+        plan = section(self.body(), "## 3. Plan and confirm")
+        to_onboarding = plan.split("The answer `onboarding` switches the path", 1)[1]
+        self.assertIn("on a setup branch, keep the branch and reuse the open issue #<n>", to_onboarding)
+        # The kickoff plan shows the relabel of the reused issue, so the issue step still runs it (§9.13.2 step 4).
+        self.assertIn("skips its branch step (kickoff step 5), and in its issue step (kickoff step 4) runs only the "
+                      "confirmed `gh issue edit` of the reused issue", to_onboarding)
+        self.assertNotIn("without its issue and branch steps", self.body())
+        onboarding_row = next(r for r in self.choose_rows() if "`<current>` matches" in r[0] and "`onboarding`" in r[0])
+        self.assertIn("in its issue step (kickoff step 4) run only the confirmed `gh issue edit`", onboarding_row[1])
+        # The ticket copies the issue after the relabel.
+        self.assertIn("so the labels line of the ticket shows the labels after a `gh issue edit`",
+                      section(self.body(), "## 9. Task directory and commit"))
+        self.assertIn("so the labels line of the ticket shows the labels after a `gh issue edit`", self.onboarding())
+        answer = self.onboarding().split("- **`fast`**:", 1)[1].split("\n- ", 1)[0]
+        self.assertIn("on a setup branch, keep the branch and reuse the open issue #<n>", answer)
+        self.assertIn("skips its branch step (step 6)", answer)
+        row = next(r for r in self.choose_rows() if "`<current>` matches" in r[0] and "`fast`" in r[0])
+        self.assertIn("skip step 6", row[1])
+        self.assertIn("A switch between `fast` and `onboarding` in the plan answer keeps this place.", row[1])
+        self.assertIn("A switch between `fast` and `onboarding` in the plan answer keeps the place",
+                      spec_section("#### 9.13.1 Two setup paths", "#### 9.13.2"))
+
+    def test_the_second_setup_path_run_is_final(self):
+        choose = self.body().split("### Choose the path", 1)[1].split("\n### ", 1)[0]
+        self.assertIn("Only the `switch` row takes this table again, once", choose)
+        self.assertIn("the second run after [Start from `<main>`](#start-from-main) is final", choose)
+        self.assertIn("do not run the preconditions again", choose)
+        self.assertNotIn("A row that runs `loom-state --setup-path <main>` again takes this table again", choose)
+        outside = next(r for r in self.choose_rows() if r[0].startswith("`rerun`"))
+        self.assertIn("Its result is final.", outside[1])
+
+    def test_switch_checks_the_active_task_first(self):
+        switch = next(r for r in self.choose_rows() if r[0] == "`switch`")[1]
+        self.assertLess(switch.index("if `task` is set and not archived"), switch.index("Run `git switch <that branch>`"))
+        self.assertIn("Setup never leaves the branch of another task.", switch)
+        # The committed behavior for a refused switch: the stash offer of the dirty-tree row.
+        self.assertIn("If git refuses the switch, handle it as the dirty-tree row", switch)
+        self.assertIn("(the stash offer; without \"yes\", stop)", switch)
+
+    def test_a_stopped_rebase_stops_setup_on_every_path(self):
+        pre = section(self.body(), "## 1. Check preconditions")
+        first = pre.split("### Choose the path", 1)[0]
+        rows = table_rows(first)
+        rebase = next(i for i, r in enumerate(rows) if "A rebase is stopped" in r[0])
+        self.assertEqual(rows[rebase + 1][0], "Otherwise")
+        self.assertIn("`rebaseInProgress` is `true` in the state", rows[rebase][0])
+        self.assertIn("`git status` prints `rebase in progress`", rows[rebase][0])
+        # /loom:iterate rebase only when loom-state names it: it needs a task (§9.13.1).
+        self.assertIn("When `next.command` of the state is `/loom:iterate rebase`", rows[rebase][1])
+        self.assertIn("`Next: /loom:iterate rebase, then /loom:setup`", rows[rebase][1])
+        self.assertIn("`Next: git rebase --continue or git rebase --abort, then /loom:setup`", rows[rebase][1])
+        self.assertNotIn("in a loom project", rows[rebase][1])
+        self.assertLess(pre.index("A rebase is stopped"), pre.index("Run `loom-state --setup-path <main>`"))
+        self.assertIn("While a rebase is stopped, `setup` stops on every path",
+                      spec_section("#### 9.13.1 Two setup paths", "#### 9.13.2"))
+
+    def test_expected_permission_prompts_are_named(self):
+        values = self.body().split("### Values", 1)[1].split("## 1.", 1)[0]
+        self.assertIn("**Permission prompts**", values)
+        self.assertIn("That prompt is expected and harmless", values)
+        step7 = self.onboarding().split("7. **`.claude/loom.json`, minimal**", 1)[1].split("\n8. ", 1)[0]
+        self.assertIn("this call may ask for permission: the allow rules come only with kickoff step 8", step7)
+
+    def test_the_gitignore_line_of_a_stopped_run_is_not_dirty(self):
+        values = self.body().split("### Values", 1)[1].split("## 1.", 1)[0]
+        dirty = values.split("- **Dirty**", 1)[1].split("\n- ", 1)[0]
+        self.assertIn("A changed `.gitignore` does not count either when its only change is the line", dirty)
+        self.assertIn("`git diff -- .gitignore`", dirty)
+        self.assertIn("The same holds for an untracked `.gitignore` (`?? .gitignore`, which `git diff` does not show) "
+                      "whose only line is that line: Read it.", dirty)
+        start = self.body().split("### Start from `<main>`", 1)[1].split("\n3. ", 1)[0]
+        self.assertIn("If git refuses because the pull would overwrite the local `.gitignore`", start)
+        self.assertIn("`Next: undo the local .gitignore change (git checkout -- .gitignore, or delete an untracked "
+                      ".gitignore), then /loom:setup`", start)
+        self.assertIn("the dirty-tree check of a re-run ignores a `.gitignore` whose only change is this line",
+                      spec_section("#### 9.13.2 Kickoff (`setup`)", "#### 9.13.3"))
+
+    def test_a_reused_issue_gets_the_labels_of_this_path(self):
+        issue = self.body().split("### Setup issue and labels", 1)[1].split("\n### ", 1)[0]
+        self.assertIn("**Labels of a reused issue**", issue)
+        self.assertIn("gh issue edit <n> --remove-label 'size:M' --remove-label 'mode:full' --add-label 'size:S' "
+                      "--add-label 'mode:oneshot'", issue)
+        self.assertIn("The issue body stays.", issue)
+        self.assertIn("`gh issue edit` command", section(self.body(), "## 3. Plan and confirm"))
+        self.assertIn("run only its confirmed `gh issue edit` command", section(self.body(), "## 5. Issue"))
+        plan = self.onboarding().split("### Plan and confirm", 1)[1].split("### Kickoff steps", 1)[0]
+        self.assertIn("gets the labels of this path: show its `gh issue edit` command", plan)
+        steps = self.onboarding().split("### Kickoff steps", 1)[1].split("\n### ", 1)[0]
+        self.assertIn("run only its confirmed `gh issue edit` command", steps)
+
+    def test_a_new_settings_file_gets_the_schema(self):
+        settings = self.onboarding().split("### Kickoff settings", 1)[1].split("\n### ", 1)[0]
+        self.assertIn("write a new file with the `$schema` line of the template first, then the `permissions` key",
+                      settings)
+        self.assertNotIn("no `$schema`", settings)
+
+    def test_rerun_confirmation_order(self):
+        rerun = self.onboarding().split("## Onboarding re-run", 1)[1]
+        confirm = rerun.split("**Confirmation.**", 1)[1]
+        self.assertIn("Ask for confirmation once, before step 3 writes or commits anything", confirm)
+        self.assertIn("plus what step 2 wrote (the restored ticket, or the repaired mode), or `nothing changed`", confirm)
+        self.assertIn("Step 3 only commits the files of the earlier run, and the questions file is `approved`: no plan",
+                      confirm)
+
+    def test_glossary_terms_in_the_setup_texts(self):
+        # describe-pr and finish-task are not phases (§3); the onboarding task is the defined term.
+        for name, text in (("SKILL.md", self.body()), ("onboarding.md", self.onboarding())):
+            with self.subTest(file=name):
+                self.assertNotRegex(text, r"phases[^.;\n]*describe-pr")
+                self.assertNotRegex(text, r"continue the onboarding(?! task)")
+                self.assertNotIn("onboarding phases", text)
+
+
+class SetupTaskInOtherSkillsTest(unittest.TestCase):
+    """research-questions, iterate, and finish-task on the setup task (§5.3, §9.4, §9.11, §9.13.1)."""
+
+    def test_research_questions_stops_on_the_setup_task(self):
+        body = split_frontmatter(skill_md("research-questions"))[1]
+        pre = section(body, "## 1. Check preconditions")
+        rows = table_rows(pre)
+        setup_row = next(i for i, r in enumerate(rows) if "`task.setup` is `true`" in r[0])
+        mode_row = next(i for i, r in enumerate(rows) if "`task.mode` is not `full`" in r[0])
+        archived_row = next(i for i, r in enumerate(rows) if "`task.archived`" in r[0])
+        self.assertLess(archived_row, setup_row)
+        self.assertLess(setup_row, mode_row)
+        nxt = rows[setup_row][2]
+        self.assertTrue(nxt.startswith("from `next.command`"), nxt)
+        self.assertIn("`/loom:research` after a finished kickoff, `/loom:setup` after a stopped one", nxt)
+        # The stop prints next.command and nothing more; loom-state row 2c keeps it from naming research-questions.
+        self.assertNotIn("instead", nxt)
+        # The fast path writes no 01-research-questions.md, so the Result line does not claim it.
+        self.assertNotIn("01-research-questions.md", rows[setup_row][1])
+
+    def test_setup_task_routes_named_by_the_stop_exist(self):
+        # The routes the research-questions stop names come from loom-state on a setup task (§9.12 rows 2c and 11).
+        base = {"branch": "chore/3-loom-setup", "onMain": False, "workingTree": "clean", "rebaseInProgress": False,
+                "implementation": {"total": 0, "done": 0, "phases": [], "inProgress": None, "blocked": None},
+                "pr": None}
+        task = {"number": 3, "mode": "full", "setup": True, "archived": False, "pr": None}
+        approved = [{"file": "01-research-questions.md", "phase": "research-questions", "status": "approved",
+                     "openQuestions": 0}]
+        self.assertEqual(ls.decide_next(dict(base, task=task, artifacts=approved))["command"], "/loom:research")
+        self.assertEqual(ls.decide_next(dict(base, task=task, artifacts=[]))["command"], "/loom:setup")
+        # Row 2c covers a draft research without the questions file, so the stop never names itself (§9.12).
+        draft = [{"file": "02-research.md", "phase": "research", "status": "draft", "openQuestions": 0}]
+        self.assertEqual(ls.decide_next(dict(base, task=task, artifacts=draft))["command"], "/loom:setup")
+        for artifacts in ([], approved, draft, approved + draft):
+            for mode in ("full", "oneshot"):
+                with self.subTest(artifacts=len(artifacts), mode=mode):
+                    s = dict(base, task=dict(task, mode=mode), artifacts=artifacts)
+                    self.assertNotEqual(ls.decide_next(s)["command"], "/loom:research-questions")
+
+    def test_iterate_refuses_every_mode_change_on_the_setup_task(self):
+        body = split_frontmatter(skill_md("iterate"))[1]
+        row = next(r for r in HardeningTest().iterate_rows() if "Mode change" in r[2])
+        self.assertIn("`task.setup` is `true`, `task.mode` is not `oneshot` or `full`", row[1])
+        mode = body.split("## Mode change", 1)[1]
+        self.assertLess(mode.index("**Setup task.**"), mode.index("**Invalid mode.**"))
+        setup = mode.split("**Setup task.**", 1)[1].split("**Invalid mode.**", 1)[0]
+        for needle in ("refuse every mode change, also the repair of an invalid mode", "Change nothing.",
+                       "`Next: /loom:setup`", "`full` on the onboarding path, `oneshot` on the fast path",
+                       "While `rebaseInProgress` is `true`, `Next:` comes from `next.command` instead"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, setup)
+        spec = spec_section("### 5.3 Changing the mode", "### 5.4 Mode differences")
+        self.assertIn("`iterate` refuses a mode change on it, also the repair of an invalid mode, with `Next: /loom:setup`", spec)
+
+    def test_finish_task_takes_the_setup_task_from_the_state(self):
+        body = split_frontmatter(skill_md("finish-task"))[1]
+        step = body.split("## 7. Ruleset after the setup task", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("On the task branch (this run started there): `task.setup` was `true`", step)
+        self.assertIn("On the main branch ([Resume on the main branch](#resume-on-the-main-branch)): the state has no task", step)
+        self.assertIn("`<setup task>` is `task.setup`", body.split("## 1. Check preconditions", 1)[0])
+        self.assertNotIn("`<branch>` is `chore/<n>-loom-setup`", step)
+
+
+class SetupGlossaryTermsTest(unittest.TestCase):
+    def test_task_terms(self):
+        spec = spec_section("## 3. Glossary", "## 4. Architecture")
+        style = shared("writing-style.md").split("## Glossary", 1)[1]
+        terms = spec_section("### 9.13 Onboarding an existing repository", "#### 9.13.1")
+        for term in ("setup task", "onboarding task"):
+            meaning = re.search(r"\| \*\*%s\*\* \| ([^|]+) \|" % term, terms).group(1).strip()
+            with self.subTest(term=term):
+                self.assertIn("| **%s** | %s" % (term, meaning), spec)
+                self.assertIn("| **%s** | %s |" % (term, meaning), style)
 
 
 if __name__ == "__main__":

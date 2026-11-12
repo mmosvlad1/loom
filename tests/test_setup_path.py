@@ -685,6 +685,17 @@ class SetupTaskStateTest(RepoTestCase):
                 self.assertIn(reason, s["next"]["reason"])
                 self.assertEqual(s["warnings"], warnings)
 
+    def test_draft_research_without_the_questions_file_goes_to_setup(self):
+        git(self.repo, "switch", "-q", "-c", SETUP)
+        d = self.task_dir("3-loom-setup")
+        self.ticket(d, mode="full", issue=3)
+        self.artifact(d, "02-research.md", "research", "draft")
+        s = self.state()
+        self.assertEqual(s["next"]["command"], "/loom:setup")
+        self.assertIn("01-research-questions.md is missing", s["next"]["reason"])
+        self.artifact(d, "02-research.md", "research", "in-review")
+        self.assertEqual(self.state()["next"]["command"], "/loom:design")
+
     def test_fast_path_routes(self):
         git(self.repo, "switch", "-q", "-c", SETUP)
         d = self.task_dir("3-loom-setup")

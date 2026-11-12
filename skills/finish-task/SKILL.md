@@ -33,7 +33,7 @@ Read these files in full before you start:
 
 Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission.
 
-Below, `<main>` is `mainBranch`, `<branch>` is `branch`, `<n>` is `task.number`, and `<task dir>` is `task.dir`. `<workDir>` is `workDir` from the state (the parent directory of `task.dir`). `<required check>` is `ci.requiredCheck` from the state: the CI check that runs `checks.check` (default `check`). Note these values now: after the merge you are on `<main>`, where `loom-state` reports no task.
+Below, `<main>` is `mainBranch`, `<branch>` is `branch`, `<n>` is `task.number`, and `<task dir>` is `task.dir`. `<workDir>` is `workDir` from the state (the parent directory of `task.dir`). `<required check>` is `ci.requiredCheck` from the state: the CI check that runs `checks.check` (default `check`). `<setup task>` is `task.setup`: `true` for the setup task (step 7). Note these values now: after the merge you are on `<main>`, where `loom-state` reports no task.
 
 ## 1. Check preconditions
 
@@ -128,7 +128,10 @@ Run each command; each one is safe when its work is already done:
 
 ## 7. Ruleset after the setup task
 
-Only for the setup task: `<branch>` is `chore/<n>-loom-setup`, or the first `# ` heading of `00-ticket.md` is `Set up loom`. Otherwise skip this step.
+Only for the setup task. Otherwise skip this step:
+
+- On the task branch (this run started there): `task.setup` was `true` in the state at the start (`<setup task>`).
+- On the main branch ([Resume on the main branch](#resume-on-the-main-branch)): the state has no task, so take it from the ticket. The first `# ` heading of `<task dir>/00-ticket.md` is `Set up loom`.
 
 1. Read the rules that apply to `<main>`: `gh api repos/{owner}/{repo}/rules/branches/<main>`. This GET is read-only and needs no confirmation. The permission system still asks for it (the `Bash(gh api *)` ask rule); that is intended. (The list endpoint `…/rulesets` has no `conditions`, so it cannot tell which branch a ruleset targets.) If a rule of type `required_status_checks` lists `<required check>` as a `context` in `parameters.required_status_checks`, a ruleset already requires the check: skip this step. If the GET fails with HTTP 403 or 404, the rules are unknown: continue with item 2. Any other error (network, auth): stop with `Result: <the error>` and `Next: /loom:finish-task #<n>`.
 2. Read the classic branch protection of `<main>`: `gh api repos/{owner}/{repo}/branches/<main>/protection`. This GET is read-only too; the permission system asks for it in the same way. Take the first matching row:
