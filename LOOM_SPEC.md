@@ -994,6 +994,317 @@ A prompt change is done only when its eval case passes (§20.3). New cases cost 
 
 Each milestone removed its **Planned** markers from this spec and added its `CHANGELOG.md` entry when it shipped.
 
+### 9.14 UI design: style guide and screens (planned, M10)
+
+**Status:** planned, milestone M10, in two milestones (§9.14.9). M10b builds on M9b: `task.setup`, the reserved slug, and row 2c of §9.12. No other section carries an M10 marker yet. §9.14.8 lists the sections that change; each milestone moves its text there when it ships.
+
+Today loom has no place for UI design. A task that builds a screen gets its look from the ticket text and from the model. M10 adds design as optional work at the product level. The result is files in the repository: one style guide and one mockup file per screen. Issues name the screens they implement, and the phases read those files. A new skill, `screens`, produces the files with Claude Design (§9.14.7). A project can also add them by hand or from another tool.
+
+Principles:
+
+1. **Optional.** A project without a style guide and without screens sees no change: no skill asks, writes, or checks anything for design.
+2. **Product level, not a phase.** Design happens between tasks, for the features that come next. No mode gets a new phase.
+3. **Files in git are the source of truth.** Every skill except `screens` reads only files in the repository. Claude Design, Figma, or a hand-written page is a producer of those files.
+4. **A screen is a reference, not code.** It shows look, content, and behavior. The implementer builds it with the project's own components.
+5. **The style guide wins.** When a screen and the style guide disagree, the style guide controls.
+6. **No orphan screens.** `screens` draws a screen only for a feature that the vision or an issue names. `backlog` reports every screen that no issue names.
+
+Terms (M10a adds the first three to §3 and to the glossary of `_shared/writing-style.md`; M10b adds the others):
+
+| Term | Meaning |
+|---|---|
+| **style guide** | The document of the docs role `style`: the visual direction, the tokens, and the UI rules (§9.14.2) |
+| **screen** | One mockup file in the directory of the docs role `screens`; one screen in one state (§9.14.3) |
+| **screen ID** | The file name of a screen without its extension, e.g. `sign-in` or `reading-list--empty` |
+| **screens task** | The task of an issue that `screens` created, on the branch `docs/<n>-loom-screens` (§9.14.6) |
+| **canvas** | The Claude Design artifact that `screens` draws on (§9.14.7) |
+| **local mode** | `screens` without a canvas: it writes each screen as a plain HTML file (§9.14.7) |
+
+The word "design" alone keeps its one meaning: the `design` phase and its artifact `03-design.md` (§3). So the issue section is `## Screens`, and the working artifact of a screens task is `screens-brief.md`.
+
+#### 9.14.1 Files and configuration
+
+```
+docs/
+└── design/
+    ├── DESIGN.md                  # the style guide
+    └── screens/
+        ├── sign-in.dc.html        # one file per screen
+        ├── reading-list.dc.html
+        └── reading-list--empty.dc.html
+```
+
+Two optional docs roles join the docs map (§15):
+
+| Role | Default path | Read by | Written by |
+|---|---|---|---|
+| `style` | `<docsDir>/design/DESIGN.md` | backlog, design, plan, implementer, implementation-reviewer, screens | screens, or a task whose ticket or plan names the change (§9.14.5) |
+| `screens` | directory `<docsDir>/design/screens` | backlog, design, plan, implementer, screens | the same |
+
+- Both roles are optional: `setup` writes no skeleton for them. A missing file or an empty directory means the project has no design of that kind.
+- `docs.style` follows the rules of `docs.vision` (§19.1), with one more: it shares its file with no other role. `screens` rewrites the file, so it cannot also be the vision or the conventions.
+- `docs.screens` follows the rules of `docs.tasks`. In the checks of the whole docs map, it is a directory like `docs.tasks` and `docs.decisions.dir`: none of the three may be at or below another, and no role file may lie at or below it.
+- Both paths are docs paths: `workingTreeDocsOnly` and the `Stop` hook treat them like the other roles (§8.2).
+
+New `loom.json` key (§19.1):
+
+| Key | Default | Rule | Invalid value |
+|---|---|---|---|
+| `design` | `{ "canvas": null }` | An object. An unknown key gets a warning and is ignored. | Not an object: warning, the default |
+| `design.canvas` | `null` | `null`, or the URL of the canvas: a string that starts with `https://claude.ai/`, without whitespace or control characters | Warning, `null` |
+
+`loom-state --json` (§8.2) adds the resolved paths to `docs` and one object:
+
+```json
+{
+  "docs": { "style": "docs/design/DESIGN.md", "screens": "docs/design/screens" },
+  "design": { "canvas": null, "style": true,
+              "screens": ["docs/design/screens/reading-list.dc.html", "docs/design/screens/sign-in.dc.html"] }
+}
+```
+
+- `design.style` is `true` when the file at `docs.style` exists.
+- `design.screens` lists the screens (§9.14.3) as paths from the git top level, sorted. Two files with one screen ID add a warning; the first path in sorted order is the screen.
+- Skills take the paths, `design.style`, and the list from the state. No skill builds a path or lists the directory itself.
+
+#### 9.14.2 The style guide
+
+One Markdown file. It starts simple; a structured token format (Google's `DESIGN.md`) can replace it later (§9.14.10). Layout:
+
+```markdown
+# Style guide
+## Direction          ← one named direction, then two sentences: the mood and what sets it apart
+## Colors             ← one line per token: `name: #hex`, then its use
+## Typography         ← the font families with a fallback; one line per role: family, size/line height, weight
+## Spacing and shape  ← the spacing scale, radii, borders, shadows
+## States             ← how empty, loading, error, disabled, and focus look
+## Rules              ← do and do not, at most 10 lines
+```
+
+- Every color, type role, and spacing step has a name. The code uses the same names for its tokens (§9.14.5, `plan`).
+- `loom-state` does not parse the file. Only its existence counts.
+
+#### 9.14.3 Screens
+
+- A screen is one file directly in `docs.screens` whose name is a screen ID plus one extension of the table below. Other files there, and files in subdirectories, are not screens (assets can live in a subdirectory).
+- The screen ID is the file name without that extension: `sign-in.dc.html` → `sign-in`. It has lowercase letters, digits, and single hyphens. A state of a screen adds `--<state>`: `reading-list--empty`, `sign-in--error`. The ID without a state is the default state.
+- One file per screen ID. Formats:
+
+| Extension | Source |
+|---|---|
+| `.dc.html` | An artboard of the canvas, copied unchanged (§9.14.7) |
+| `.html` | A plain HTML page: local mode, or written by hand |
+| `.png`, `.jpg`, `.jpeg`, `.webp`, `.svg` | An image from the user or from another tool |
+
+- HTML screens carry their styles in the file, so colors, sizes, and spacing can be read as text.
+- A `.dc.html` file holds tags of the Claude Design runtime. It does not render from the repository; the canvas renders it. Skills read it as text.
+
+#### 9.14.4 Screens in issues
+
+The issue format (`backlog/references/issue-format.md`) gets one optional section, after Acceptance Criteria:
+
+```markdown
+## Screens
+
+- `docs/design/screens/sign-in.dc.html`
+- `docs/design/screens/sign-in--error.dc.html`
+```
+
+- One line per screen that the issue implements, as the path from the git top level. The section is left out when the issue has no screen.
+- The issue of a screens task (title `Design screens: …`, §9.14.6) has no `## Screens` section. It draws screens; it does not implement them.
+- `start-task` copies the issue into the ticket verbatim, so every phase that reads the ticket sees the paths. After the switch to the updated main branch, `start-task` runs `loom-state --json` again. A path that is not in that `design.screens` gets a `Warning:` line in its final message.
+- `backlog` writes the section when it drafts an issue for work that a screen shows.
+- **Attach.** When `design.screens` is not empty, `backlog` reads the `## Screens` sections of all issues, open and closed. It lists every screen that no issue names. For each one it proposes: add it to an open issue (`gh issue edit`, confirmation), or draft a new issue.
+- An issue that needs a new screen and has none: `backlog` says so. From M10b on it names `/loom:screens`.
+
+#### 9.14.5 Screens in the phases
+
+A rule about screens applies only when the ticket has a `## Screens` section. A rule about the style guide applies only when `design.style` is `true`.
+
+| Component | Rule |
+|---|---|
+| `research-questions` | Never opens a screen. It leaves the `## Screens` paths out of Key Context Pointers: a screen shows what will be built (§2, principle 2). It adds one descriptive question: which UI components, styles, and tokens exist in the code, and where. |
+| `research` | Never opens a screen, in any mode. |
+| `research-questions`, `research`, and the agents `codebase-locator`, `codebase-analyzer`, `codebase-pattern-finder` | When `design.screens` is not empty, both skills name `docs.screens` in every agent prompt as an excluded path. An agent never reads, searches, or lists a file at or below an excluded path. Without this rule, a search for colors would find the inline styles of a screen. |
+| `design` | Reads the style guide and every screen of the ticket in full, before any question. Proposed Architecture maps each screen to components (reused or new), state, and data. An open question for each state or behavior that the task needs and no screen shows: empty, loading, error, long content, narrow width. An open question for each conflict between a screen and the style guide, or between a screen and an existing component. |
+| `plan` | Quick mode: reads the style guide and the screens as `design` does. Each implementation phase that builds UI names its screens in Changes, as paths. When the code has no tokens yet, the first such phase defines them, under the names of the style guide. Verification gets one `Manual:` line per screen: compare the running screen with the screen. The line names the file and, for a `.dc.html` screen, the artboard of that screen ID on the canvas (`design.canvas`), where it renders. |
+| `implement`, `iterate` | Pass `docs.style` to the implementer and the reviewer when `design.style` is `true`, like `docs.conventions` (§9.9). |
+| `implementer` | Reads the style guide and the screens of its phase before it writes UI code (oneshot: the screens of the ticket). It builds with the project's components and the tokens that the code defines. It never copies the markup or the inline styles of a screen. A value that the style guide and a screen give differently comes from the style guide; the report names the screen and the value under Deviations. |
+| `implementation-reviewer` | A state that the plan names and the diff lacks is `blocking` (planned but missing). A raw color or size where the code has a token for it is a deviation. A change to the style guide or to a screen that the plan (oneshot: the ticket) does not name is `blocking`. The reviewer does not judge the visual match; the `Manual:` check does. |
+| `describe-pr` | The task summary and the PR body list the screens under Verification. It proposes one follow-up issue, `Design screens: update <screen ID>`, for each screen that a Resolved Decision or a `log.md` deviation names. |
+
+- **Who changes the files.** A task changes the style guide or a screen only when its ticket or its plan names that change. The usual route is a screens task (§9.14.6). A file made by hand or by another tool comes in through an ordinary task, for example a `type:docs` issue "Add the screens of the checkout".
+- **A task that differs from its screen.** A task that implements a screen does not change the screen. A planned difference is a Resolved Decision in `03-design.md` (quick mode: in `04-plan.md`) that names the screen. The follow-up issue brings the screen back in line. Until M10b, that issue is an ordinary task whose ticket names the change; from M10b on, a screens task covers it (§9.14.6).
+- **Visual check.** The comparison is manual in M10. A comparison by a model is not reliable enough to block a phase (§9.14.10).
+
+#### 9.14.6 The `screens` skill
+
+**Argument:** `[scope | feedback | "approve"]`, and optional `--local`.
+
+**Purpose:** agree on the look and the main screens with the user, then land the style guide and the screens in the repository through one small task.
+
+The work of `screens` is a screens task: an issue, the branch `docs/<n>-loom-screens`, and a task directory, in `oneshot` mode. `screens` does the work itself, with the user; no implementer runs. The main branch takes no commits, so the files reach it through the PR of this task, as for `setup` (§9.1). One screens task is open at a time. Without `.claude/loom.json`, `screens` points to `/loom:setup`.
+
+**Where it runs:**
+
+| Where | Condition | Action |
+|---|---|---|
+| Not on a screens branch | A branch `docs/<n>-loom-screens` exists, locally or on `origin` | Switches to it (a clean working tree is required), then continues that task |
+| Not on a screens branch | Otherwise | Kickoff |
+| A screens branch | The task directory is missing (a fresh clone, a deleted directory) | Restores it (below), then continues |
+| A screens branch | Implementation phase 1 is not `done` | Continues at the first stage whose result the brief lacks |
+| A screens branch | Phase 1 is `done`, the PR is not merged | With feedback: first writes `in-progress` for phase 1 to `log.md`, then changes the screens and stops. With `approve`: lands again (below). With no argument: prints the state and `Next:` from `loom-state` |
+| A screens branch | The PR is merged | Stops with `Next: /loom:finish-task` |
+
+**Restore.** `screens` writes the ticket from the issue, as `start-task` does. When `git log <main>..HEAD` has a commit with the body line `Phase 1: oneshot`, it writes the `done` entry of `log.md`. It writes a new brief from the Acceptance Criteria of the issue. A screen is `drafted` when its artboard, its local file, or its file in the branch diff exists; else it is `planned`. Decisions that only the lost brief held are gone, as for every task (§4.3). After a restore with a `done` entry, `screens` asks whether the drafts have changes that are not landed; on yes it writes `in-progress` again.
+
+**Changes after a landing.** The drafts live on the canvas or in the ignored task directory, so `loom-state` cannot see a change to them. The `in-progress` entry in `log.md` makes it visible: until the next landing writes `done`, row 2d routes to `/loom:screens`, and no skill merges the old screens.
+
+**Kickoff:**
+
+1. Refuses a dirty working tree, as `start-task` does.
+2. Reads the vision, the style guide, `design.screens`, and the open issues.
+3. On a canvas, runs the drift check (§9.14.7).
+4. Proposes the scope: the screens of this task and the states of each one (default, and those of empty, loading, and error that apply). Each screen names the vision item or the issue that it serves. A screen that serves neither is not in the scope. It also lists every open issue whose title starts with `Design screens:` and that has no branch `docs/<k>-loom-screens`:
+   - an update issue, `Design screens: update <screen ID>` (§9.14.5): the user chooses which ones this task covers;
+   - any other one (a kickoff that stopped after it created the issue, or an issue written by hand): it becomes the issue of this task. With several, the user picks one; the others are named and stay open.
+5. After one confirmation, creates the issue `Design screens: <scope>` in the issue format, with the labels `type:docs`, `size:S`, and `mode:oneshot` that exist. A reused issue gets the new title and the confirmed scope as its body instead (`gh issue edit`). Acceptance Criteria has one line per screen and state. Context ends with one line `Covers #<k>` per covered update issue.
+6. Cuts the branch `docs/<n>-loom-screens` from the up-to-date main branch.
+7. Writes `00-ticket.md` (`mode: oneshot`, `size: S`) and the brief, `<task dir>/screens-brief.md`.
+
+**The brief** is the working artifact of the task. A fresh session continues from it:
+
+```markdown
+---
+task: 57-loom-screens
+updated: 2026-11-12
+---
+## Scope        ← one line per screen: screen ID, states, and the vision item or issue it serves
+## Audience     ← who uses the screens, and what each screen must do first
+## References   ← sites, screenshots, brand assets, and files that the user gave, or `none`
+## Direction    ← the chosen direction, or `open`
+## Decisions    ← one line per decision, newest last
+## Screens      ← table: screen ID | status: planned, drafted
+```
+
+**Stages.** `screens` records each result in the brief. A stage whose result the brief already holds is skipped. The stops below are the only ones before `approve`:
+
+1. **Brief.** In one message, it asks what the Audience and References sections lack. References are sites, screenshots, brand assets, or an existing UI. They change the result more than any rule, so it asks before it draws. It stops for the answer.
+2. **Direction.** Skipped when the style guide exists: the direction is settled. Otherwise it shows 2–4 different low-fidelity directions and names the tradeoff of each. It stops for the choice. `screens` never picks the direction itself, unless the user says so.
+3. **Style guide.** It drafts the style guide from the chosen direction, as `<task dir>/DESIGN.md` (§9.14.2). With an existing style guide, the draft is a copy with only the changes that the new screens need.
+4. **Screens.** In the same run as stage 3, it draws each screen of the scope, in the states that the Scope lists, with the tokens of the style guide. A drawn screen is `drafted`. Then it stops: `Next: give feedback, or /loom:screens approve`.
+
+Feedback comes in the conversation or as the argument; `screens` changes the drafts and stops again. A decision that is settled stays settled.
+
+**Landing** (`/loom:screens approve`):
+
+1. Shows one plan: the style guide (new, or a `diff`) and each screen file (new, changed, removed). It acts after one confirmation. Screens that are still `planned` are named and left for a later task; so is each covered update issue whose screen does not land, which stays open.
+2. Writes the style guide to `docs.style`. Copies each `drafted` screen unchanged to `<docs.screens>/<screen ID><extension>` (Read, then Write, never from memory).
+3. Runs `checks.check`. On failure it stops: `Next: fix the checks, then /loom:screens approve`.
+4. Commits every changed docs path:
+   - the first landing: `docs(design): <summary> (#<n>)`, body `Phase 1: oneshot`; then `## Phase 1 — done — <hash>` in `log.md`;
+   - a later landing: the fix commit of `_shared/git-flow.md` (the same subject form; body `Phase 1: oneshot`, a blank line, one `Fix: <item>` line per change), and the fix entry in `log.md`;
+   - a landing without a file change (the user withdrew the feedback): no commit. It appends `## Phase 1 — done — <hash of the last Phase 1 commit>` with the line `Fix: none (feedback withdrawn)` to `log.md`, so the task can go on.
+5. With an open PR, runs `_shared/pr-update.md` (push with confirmation).
+6. Final message: `Next:` from `loom-state` (`/loom:describe-pr` after the first landing). It adds: after the merge, `/loom:backlog` attaches the screens to issues (§9.14.4).
+
+**Routing** (`loom-state`, §9.12):
+
+- `task.screens` is `true` for a task on a branch `docs/<n>-loom-screens`. The slug `loom-screens` is reserved: `loom-state --slug` returns `loom-screens-task` for a title that would give it.
+- Row 2 on a branch `docs/<n>-loom-screens` without a task directory names `/loom:screens`, which restores it.
+- Row 2b on a screens task names `/loom:screens`; its next run writes `oneshot` into the ticket again.
+- New row 2d, after row 2c: a screens task whose implementation phase 1 is `pending` or `in-progress`, or whose working tree is dirty → `/loom:screens`.
+  - Without the first condition, rows 5 and 10 name `/loom:implement`, which would build the screens from the ticket.
+  - Without the second, a landing that stopped on failing checks leaves a tree that is dirty only in the docs paths. The later rows would send it to `/loom:describe-pr` or `/loom:finish-task`, which commit such a tree as an interrupted docs refresh (§9.10, §9.11).
+  - Phase 1 is also `in-progress` after feedback on a landed task, until the next landing (above).
+- While row 2d applies, `describe-pr` and `finish-task` stop with `Next: /loom:screens`. After the merge, `finish-task` keeps its stash offer (§9.11).
+- After a landing commit, with a clean tree, the task routes like every oneshot task: `/loom:describe-pr`, then the PR routes of §6.2.
+- `next` only names `/loom:screens`, as it does for `/loom:setup`: the skill needs the user.
+- `implement` refuses a screens task with `Next: /loom:screens`.
+- `start-task` refuses an issue whose title starts with `Design screens:`, with `Next: /loom:screens`. This covers the update issues of §9.14.5: the next kickoff offers them (step 4).
+- `iterate` refuses a mode change on a screens task, and feedback that names a screen or the style guide, with the same `Next:`. Failing checks and a rebase work as for every task.
+- `describe-pr` on a screens task closes the covered update issues that are done. For each `Covers #<k>` line of the ticket's Context, it adds `Closes #<k>` to the PR body, after `Closes #<n>`, only when the screen of that issue is in the branch diff (`git diff origin/<mainBranch>...HEAD --name-only`; without `origin/<mainBranch>`, the local main branch). `_shared/pr-update.md` computes these lines again when it rewrites the body.
+
+#### 9.14.7 The canvas and local mode
+
+`screens` draws on a canvas when the session offers the `Artifact` tool with the Design type. Otherwise it works in local mode; `--local` forces it. It names the mode in its first message. Claude Code offers no `Artifact` tool in headless runs, with API-key authentication, and on other providers (§9.14.10), so loom's evals run local mode.
+
+**Canvas:**
+
+- One canvas per project. The first screens task creates it and writes its URL to `design.canvas` in `.claude/loom.json` at once. It commits that one file right away: `docs(design): record the canvas (#<n>)`, with no `Phase` line in the body and without a checks run, like the kickoff commit of §9.13.2. So a branch switch or a stash cannot lose the URL. Later tasks open that canvas. Without the URL, a new session would create a second canvas.
+- An artboard is a screen when its title is a screen ID of the scope. Other artboards (the directions of stage 2, notes) stay on the canvas and never land.
+- The Design type ships its own instructions for the artboard format and for visual quality. `screens` follows them and does not repeat them. loom adds only the process of §9.14.6.
+- The user can edit the canvas by hand. `screens` reads the canvas again before each change and before the landing.
+- A comment on the canvas reaches the session only when the user sends it to Claude. `screens` says so once; feedback in the conversation always works.
+- **Drift check** (kickoff only). `screens` compares each screen file in the repository with the artboard of the same screen ID. It lists the differences and asks which side wins for each: the artboard joins the scope of this task, or the file goes back to the canvas.
+- A canvas that the session cannot open (another account, a deleted canvas): `screens` says so and offers a new canvas built from the screen files.
+- The canvas is private to its owner until the owner shares it. The URL in `loom.json` gives no access.
+
+**Local mode:**
+
+- Each screen is a plain HTML file with its styles inside, `<task dir>/screens/<screen ID>.html`. The directions of stage 2 are `<task dir>/screens/_direction-<letter>.html`.
+- The user opens the files in a browser. The landing copies the screens of the scope to `docs.screens`.
+- `design.canvas` stays `null`.
+
+Known limits:
+
+- An image that an artboard loads from the canvas (an uploaded asset) is not part of the screen file.
+- Links between artboards keep the file names of the canvas.
+- A `.dc.html` screen renders only on the canvas. A collaborator without access to the canvas reads it as text (§9.14.10 lists a rendered snapshot).
+
+#### 9.14.8 Changes to other sections
+
+| Section | Change | Milestone |
+|---|---|---|
+| §3, `_shared/writing-style.md` | The terms of this section | M10a, M10b |
+| §4.1 | `skills/screens/` (SKILL.md, `references/brief-template.md`, `references/style-guide-template.md`) | M10b |
+| §5.3 | No mode change on a screens task | M10b |
+| §6.1 | `/loom:screens` between `backlog` and `start-task`, marked optional | M10b |
+| §8.2, §8.3 | `docs.style`, `docs.screens`, the `design` object; `task.screens`, the reserved slug | M10a; M10b |
+| §9.0 | `screens` in the model and effort table: inherit, default | M10b |
+| §9.2, §9.3 | `backlog`: the `## Screens` section and attach; `start-task`: the warning, and the refusal of a screens issue | M10a; M10b |
+| §9.4–§9.10, §10.1 | The rules of §9.14.5, the excluded path of the research agents included | M10a |
+| §9.8–§9.12 | A screens task in `iterate`, `implement`, `describe-pr`, `finish-task`, and `next`; rows 2, 2b, and 2d | M10b |
+| §13.2 | Key Context Pointers leave out the `## Screens` paths; the brief of a screens task | M10a; M10b |
+| §15, §19.1 | The two docs roles; the `design` key | M10a |
+| §16.2, §16.4, §19.3 | The landing commits; `gh issue edit` asks for confirmation | M10b; M10a |
+| §20.2 | The eval changes of §9.14.9 | M10a, M10b |
+
+#### 9.14.9 Implementation milestones
+
+M10a makes loom read design files, whatever produced them. M10b adds the producer. After M10a a project can already add screens through an ordinary task and use them in later tasks.
+
+| Milestone | Changes | Tests and evals |
+|---|---|---|
+| **M10a** — style guide and screens in the existing skills | `bin/loom-state`: the docs roles `style` and `screens` with their validation, the `design` key, and the `design` object. The issue format and `backlog` (§9.14.4). `start-task`: the warning. The rules of §9.14.5 in `research-questions`, `research`, `design`, `plan`, `implement`, `iterate`, `_shared/implementation-loop.md`, `describe-pr`, and the agents `codebase-locator`, `codebase-analyzer`, `codebase-pattern-finder`, `implementer`, and `implementation-reviewer`. The glossary terms **style guide**, **screen**, and **screen ID**. | Unit tests: defaults, custom and invalid values, the overlap rules, a shared `docs.style` file, `design.style` and `design.screens` on fixture repositories (two files with one screen ID, a file that is not a screen); lints that no skill builds these paths. No new eval case. The fixtures of `research-full` and `design-full` get a style guide, one HTML screen, and a `## Screens` section in the ticket. New graders: in `research-full`, no Read, Grep, Glob, or Bash input names `docs/design/screens`, and the trace never holds a phrase that occurs only in the screen; `design-full` has a Read of the screen and names its path in `03-design.md`. Rerun `research-full`, `design-full`, `implement-manual`, `describe-pr-quick`. |
+| **M10b** — the `screens` skill | `skills/screens/` with its templates. `bin/loom-state`: `task.screens`, the reserved slug `loom-screens`, rows 2 and 2b for screens tasks, row 2d. The refusals and stops of §9.14.6 in `start-task`, `iterate`, `implement`, `describe-pr`, and `finish-task`; the `Closes #<k>` lines in `describe-pr` and `_shared/pr-update.md`; `next` names `/loom:screens`; `backlog` names `/loom:screens` for a missing screen. The glossary terms **screens task**, **canvas**, and **local mode**. | Unit tests: `task.screens`, the reserved slug, rows 2, 2b, and 2d (phase 1 pending, a dirty tree after phase 1 is done, phase 1 `in-progress` again after a `done` entry); the skill texts. One new eval case, `screens-local`: a screens task with a brief that has one screen with its states in the Scope, the Audience, References `none`, and a chosen direction; no style guide. So stages 3 and 4 run without a question. Graders: `<task dir>/DESIGN.md` exists with the six headings of §9.14.2; `<task dir>/screens/<screen ID>.html` exists; the brief marks the screen `drafted`; no Bash `git commit`. The kickoff needs `gh`, and the canvas needs the `Artifact` tool; eval runs have neither. So: static tests, plus one live run on a sandbox repository with a canvas, from `/loom:screens` to `/loom:finish-task`. |
+
+#### 9.14.10 Later, and items to verify
+
+Not in M10:
+
+- **A design check command.** A `design.check` key in `loom.json` for a tool that scans the screens or the built UI (for example a detector of generic patterns), run like a check command.
+- **A rendered snapshot.** A `.png` beside each `.dc.html` screen, so the screen can be seen without the canvas. Today only the canvas page exports images, by hand.
+- **Screenshot comparison.** The reviewer, or a CI job, compares a screenshot of the built screen with the screen.
+- **Token enforcement.** A lint rule that bans raw colors and sizes where the stack allows it. Until then the rule is prose in the style guide and a deviation for the reviewer.
+- **Google's `DESIGN.md` format** for the style guide, with its lint and export.
+- **Companion skills.** The README can recommend optional skills for visual quality. loom declares no plugin dependency: a dependency from another marketplace can stop the plugin from loading.
+- **`/design-sync`.** It still uploads to the standalone Claude Design site, which closes on 2026-12-14.
+
+Verified on 2026-11-12 (Claude Code desktop, one test canvas):
+
+- A canvas keeps its content as files: an index (`project/canvas.json`: artboards with title, position, and size) and one `project/<name>.dc.html` per artboard, with inline styles.
+- The `Artifact` tool saves these files to the local disk, also from a subagent.
+- The `Artifact` tool is off by default in `claude -p`, the Agent SDK, the GitHub Action, with API-key authentication, and on Bedrock and Vertex (Claude Code documentation).
+
+To verify during M10b:
+
+- Whether a plugin skill can name `Artifact` in `allowed-tools`, and which calls still ask the user.
+- Whether the first artboard of a canvas must be named `Main.dc.html`, or can carry a screen ID.
+- Whether the `Artifact` tool can save a canvas file straight into the working tree.
+- How `screens` detects the Design type reliably, and what it does when the account has none.
+- Whether a canvas keeps a version history. The Claude Design help says it has none; the artifact documentation says each publish is a version.
+
 ---
 
 ## 10. Subagents
@@ -1821,6 +2132,7 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
   - Empty repositories keep the fast `oneshot` setup.
   - New `loom.json` keys let skills use an existing structure: a docs map, the required CI check, and required PR sections.
   - Specified in §9.13. Both milestones, M9a and M9b (§9.13.8), are implemented and not released yet (`CHANGELOG.md`).
+- **UI design (M10):** an optional style guide and one mockup file per screen, in the repository. Issues name the screens they implement, and the phases read them. A new skill, `screens`, produces them with Claude Design or in local mode. Planned after M9b, for v1.2 or the release after it. Specified in §9.14, with the milestones M10a and M10b in §9.14.9.
 
 Done in v1.1 (release 1.1.0, `CHANGELOG.md`):
 
