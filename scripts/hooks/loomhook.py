@@ -2,7 +2,8 @@
 
 - reading the hook input from stdin,
 - loading the loom-state module from bin/loom-state (one source of truth),
-- splitting a Bash command into pipelines and simple commands with shlex,
+- parsing a Bash command into pipelines, groups, and simple commands (a small
+  bash parser: quotes, substitutions, here-docs),
 - running a check command with a timeout (Stop and SubagentStop hooks).
 
 Standard library only; runs on Python 3.9.
@@ -14,7 +15,6 @@ import importlib.util
 import json
 import os
 import re
-import shlex
 import signal
 import subprocess
 import sys
@@ -150,187 +150,643 @@ def output_tail(text: str, max_lines: int = 80, max_chars: int = 6000) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Shell command splitting
+# Shell command parsing
 # ---------------------------------------------------------------------------
+#
+# A small bash lexer and parser, enough for the PreToolUse hooks. It keeps
+# what they need: pipelines, subshell groups `( … )`, and the code that the
+# shell runs although it sits inside a word or a redirection: command
+# substitutions `$( … )` and backticks (also inside double quotes), process
+# substitutions `<( … )`, and the here-document or here-string that feeds a
+# command's stdin. Quoted text stays one word, so `echo "git commit"` is the
+# command `echo`. Anything it cannot read gives None: the hooks then use their
+# conservative fallback.
 
-_HEREDOC_RE = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
-_SEPARATOR_CHARS = set(";&|()\n")
-
-
-def strip_heredocs(command: str) -> str:
-    """Remove here-document bodies, so their text is not read as commands."""
-    lines = command.split("\n")
-    out: List[str] = []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        i += 1
-        for m in _HEREDOC_RE.finditer(line):
-            if line[max(0, m.start() - 1):m.start()] == "<":
-                continue  # `<<<` here-string
-            delimiter, dash = m.group(3), m.group(1) == "-"
-            j = i
-            while j < len(lines):
-                candidate = lines[j].lstrip("\t") if dash else lines[j]
-                if candidate.rstrip() == delimiter:
-                    break
-                j += 1
-            if j < len(lines):
-                i = j + 1  # drop the body and the terminator line
-    return "\n".join(out)
+# Longest first, so `&&` wins over `&`.
+_OPERATORS = sorted(
+    [";;&", ";;", ";&", "&&", "||", "|&", "&>>", "&>", ">>", ">|", ">&", "<&", "<<<", "<<-", "<<", "<>",
+     ";", "&", "|", "(", ")", "<", ">", "\n"],
+    key=len, reverse=True,
+)
+_OP_CHARS = set(";&|()<>\n")
+_BLANKS = " \t\r"
+_ANSI_C_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", "'": "'", '"': '"', "a": "\a", "b": "\b",
+                   "e": "\x1b", "E": "\x1b", "f": "\f", "v": "\v", "?": "?"}
+# Placeholders for text that only the running shell knows; `$` or the
+# ellipsis marks a word as dynamic (see is_dynamic).
+SUBST_MARK = "$(…)"
+BACKTICK_MARK = "`…`"
 
 
-def strip_comments(command: str) -> str:
-    """Remove unquoted `# comments` that start a word (bash rules)."""
-    out: List[str] = []
-    quote = None
-    i = 0
-    n = len(command)
-    while i < n:
-        ch = command[i]
-        if quote == "'":
-            out.append(ch)
+class Unparsable(Exception):
+    pass
+
+
+class Token:
+    __slots__ = ("op", "value", "subs", "heredoc")
+
+    def __init__(self, op: bool, value: str, subs: Optional[List[str]] = None, heredoc: Optional[str] = None):
+        self.op = op  # True for an operator, False for a word
+        self.value = value
+        self.subs = subs if subs is not None else []  # scripts of substitutions in this word
+        self.heredoc = heredoc  # body of a `<<` operator
+
+
+class _Lexer:
+    def __init__(self, text: str):
+        self.text = text
+        self.n = len(text)
+
+    def lex(self, i: int, nested: bool) -> Tuple[List[Token], int]:
+        """Tokens from index i. nested: stop after the `)` that closes a `$(`."""
+        text, n = self.text, self.n
+        tokens: List[Token] = []
+        buf: List[str] = []
+        subs: List[str] = []
+        state = {"word": False, "quoted": False}
+        pending: List[Tuple[Token, str, bool, bool]] = []  # here-docs waiting for their bodies
+        depth = 0
+
+        def end_word() -> None:
+            if state["word"]:
+                tokens.append(Token(False, "".join(buf), list(subs)))
+            del buf[:]
+            del subs[:]
+            state["word"] = state["quoted"] = False
+
+        while i < n:
+            ch = text[i]
+            if ch == "\\":
+                if i + 1 < n and text[i + 1] == "\n":
+                    i += 2  # line continuation
+                    continue
+                if i + 1 < n:
+                    buf.append(text[i + 1])
+                    state["word"] = True
+                i += 2
+                continue
+            if ch in _BLANKS:
+                end_word()
+                i += 1
+                continue
+            if ch == "#" and not state["word"]:
+                while i < n and text[i] != "\n":
+                    i += 1
+                continue
             if ch == "'":
-                quote = None
-        elif quote == '"':
-            out.append(ch)
-            if ch == "\\" and i + 1 < n:
-                out.append(command[i + 1])
-                i += 1
-            elif ch == '"':
-                quote = None
-        elif ch == "\\" and i + 1 < n:
-            out.append(ch)
-            out.append(command[i + 1])
+                j = text.find("'", i + 1)
+                if j < 0:
+                    raise Unparsable("unterminated quote")
+                buf.append(text[i + 1:j])
+                state["word"] = state["quoted"] = True
+                i = j + 1
+                continue
+            if ch == '"':
+                i = self._double(i + 1, buf, subs)
+                state["word"] = state["quoted"] = True
+                continue
+            if ch == "`":
+                body, i = self._backtick(i + 1)
+                subs.append(body)
+                buf.append(BACKTICK_MARK)
+                state["word"] = True
+                continue
+            if ch == "$" and i + 1 < n:
+                nxt = text[i + 1]
+                if nxt == "'":
+                    i = self._ansi_c(i + 2, buf)
+                    state["word"] = state["quoted"] = True
+                    continue
+                if nxt == '"':
+                    i = self._double(i + 2, buf, subs)
+                    state["word"] = state["quoted"] = True
+                    continue
+                if nxt == "(":
+                    i = self._dollar_paren(i, buf, subs)
+                    state["word"] = True
+                    continue
+                if nxt == "{":
+                    i = self._brace(i, buf)
+                    state["word"] = True
+                    continue
+            if ch in _OP_CHARS:
+                if ch in "<>" and i + 1 < n and text[i + 1] == "(" and not state["word"]:
+                    body, i = self._subst(i + 2)  # process substitution
+                    subs.append(body)
+                    buf.append(ch + "(…)")
+                    state["word"] = True
+                    continue
+                if ch in "<>" and state["word"] and not state["quoted"] and "".join(buf).isdigit():
+                    del buf[:]  # file descriptor of `2>&1`
+                    state["word"] = False
+                end_word()
+                op = next(o for o in _OPERATORS if text.startswith(o, i))
+                i += len(op)
+                if nested and op == "(":
+                    depth += 1
+                elif nested and op == ")":
+                    if depth == 0:
+                        for tok, _, _, _ in pending:
+                            tok.heredoc = ""
+                        return tokens, i
+                    depth -= 1
+                tok = Token(True, op)
+                tokens.append(tok)
+                if op in ("<<", "<<-"):
+                    delimiter, quoted, i = self._delimiter(i)
+                    pending.append((tok, delimiter, op == "<<-", quoted))
+                elif op == "\n" and pending:
+                    i = self._heredoc_bodies(i, pending)
+                    pending = []
+                continue
+            buf.append(ch)
+            state["word"] = True
             i += 1
-        elif ch in "'\"":
-            quote = ch
-            out.append(ch)
-        elif ch == "#" and (i == 0 or command[i - 1] in " \t\n;&|()"):
-            while i < n and command[i] != "\n":
+        end_word()
+        if nested:
+            raise Unparsable("unterminated $(")
+        for tok, _, _, _ in pending:
+            tok.heredoc = ""
+        return tokens, i
+
+    def _double(self, i: int, buf: List[str], subs: List[str], heredoc: bool = False) -> int:
+        """Text after `"` up to the closing quote (or the end, for a here-doc body)."""
+        text, n = self.text, self.n
+        while i < n:
+            c = text[i]
+            if c == '"' and not heredoc:
+                return i + 1
+            if c == "\\" and i + 1 < n:
+                nxt = text[i + 1]
+                if nxt in "$`\\" or (nxt == '"' and not heredoc):
+                    buf.append(nxt)
+                    i += 2
+                    continue
+                if nxt == "\n":
+                    i += 2
+                    continue
+                buf.append(c)
                 i += 1
-            continue
-        else:
-            out.append(ch)
+                continue
+            if c == "`":
+                body, i = self._backtick(i + 1)
+                subs.append(body)
+                buf.append(BACKTICK_MARK)
+                continue
+            if c == "$" and i + 1 < n and text[i + 1] == "(":
+                i = self._dollar_paren(i, buf, subs)
+                continue
+            if c == "$" and i + 1 < n and text[i + 1] == "{":
+                i = self._brace(i, buf)
+                continue
+            buf.append(c)
+            i += 1
+        if heredoc:
+            return i
+        raise Unparsable("unterminated double quote")
+
+    def _dollar_paren(self, i: int, buf: List[str], subs: List[str]) -> int:
+        """`$(` at i: a command substitution, or `$((` arithmetic."""
+        if self.text.startswith("$((", i):
+            end = self._match_parens(i + 1)
+            buf.append(self.text[i:end])
+            return end
+        body, end = self._subst(i + 2)
+        subs.append(body)
+        buf.append(SUBST_MARK)
+        return end
+
+    def _subst(self, start: int) -> Tuple[str, int]:
+        """The script of a substitution that starts at `start` (after the `(`)."""
+        _, end = self.lex(start, nested=True)
+        return self.text[start:end - 1], end
+
+    def _match_parens(self, i: int) -> int:
+        depth = 0
+        while i < self.n:
+            c = self.text[i]
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+            i += 1
+        raise Unparsable("unterminated $((")
+
+    def _brace(self, i: int, buf: List[str]) -> int:
+        """`${…}` kept as raw text (it is dynamic)."""
+        depth = 0
+        start = i
         i += 1
-    return "".join(out)
+        while i < self.n:
+            c = self.text[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    buf.append(self.text[start:i + 1])
+                    return i + 1
+            i += 1
+        raise Unparsable("unterminated ${")
+
+    def _backtick(self, i: int) -> Tuple[str, int]:
+        out: List[str] = []
+        while i < self.n:
+            c = self.text[i]
+            if c == "\\" and i + 1 < self.n and self.text[i + 1] in "`$\\":
+                out.append(self.text[i + 1])
+                i += 2
+                continue
+            if c == "`":
+                return "".join(out), i + 1
+            out.append(c)
+            i += 1
+        raise Unparsable("unterminated backtick")
+
+    def _ansi_c(self, i: int, buf: List[str]) -> int:
+        """`$'…'` with its backslash escapes decoded."""
+        while i < self.n:
+            c = self.text[i]
+            if c == "'":
+                return i + 1
+            if c == "\\" and i + 1 < self.n:
+                nxt = self.text[i + 1]
+                buf.append(_ANSI_C_ESCAPES.get(nxt, "\\" + nxt))
+                i += 2
+                continue
+            buf.append(c)
+            i += 1
+        raise Unparsable("unterminated $'")
+
+    def _delimiter(self, i: int) -> Tuple[str, bool, int]:
+        """The here-doc delimiter word after `<<`: (text without quotes, quoted?, next index)."""
+        text, n = self.text, self.n
+        while i < n and text[i] in _BLANKS:
+            i += 1
+        out: List[str] = []
+        quoted = False
+        while i < n and text[i] not in _BLANKS and text[i] not in _OP_CHARS:
+            c = text[i]
+            if c in "'\"":
+                j = text.find(c, i + 1)
+                if j < 0:
+                    raise Unparsable("unterminated here-doc delimiter")
+                out.append(text[i + 1:j])
+                quoted = True
+                i = j + 1
+            elif c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                quoted = True
+                i += 2
+            else:
+                out.append(c)
+                i += 1
+        if not out and not quoted:
+            raise Unparsable("missing here-doc delimiter")
+        return "".join(out), quoted, i
+
+    def _heredoc_bodies(self, i: int, pending: List[Tuple[Token, str, bool, bool]]) -> int:
+        """Read the bodies of the pending here-docs, line by line from i."""
+        text, n = self.text, self.n
+        for tok, delimiter, strip_tabs, quoted in pending:
+            lines: List[str] = []
+            while i < n:
+                j = text.find("\n", i)
+                line = text[i:j] if j >= 0 else text[i:]
+                i = j + 1 if j >= 0 else n
+                if strip_tabs:
+                    line = line.lstrip("\t")
+                if line == delimiter:
+                    break
+                lines.append(line)
+            tok.heredoc = "\n".join(lines)
+            if not quoted:
+                # An unquoted here-doc expands `$( … )` and backticks in its body.
+                body = _Lexer(tok.heredoc)
+                body._double(0, [], tok.subs, heredoc=True)
+        return i
 
 
-def tokenize(command: str) -> Optional[List[str]]:
-    """shlex tokens with shell punctuation as separate tokens; None on error."""
-    text = strip_comments(strip_heredocs(command.replace("\\\n", " ")))
-    lexer = shlex.shlex(text, posix=True, punctuation_chars="();<>|&\n")
-    lexer.whitespace = " \t\r"
-    lexer.whitespace_split = True
-    lexer.commenters = ""
-    try:
-        return list(lexer)
-    except ValueError:
-        return None
+class Command:
+    """A simple command: its words, the scripts of its substitutions, and its stdin text."""
+
+    __slots__ = ("words", "subs", "stdin")
+
+    def __init__(self) -> None:
+        self.words: List[str] = []
+        self.subs: List[str] = []
+        self.stdin: Optional[str] = None  # here-doc body or here-string
+
+    def __bool__(self) -> bool:
+        return bool(self.words or self.subs or self.stdin is not None)
 
 
-def _is_operator(token: str) -> bool:
-    return bool(token) and all(c in _SEPARATOR_CHARS or c in "<>" for c in token)
+class Group:
+    """A group: a subshell `( … )` or a brace group `{ …; }`, with its own script."""
+
+    __slots__ = ("script", "subshell")
+
+    def __init__(self, script: List[List[Any]], subshell: bool = True):
+        self.script = script
+        self.subshell = subshell  # False for `{ …; }`: it runs in the current shell
 
 
-def parse_pipelines(command: str) -> Optional[List[List[List[str]]]]:
-    """Split a command into pipelines -> stages -> words.
+class Pipeline(list):
+    """The stages of one pipeline, and the operator before it.
 
-    `&&`, `||`, `;`, `&`, newlines and parentheses end a pipeline; `|` and `|&`
-    join stages. Redirections and their targets are dropped. Quoted text stays
-    one word, so `echo "git commit"` is the command `echo`.
+    op: None (the first pipeline of a script or group), `&&`, `||`, or a
+    list separator (`;`, `&`, a newline, `;;`).
+    """
+
+    def __init__(self, stages: Any = (), op: Optional[str] = None):
+        super().__init__(stages)
+        self.op = op
+
+
+def parse_script(command: str) -> Optional[List[List[Any]]]:
+    """Parse a command into a script: Pipelines -> stages (Command or Group).
+
+    `&&`, `||`, `;`, `&` and newlines end a pipeline (Pipeline.op keeps the
+    operator); `|` and `|&` join stages. Redirection targets are dropped.
     Returns None when the command cannot be parsed.
     """
-    tokens = tokenize(command)
-    if tokens is None:
+    try:
+        tokens, _ = _Lexer(command).lex(0, nested=False)
+        script, _ = _parse(tokens, 0, 0, None)
+    except (Unparsable, RecursionError):
         return None
-    pipelines: List[List[List[str]]] = []
-    stages: List[List[str]] = []
-    words: List[str] = []
-    skip_next = False
+    return script
 
-    def end_stage() -> None:
-        nonlocal words
-        if words:
-            stages.append(words)
-        words = []
 
-    def end_pipeline() -> None:
-        nonlocal stages
-        end_stage()
+MAX_GROUP_DEPTH = 50
+
+
+def _parse(tokens: List[Token], pos: int, depth: int, closer: Optional[str]) -> Tuple[List[List[Any]], int]:
+    """Parse until `closer` (`)` or `}`, None at the top level); groups parse at depth + 1."""
+    if depth > MAX_GROUP_DEPTH:
+        raise Unparsable("groups nested too deep")
+    script: List[List[Any]] = []
+    stages: List[Any] = []
+    cmd = Command()
+    redirect: Optional[str] = None
+    op_before: Optional[str] = None
+
+    def end_command() -> None:
+        nonlocal cmd
+        if cmd:
+            stages.append(cmd)
+        cmd = Command()
+
+    def end_pipeline(next_op: Optional[str]) -> None:
+        nonlocal stages, op_before
+        end_command()
         if stages:
-            pipelines.append(stages)
+            script.append(Pipeline(stages, op_before))
+            op_before = next_op
+        elif op_before not in ("&&", "||") and script:
+            op_before = next_op  # `a &&<newline>b` keeps the `&&`
         stages = []
 
-    for token in tokens:
-        if _is_operator(token):
-            skip_next = False
-            if "<" in token or ">" in token:
-                if words and words[-1].isdigit():
-                    words.pop()  # file descriptor of `2>&1`
-                skip_next = True
+    while pos < len(tokens):
+        tok = tokens[pos]
+        pos += 1
+        if not tok.op:
+            if redirect is None and not cmd and tok.value == "{":
+                inner, pos = _parse(tokens, pos, depth + 1, "}")  # brace group
+                stages.append(Group(inner, subshell=False))
                 continue
-            if token.replace("\n", "") in ("|", "|&"):
-                end_stage()
+            if redirect is None and not cmd and tok.value == "}" and closer == "}":
+                end_pipeline(None)
+                return script, pos
+            cmd.subs.extend(tok.subs)
+            if redirect is not None:
+                if redirect == "<<<":
+                    cmd.stdin = tok.value
+                redirect = None
             else:
-                end_pipeline()
+                cmd.words.append(tok.value)
             continue
-        if skip_next:
-            skip_next = False
+        op = tok.value
+        redirect = None
+        if "<" in op or ">" in op:
+            if op in ("<<", "<<-"):
+                cmd.stdin = tok.heredoc or ""
+                cmd.subs.extend(tok.subs)
+            else:
+                redirect = op
             continue
-        words.append(token)
-    end_pipeline()
-    return pipelines
+        if op in ("|", "|&"):
+            end_command()
+            continue
+        if op == "(":
+            if cmd.words and cmd.words[-1].endswith("="):
+                pos = _skip_array(tokens, pos, cmd)  # `arr=(a b)`
+                continue
+            if cmd.words and pos < len(tokens) and tokens[pos].op and tokens[pos].value == ")":
+                pos += 1  # `f()`: a function definition; its body follows
+                cmd = Command()
+                continue
+            end_command()
+            inner, pos = _parse(tokens, pos, depth + 1, ")")
+            stages.append(Group(inner))
+            continue
+        if op == ")":
+            end_pipeline(None)
+            if closer == ")":
+                return script, pos
+            if closer == "}":
+                return script, pos - 1  # unbalanced: the enclosing `( … )` closes here
+            continue  # a `case` pattern
+        end_pipeline(op)
+    end_pipeline(None)
+    return script, pos
 
 
-_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_WRAPPERS = {"command", "builtin", "exec", "nohup", "time", "nice", "caffeinate"}
+def _skip_array(tokens: List[Token], pos: int, cmd: Command) -> int:
+    depth = 1
+    while pos < len(tokens):
+        tok = tokens[pos]
+        pos += 1
+        if tok.op and tok.value == "(":
+            depth += 1
+        elif tok.op and tok.value == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        else:
+            cmd.subs.extend(tok.subs)
+    return pos
+
+
+def is_dynamic(word: str) -> bool:
+    """True if the shell decides the word's value: a variable or a substitution."""
+    return "$" in word or "`" in word or "…" in word
+
+
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=")
 # Shell keywords that may precede a simple command: `{ git push; }`, `if git ...; then git ...`.
 _KEYWORDS = {"{", "}", "!", "if", "then", "else", "elif", "do", "while", "until"}
-_SUDO_ARG_OPTS = {"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"}
-_ENV_ARG_OPTS = {"-u", "-C", "-S", "--unset", "--chdir", "--split-string"}
+# Wrappers that run the rest of the line as a command, with their options that
+# take a separate argument.
+_WRAPPERS: Dict[str, set] = {
+    "command": set(),
+    "builtin": set(),
+    "exec": {"-a"},
+    "nohup": set(),
+    "noglob": set(),
+    "nocorrect": set(),
+    "time": {"-f", "-o", "--format", "--output"},
+    "nice": {"-n", "--adjustment"},
+    "ionice": {"-c", "-n", "-p", "-P", "-u", "--class", "--classdata", "--pid", "--pgid", "--uid"},
+    "stdbuf": {"-i", "-o", "-e", "--input", "--output", "--error"},
+    "caffeinate": {"-t", "-w"},
+    "timeout": {"-s", "-k", "--signal", "--kill-after"},
+    "xargs": {"-I", "-L", "-n", "-P", "-s", "-d", "-E", "-a", "--max-args", "--max-procs", "--max-chars",
+              "--max-lines", "--delimiter", "--arg-file", "--eof", "--process-slot-var"},
+    "env": {"-u", "-C", "-S", "--unset", "--chdir", "--split-string"},
+    "sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"},
+}
+# Wrappers with positional arguments before the command: `timeout 30 git push`.
+_WRAPPER_POSITIONALS = {"timeout": 1}
+_ENV_CHDIR_OPTS = ("-C", "--chdir")
 
 
-def strip_prefixes(words: List[str]) -> List[str]:
-    """Drop `VAR=value` assignments, shell keywords, and wrappers like env, sudo, time."""
+class Prefixes:
+    """What the prefixes of a simple command set up for it."""
+
+    __slots__ = ("env", "chdir", "words")
+
+    def __init__(self) -> None:
+        self.env: Dict[str, str] = {}  # `VAR=value` assignments, also after `env`
+        self.chdir: Optional[str] = None  # `env -C <dir>`
+        self.words: List[str] = []  # the command and its arguments
+
+
+def command_prefixes(words: List[str]) -> Prefixes:
+    """Split off `VAR=value` assignments, shell keywords, `function <name>`, and wrappers like env, sudo, timeout.
+
+    zsh's `=git` becomes `git`. `command -v|-V <name>` runs nothing: no words.
+    """
+    result = Prefixes()
     i = 0
     n = len(words)
     while i < n:
         w = words[i]
-        if _ASSIGNMENT_RE.match(w) or w in _KEYWORDS:
+        match = _ASSIGNMENT_RE.match(w)
+        if match:
+            name = w[:match.end()].rstrip("=").rstrip("+")
+            result.env[name.split("[", 1)[0]] = w[match.end():]
             i += 1
+        elif w in _KEYWORDS:
+            i += 1
+        elif w == "function":
+            i += 2  # `function f { …; }`: the body follows the name
         elif w in _WRAPPERS:
+            arg_opts = _WRAPPERS[w]
             i += 1
-            while i < n and words[i].startswith("-"):
-                i += 1
-        elif w == "env":
-            i += 1
-            while i < n and (words[i].startswith("-") or _ASSIGNMENT_RE.match(words[i])):
-                i += 2 if words[i] in _ENV_ARG_OPTS else 1
-        elif w == "sudo":
-            i += 1
-            while i < n and words[i].startswith("-"):
-                i += 2 if words[i] in _SUDO_ARG_OPTS else 1
+            while i < n and words[i].startswith("-") and words[i] != "-":
+                opt = words[i]
+                if opt == "--":
+                    i += 1
+                    break
+                if w == "command" and opt[0] == "-" and ("v" in opt[1:] or "V" in opt[1:]):
+                    return result  # `command -v git` only looks the name up
+                if w == "env" and opt in _ENV_CHDIR_OPTS and i + 1 < n:
+                    result.chdir = words[i + 1]
+                elif w == "env" and opt.startswith("--chdir="):
+                    result.chdir = opt[len("--chdir="):]
+                i += 2 if opt in arg_opts else 1
+            i += _WRAPPER_POSITIONALS.get(w, 0)
         else:
             break
-    return words[i:]
+    rest = words[i:]
+    if rest and rest[0].startswith("=") and len(rest[0]) > 1:
+        rest = [rest[0][1:]] + rest[1:]  # zsh: `=git` is the git on the PATH
+    result.words = rest
+    return result
 
 
-SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+def strip_prefixes(words: List[str]) -> List[str]:
+    """The command and its arguments without prefixes (see command_prefixes)."""
+    return command_prefixes(words).words
+
+
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "fish"}
+
+
+def shell_invocation(words: List[str]) -> Tuple[str, Optional[str]]:
+    """How a command runs shell code it gets as data.
+
+    ("c", script) for `bash -c '<script>'` (any options before) and `eval`;
+    ("stdin", None) for a shell that reads its script from stdin (`bash`,
+    `sh -s`); ("", None) for anything else, including a shell running a file.
+    """
+    if not words:
+        return "", None
+    name = os.path.basename(words[0])
+    if name == "eval":
+        return "c", " ".join(words[1:])
+    if name not in SHELLS:
+        return "", None
+    has_c = has_s = False
+    i = 1
+    while i < len(words):
+        w = words[i]
+        if w in ("--", "-"):
+            i += 1
+            break
+        if w in ("--rcfile", "--init-file"):
+            i += 2
+            continue
+        if w.startswith("--"):
+            i += 1
+            continue
+        if len(w) > 1 and w[0] in "-+":
+            flags = w[1:]
+            if w[0] == "-" and "c" in flags:
+                has_c = True
+            if w[0] == "-" and "s" in flags:
+                has_s = True
+            i += 2 if flags[-1] in "oO" else 1  # `-o pipefail`, `-euo pipefail`
+            continue
+        break
+    rest = words[i:]
+    if has_c:
+        return ("c", rest[0]) if rest else ("", None)
+    if has_s or not rest:
+        return "stdin", None
+    return "", None
 
 
 def nested_shell_command(words: List[str]) -> Optional[str]:
     """The script of `bash -c '<script>'` or `eval <args>`, if any."""
+    kind, script = shell_invocation(words)
+    return script if kind == "c" else None
+
+
+def piped_script(prev: Any) -> Optional[str]:
+    """The text a pipeline stage writes to the next one, when it is literal.
+
+    `echo '<text>'`, `printf '<text>'`, and `cat` with a here-doc or here-string.
+    """
+    if not isinstance(prev, Command):
+        return None
+    words = strip_prefixes(prev.words)
     if not words:
         return None
     name = os.path.basename(words[0])
-    if name == "eval":
-        return " ".join(words[1:])
-    if name in SHELLS:
-        for i, w in enumerate(words[1:], start=1):
-            if w.startswith("-") and not w.startswith("--") and "c" in w[1:]:
-                return words[i + 1] if i + 1 < len(words) else None
-            if not w.startswith("-"):
-                return None
+    args = words[1:]
+    if name == "echo":
+        while args and args[0] in ("-n", "-e", "-E", "-ne", "-en"):
+            args = args[1:]
+        return " ".join(args)
+    if name == "printf":
+        return " ".join(args)
+    if name == "cat" and not args and prev.stdin is not None:
+        return prev.stdin
     return None
