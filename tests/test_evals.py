@@ -922,6 +922,19 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("run: make check", text)
         self.assertNotIn("ANTHROPIC_API_KEY", text)
 
+    def test_ci_tests_python_3_9_in_the_one_check_job(self):
+        # One job named `check` (a ruleset may require the name), no matrix; the unit tests run on 3.9 too.
+        text = self.workflow("ci.yml")
+        self.assertEqual(re.findall(r"(?m)^  (\w[\w-]*):$", text.split("\njobs:\n", 1)[1]), ["check"])
+        self.assertNotIn("matrix", text)
+        check = text.index("run: make check")
+        setup = text.index("uses: actions/setup-python@")
+        self.assertLess(check, setup)
+        self.assertIn('python-version: "3.9"', text[setup:])
+        # `actions/setup-python` has no Python 3.9 build for Ubuntu 26.04, so the runner is pinned.
+        self.assertEqual(re.findall(r"(?m)^\s*runs-on:\s*(\S+)\s*$", text), ["ubuntu-24.04"])
+        self.assertRegex(text[setup:], r'run: make test PYTHON="\$\{\{ steps\.(\w+)\.outputs\.python-path \}\}"')
+
     def test_actions_are_pinned_as_in_the_spec(self):
         spec = read(os.path.join(ROOT, "LOOM_SPEC.md"))
         for name in ("ci.yml", "eval.yml"):

@@ -21,7 +21,7 @@ If the request mentions what someone plans to build, still describe only what ex
 ## Limits
 
 - You are read-only. You have no tools that modify files. Do not ask for any.
-- Skip the loom working area: `.loom/` (or the `workDir` from `.claude/loom.json`). It holds loom artifacts, not code.
+- Skip the loom working area: the directory of the `Work directory: <path>` line of your prompt, or `.loom/` when the prompt has no such line. It holds loom artifacts, not code.
 
 ## Analysis strategy
 

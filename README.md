@@ -19,16 +19,18 @@ Or in two steps:
 /plugin install loom@loom
 ```
 
+In a project that `/loom:setup` prepared, `.claude/settings.json` registers the marketplace and enables loom, but each collaborator still installs it once per clone: `claude plugin install loom@loom --scope project`.
+
 ## Getting started
 
 1. **Install** the plugin (above), then open your project in Claude Code.
-2. **`/loom:setup`** detects the stack and writes `.claude/loom.json`, the checks entry point (`Makefile` or `package.json` scripts), CI with a `check` job, `.claude/settings.json`, the `docs/` skeleton, and a short `CLAUDE.md`. It shows every change first and works through loom's own flow: an issue "Set up loom" and a `chore/<n>-loom-setup` branch.
+2. **`/loom:setup`** detects the stack and writes `.claude/loom.json`, the checks entry point (`Makefile` or `package.json` scripts), CI with a `check` job (or keeps an existing workflow and records the check name of its job in `ci.requiredCheck`), `.claude/settings.json`, the `docs/` skeleton, and a short `CLAUDE.md`. It shows every change first and works through loom's own flow: an issue "Set up loom" and a `chore/<n>-loom-setup` branch.
 3. **`/loom:describe-pr`**, then **`/loom:finish-task`** merge the setup PR. After the merge, `finish-task` offers a ruleset that protects the main branch.
 4. **`/loom:backlog`** discusses ideas, helps fill `docs/product/vision.md`, and creates GitHub issues (labels `type:*`, `size:*`, `mode:*`).
 5. **`/loom:start-task #<n>`** picks the mode, creates the branch and `.loom/tasks/<n>-<slug>/00-ticket.md`.
 6. **`/clear`, then `/loom:next`**, again and again: `next` runs the next phase for the mode (research, design, plan, implement). Answer question rounds and approve with `/loom:iterate`.
 7. **`/loom:describe-pr`** writes the task summary and ADRs into `docs/`, pushes, and opens the PR (with confirmation). The PR body has a one-sentence Why, 1–3 Special things to note, and a Change outline (a file tree or an interface `diff`). The task summary ends its Implementation section with a Process metrics line, e.g. `9 subagent runs (research 4, implement 5), 2 review rounds (1 changes-needed), 1 checks retry, subagent time 14 min`.
-8. **`/loom:finish-task`** waits for green checks, squash-merges (with confirmation), and archives the task directory.
+8. **`/loom:finish-task`** waits for green checks (also for the check named in `ci.requiredCheck` when GitHub requires none), squash-merges (with confirmation), and archives the task directory.
 
 ## Highlights
 
@@ -44,7 +46,7 @@ Or in two steps:
 
 Run the working copy with `claude --plugin-dir /path/to/loom` in a sandbox repository.
 
-- **`make check`** runs the unit tests (`tests/`, standard library `unittest`, no model calls) and `claude plugin validate --strict`. It needs no credentials. CI runs it on every pull request and push to `main` (`.github/workflows/ci.yml`).
+- **`make check`** runs the unit tests (`tests/`, standard library `unittest`, no model calls) and `claude plugin validate --strict`. It needs no credentials. CI runs it on every pull request and push to `main` (`.github/workflows/ci.yml`), then runs `make test` again on Python 3.9, the oldest supported version.
 - **`make eval`** runs the eval suite in `evals/` with `claude plugin eval`. Each case builds a small fixture repository and runs one loom scenario; the graders are model-free (files, regexes, tool calls):
 
   | Case | Checks |

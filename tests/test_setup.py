@@ -289,7 +289,10 @@ class SettingsTemplateTest(unittest.TestCase):
         self.assertEqual(data["extraKnownMarketplaces"], {name: {"source": {"source": "github", "repo": "mmosvlad1/loom"}}})
         self.assertEqual(data["enabledPlugins"], {"%s@%s" % (plugin["name"], name): True})
         self.assertIn("mmosvlad1/loom", plugin["repository"])
-        self.assertEqual(market["plugins"][0]["source"], "./", "relative-path source: project-enabled loom needs no install")
+        self.assertEqual(market["plugins"][0]["source"], "./", "the plugin sits at the repository root")
+        # A project-enabled plugin still needs a per-clone install (LOOM_SPEC.md 19.3, 24.2).
+        self.assertIn("claude plugin install loom@loom --scope project", spec_19_3())
+        self.assertNotIn("loads without a per-user install", spec_19_3())
 
     def test_rule_syntax(self):
         perms = self.data()["permissions"]

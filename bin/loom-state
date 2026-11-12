@@ -22,6 +22,7 @@ import json
 import os
 import posixpath
 import re
+import shlex
 import subprocess
 import sys
 import unicodedata
@@ -68,6 +69,25 @@ DEFAULT_DECISIONS_PATTERN = "<NNNN>-<slug>.md"
 DEFAULT_CI: Dict[str, Any] = {"requiredCheck": "check"}
 DEFAULT_PULL_REQUEST: Dict[str, Any] = {"requiredSections": []}
 
+# Numeric and boolean settings (LOOM_SPEC.md 19.1): "positive" is an integer
+# >= 1, "count" an integer >= 0, "bool" true or false. A JSON boolean is never
+# a number here. Defaults come from DEFAULT_CONFIG.
+SETTINGS_SCHEMA: Dict[str, Any] = {
+    "rounds": {"cap": {"S": "positive", "M": "positive", "L": "positive"}},
+    "implement": {"maxFixAttempts": "count", "autoAdvance": "bool"},
+    "hooks": {"stopLint": "bool", "maxCheckAttempts": "positive"},
+}
+SETTING_RULES = {
+    "positive": "an integer of at least 1",
+    "count": "an integer of at least 0",
+    "bool": "true or false",
+}
+
+# Commands that filter output: a check piped into one of them can hide failures.
+# The PreToolUse hook block_output_filtering.py denies the same filters.
+OUTPUT_FILTERS = ("head", "tail", "grep", "egrep", "fgrep", "sed", "awk", "gawk", "nawk", "cut",
+                  "less", "more", "rg", "wc")
+
 BRANCH_RE = re.compile(r"^(feat|fix|chore|docs|refactor)/(\d+)-(.+)$")
 
 TICKET_FILE = "00-ticket.md"
@@ -91,6 +111,8 @@ MODES = ("oneshot", "quick", "full")
 SIZES = ("S", "M", "L")
 
 # Artifact-producing phases per mode, in order (implement follows them).
+ARTIFACT_STATUSES = ("draft", "in-review", "approved")
+
 PHASES_BY_MODE: Dict[str, List[str]] = {
     "oneshot": [],
     "quick": ["research", "plan"],
@@ -115,6 +137,9 @@ REVIEWED_STATUSES = ("in-review", "approved")
 
 GIT_TIMEOUT = 10
 GH_TIMEOUT = 20
+
+# A segment `duration_s` above this (one week) is not a real subagent run.
+MAX_SEGMENT_SECONDS = 7 * 24 * 3600
 
 # ---------------------------------------------------------------------------
 # Subprocess helpers
@@ -148,7 +173,8 @@ def run(
         )
     except FileNotFoundError:
         return 127, "", "%s: command not found" % args[0]
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        # ValueError: an argument with a NUL byte or a character that cannot be encoded.
         return 1, "", str(exc)
     out = proc.stdout.decode("utf-8", "replace")
     err = proc.stderr.decode("utf-8", "replace")
@@ -218,7 +244,8 @@ def load_config(top: str) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     warnings: List[str] = []
     data: Any = {}
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        # utf-8-sig: a byte order mark (some Windows editors write one) is not JSON.
+        with open(path, "r", encoding="utf-8-sig") as fh:
             data = json.load(fh)
     except (OSError, ValueError) as exc:
         warnings.append("cannot read %s (%s); using defaults" % (CONFIG_PATH, exc))
@@ -226,22 +253,99 @@ def load_config(top: str) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     if not isinstance(data, dict):
         warnings.append("%s is not a JSON object; using defaults" % CONFIG_PATH)
         data = {}
+    for key in data:
+        if key not in CONFIG_KEYS:
+            warnings.append("%s: unknown key '%s' ignored" % (CONFIG_PATH, key))
     cfg = _deep_merge(DEFAULT_CONFIG, data)
-    for key in ("mainBranch", "workDir", "docsDir"):
-        if not isinstance(cfg.get(key), str) or not cfg[key].strip():
-            warnings.append("%s: invalid %r; using default" % (CONFIG_PATH, key))
-            cfg[key] = DEFAULT_CONFIG[key]
+    main_branch = cfg.get("mainBranch")
+    if isinstance(main_branch, str) and main_branch.strip() and not _has_control(main_branch.strip()):
+        cfg["mainBranch"] = main_branch.strip()
+    else:
+        warnings.append(_invalid("mainBranch", main_branch, DEFAULT_CONFIG["mainBranch"]))
+        cfg["mainBranch"] = DEFAULT_CONFIG["mainBranch"]
+    # workDir first: docsDir and the docs map may not lie at or below it.
+    work_dir = _clean_path(cfg.get("workDir"), None, WORK_DIR_RESERVED)
+    if work_dir is None:
+        warnings.append(_invalid("workDir", cfg.get("workDir"), DEFAULT_CONFIG["workDir"]))
+        work_dir = DEFAULT_CONFIG["workDir"]
+    cfg["workDir"] = work_dir
+    docs_dir = _clean_path(cfg.get("docsDir"), work_dir)
+    if docs_dir is None:
+        warnings.append(_invalid("docsDir", cfg.get("docsDir"), DEFAULT_CONFIG["docsDir"]))
+        docs_dir = DEFAULT_CONFIG["docsDir"]
+    cfg["docsDir"] = docs_dir
     if not isinstance(cfg.get("checks"), dict):
         warnings.append("%s: invalid 'checks'; using defaults" % CONFIG_PATH)
         cfg["checks"] = copy.deepcopy(DEFAULT_CONFIG["checks"])
     warnings.extend(_resolve_checks(cfg["checks"]))
-    cfg["docs"], w = resolve_docs(data.get("docs"), cfg["docsDir"], cfg["workDir"])
+    cfg["docs"], w = resolve_docs(data.get("docs", MISSING), cfg["docsDir"], cfg["workDir"])
     warnings.extend(w)
-    cfg["ci"], w = resolve_ci(data.get("ci"))
+    cfg["ci"], w = resolve_ci(data.get("ci", MISSING))
     warnings.extend(w)
-    cfg["pullRequest"], w = resolve_pull_request(data.get("pullRequest"))
+    cfg["pullRequest"], w = resolve_pull_request(data.get("pullRequest", MISSING))
     warnings.extend(w)
-    return cfg, warnings
+    for key, schema in SETTINGS_SCHEMA.items():
+        cfg[key], w = resolve_settings(key, data.get(key, MISSING), schema, DEFAULT_CONFIG[key])
+        warnings.extend(w)
+    # A lone surrogate from a JSON escape cannot be printed: escape it.
+    return cfg, [_printable(w) for w in warnings]
+
+
+def _printable(text: str) -> str:
+    return text.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
+# Top-level loom.json keys (LOOM_SPEC.md 19.1); any other key gets a warning.
+CONFIG_KEYS = ("version", "tracker", "mainBranch", "workDir", "docsDir", "docs", "checks", "ci",
+               "pullRequest", "hooks", "rounds", "implement")
+
+# A key that loom.json does not have (unlike null, which is an invalid value).
+MISSING: Any = object()
+
+
+def _has_control(text: str) -> bool:
+    """True if text has a control character (newline, tab, NUL, ...) or a lone surrogate."""
+    return any(unicodedata.category(ch) in ("Cc", "Cs") for ch in text)
+
+
+def _setting_ok(rule: str, value: Any) -> bool:
+    if rule == "bool":
+        return isinstance(value, bool)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return False
+    return value >= (1 if rule == "positive" else 0)
+
+
+def resolve_settings(
+    key: str, raw: Any, schema: Dict[str, Any], defaults: Dict[str, Any]
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Resolve a settings object of SETTINGS_SCHEMA (`rounds`, `implement`, `hooks`).
+
+    A missing field takes its default; an invalid value gets a warning and its
+    default; an unknown field gets a warning and is ignored.
+    """
+    resolved = copy.deepcopy(defaults)
+    warnings: List[str] = []
+    if raw is MISSING:
+        return resolved, warnings
+    if not isinstance(raw, dict):
+        warnings.append(_invalid(key, raw, defaults))
+        return resolved, warnings
+    for name in raw:
+        if name not in schema:
+            warnings.append("%s: unknown key '%s.%s' ignored" % (CONFIG_PATH, key, name))
+    for name, rule in schema.items():
+        if name not in raw:
+            continue
+        path = "%s.%s" % (key, name)
+        if isinstance(rule, dict):
+            resolved[name], w = resolve_settings(path, raw[name], rule, defaults[name])
+            warnings.extend(w)
+        elif _setting_ok(rule, raw[name]):
+            resolved[name] = raw[name]
+        else:
+            warnings.append("%s (%s)" % (_invalid(path, raw[name], defaults[name]), SETTING_RULES[rule]))
+    return resolved, warnings
 
 
 def _invalid(key: str, value: Any, default: Any) -> str:
@@ -270,30 +374,84 @@ def _resolve_checks(checks: Dict[str, Any]) -> List[str]:
         default = DEFAULT_CONFIG["checks"][key]
         warnings.append(_invalid("checks." + key, value, default))
         checks[key] = default
+    for key in CHECK_KEYS:
+        value = checks.get(key)
+        output_filter = piped_filter(value) if isinstance(value, str) else None
+        if output_filter:
+            # The command stays as configured; the hook allows it verbatim (LOOM_SPEC.md 11.3).
+            warnings.append("%s: 'checks.%s' pipes its output into %s; filtered output can hide failures"
+                            % (CONFIG_PATH, key, output_filter))
     return warnings
+
+
+def piped_filter(command: str) -> Optional[str]:
+    """The first OUTPUT_FILTERS command that a pipe in `command` feeds, or None.
+
+    A light shell split: `|` and `|&` start a pipe stage; variable
+    assignments before the stage's command are skipped. Unparsable text
+    (an open quote) gives None.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    after_pipe = False
+    for token in tokens:
+        if token in ("|", "|&"):
+            after_pipe = True
+            continue
+        if not after_pipe:
+            continue
+        if _ASSIGNMENT_RE.match(token):
+            continue
+        name = posixpath.basename(token)
+        if name in OUTPUT_FILTERS:
+            return name
+        after_pipe = False
+    return None
+
+
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
 # Directories that never hold a document of the docs map: git, Claude Code, and loom's working area.
 RESERVED_DIRS = (".git", ".claude", LOOM_DIR)
+# workDir may lie below .loom/ (its default is .loom/tasks).
+WORK_DIR_RESERVED = (".git", ".claude")
 
 
-def _clean_path(value: Any, work_dir: str) -> Optional[str]:
-    """A docs map path, normalized; None if invalid.
+def _clean_path(value: Any, work_dir: Optional[str], reserved_dirs: Tuple[str, ...] = RESERVED_DIRS) -> Optional[str]:
+    """A configured path (docsDir, workDir, a docs map path), normalized; None if invalid.
 
-    Valid: a non-empty relative path, not `.` (the git top level), without a
-    `..` segment, and not at or below workDir, `.git/`, `.claude/`, or `.loom/`.
+    Valid: a non-empty relative path without control characters, not `.`
+    (the git top level), without a `..` segment, and not at or below workDir
+    or a reserved directory (`.git/`, `.claude/`, `.loom/`). The reserved
+    directories and workDir compare case-insensitively (macOS and Windows
+    file systems ignore case). Surrounding whitespace is stripped.
     """
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value.strip() or _has_control(value.strip()):
         return None
     text = value.strip()
-    if text.startswith("/") or os.path.isabs(text) or ".." in text.split("/"):
+    if text.startswith("/") or text.startswith("\\") or os.path.isabs(text) or ".." in text.split("/"):
         return None
     path = posixpath.normpath(text)
-    if path == "." or _is_under(path, posixpath.normpath(work_dir)):
+    if path == ".":
         return None
-    if any(_is_under(path, reserved) for reserved in RESERVED_DIRS):
+    if work_dir is not None and _is_under_ignoring_case(path, posixpath.normpath(work_dir)):
+        return None
+    if any(_is_under_ignoring_case(path, reserved) for reserved in reserved_dirs):
         return None
     return path
+
+
+def _is_under_ignoring_case(path: str, prefix: str) -> bool:
+    return _is_under(path.lower(), prefix.lower())
+
+
+def _is_markdown(path: str) -> bool:
+    return path.lower().endswith(".md")
 
 
 _NUMBER_PLACEHOLDER_RE = re.compile(r"<(N+)>")
@@ -301,7 +459,7 @@ _NUMBER_PLACEHOLDER_RE = re.compile(r"<(N+)>")
 
 def valid_decisions_pattern(value: Any) -> bool:
     """A file name (no `/`) ending in `.md`, with `<slug>` once and one `<N…N>` of 1-6 N."""
-    if not isinstance(value, str) or "/" in value or not value.endswith(".md"):
+    if not isinstance(value, str) or "/" in value or not _is_markdown(value) or _has_control(value):
         return False
     numbers = _NUMBER_PLACEHOLDER_RE.findall(value)
     return value.count("<slug>") == 1 and len(numbers) == 1 and 1 <= len(numbers[0]) <= 6
@@ -329,11 +487,20 @@ def resolve_docs(raw: Any, docs_dir: str, work_dir: str) -> Tuple[Dict[str, Any]
 
     Returns ({dir, vision, overview, decisions: {dir, pattern}, conventions,
     tasks}, warnings). `dir` is docsDir. Paths are relative to the git top
-    level. An invalid value gets a warning and its default.
+    level. An invalid value gets a warning and its default. raw is MISSING
+    when loom.json has no `docs` key (null is not an object). The resolved
+    map, defaults included, is then checked for overlaps.
     """
+    docs, warnings = _resolve_docs_values(raw, docs_dir, work_dir)
+    warnings.extend(docs_overlaps(docs))
+    warnings.extend(docs_in_work_dir(docs, work_dir))
+    return docs, warnings
+
+
+def _resolve_docs_values(raw: Any, docs_dir: str, work_dir: str) -> Tuple[Dict[str, Any], List[str]]:
     docs = default_docs(docs_dir)
     warnings: List[str] = []
-    if raw is None:
+    if raw is MISSING:
         return docs, warnings
     if not isinstance(raw, dict):
         warnings.append("%s: 'docs' is not an object; using the default docs map" % CONFIG_PATH)
@@ -345,15 +512,14 @@ def resolve_docs(raw: Any, docs_dir: str, work_dir: str) -> Tuple[Dict[str, Any]
         if role not in raw:
             continue
         path = _clean_path(raw[role], work_dir)
-        if path is None or (role in DOCS_FILE_ROLES and not path.endswith(".md")):
+        if path is None or (role in DOCS_FILE_ROLES and not _is_markdown(path)):
             warnings.append(_invalid("docs." + role, raw[role], docs[role]))
         else:
             docs[role] = path
-    if "decisions" in raw:
-        decisions = raw["decisions"]
-        if not isinstance(decisions, dict):
-            warnings.append(_invalid("docs.decisions", decisions, docs["decisions"]))
-            return docs, warnings
+    decisions = raw.get("decisions", MISSING)
+    if decisions is not MISSING and not isinstance(decisions, dict):
+        warnings.append(_invalid("docs.decisions", decisions, docs["decisions"]))
+    elif decisions is not MISSING:
         for key in decisions:
             if key not in ("dir", "pattern"):
                 warnings.append("%s: unknown key 'docs.decisions.%s' ignored" % (CONFIG_PATH, key))
@@ -371,11 +537,50 @@ def resolve_docs(raw: Any, docs_dir: str, work_dir: str) -> Tuple[Dict[str, Any]
     return docs, warnings
 
 
+def docs_in_work_dir(docs: Dict[str, Any], work_dir: str) -> List[str]:
+    """Warnings for resolved docs map paths at or below workDir; the values stay.
+
+    A configured path there is already invalid, so only a default built from
+    docsDir can land there (docsDir `work`, workDir `work/tasks`: docs.tasks
+    is `work/tasks`). Its default is the only default, so it stays.
+    """
+    warnings: List[str] = []
+    roles = [("docs." + role, docs[role]) for role in list(DOCS_FILE_ROLES) + list(DOCS_DIR_ROLES)]
+    roles.append(("docs.decisions.dir", docs["decisions"]["dir"]))
+    for key, path in roles:
+        if _is_under_ignoring_case(path, posixpath.normpath(work_dir)):
+            warnings.append("%s: '%s' (%s) is at or below workDir (%s), where loom ignores changes; "
+                            "set '%s' or docsDir to a path outside workDir" % (CONFIG_PATH, key, path, work_dir, key))
+    return warnings
+
+
+def docs_overlaps(docs: Dict[str, Any]) -> List[str]:
+    """Warnings for docs map roles that collide (LOOM_SPEC.md 19.1); the values stay.
+
+    vision, overview, and conventions may share one file. docs.tasks and
+    docs.decisions.dir must not be at or below each other, and no role file
+    may lie at or below either directory.
+    """
+    warnings: List[str] = []
+    dirs = (("docs.tasks", docs["tasks"]), ("docs.decisions.dir", docs["decisions"]["dir"]))
+    (tasks_key, tasks), (decisions_key, decisions) = dirs
+    if _is_under_ignoring_case(tasks, decisions) or _is_under_ignoring_case(decisions, tasks):
+        warnings.append("%s: '%s' (%s) and '%s' (%s) overlap; task summaries and decision records would mix"
+                        % (CONFIG_PATH, tasks_key, tasks, decisions_key, decisions))
+    for role in DOCS_FILE_ROLES:
+        for dir_key, directory in dirs:
+            if _is_under_ignoring_case(docs[role], directory):
+                warnings.append("%s: 'docs.%s' (%s) is at or below '%s' (%s); keep role files outside the "
+                                "task summary and decision directories"
+                                % (CONFIG_PATH, role, docs[role], dir_key, directory))
+    return warnings
+
+
 def resolve_ci(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
     """Resolve loom.json `ci`: `requiredCheck` is the CI check that runs checks.check."""
     ci = copy.deepcopy(DEFAULT_CI)
     warnings: List[str] = []
-    if raw is None:
+    if raw is MISSING:
         return ci, warnings
     if not isinstance(raw, dict):
         warnings.append(_invalid("ci", raw, ci))
@@ -385,7 +590,7 @@ def resolve_ci(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
             warnings.append("%s: unknown key 'ci.%s' ignored" % (CONFIG_PATH, key))
     if "requiredCheck" in raw:
         value = raw["requiredCheck"]
-        if isinstance(value, str) and value.strip():
+        if isinstance(value, str) and value.strip() and not _has_control(value.strip()):
             ci["requiredCheck"] = value.strip()
         else:
             warnings.append(_invalid("ci.requiredCheck", value, DEFAULT_CI["requiredCheck"]))
@@ -402,7 +607,7 @@ def resolve_pull_request(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
     """
     pull_request = copy.deepcopy(DEFAULT_PULL_REQUEST)
     warnings: List[str] = []
-    if raw is None:
+    if raw is MISSING:
         return pull_request, warnings
     if not isinstance(raw, dict):
         warnings.append(_invalid("pullRequest", raw, pull_request))
@@ -418,7 +623,7 @@ def resolve_pull_request(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
         return pull_request, warnings
     for item in sections:
         heading = item.strip() if isinstance(item, str) else None
-        if heading is None or not _REQUIRED_SECTION_RE.match(heading):
+        if heading is None or not _REQUIRED_SECTION_RE.match(heading) or _has_control(heading):
             warnings.append("%s: invalid item %s in 'pullRequest.requiredSections' dropped (a heading "
                             "`## <text>` or `### <text>`)" % (CONFIG_PATH, json.dumps(item, ensure_ascii=False)))
         elif heading in pull_request["requiredSections"]:
@@ -474,6 +679,34 @@ def current_branch(cwd: str) -> Optional[str]:
     return git_out(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd) or None
 
 
+def rebase_branch(cwd: str) -> Optional[str]:
+    """The branch that a stopped `git rebase` rewrites, or None without a rebase.
+
+    Reads `head-name` of rebase-merge/ (merge backend) or rebase-apply/
+    (apply backend) in the git directory of this worktree.
+    """
+    out = git_out(["rev-parse", "--git-path", "rebase-merge/head-name",
+                   "--git-path", "rebase-apply/head-name"], cwd)
+    for line in (out or "").splitlines():
+        text = read_text(os.path.join(cwd, line.strip()))
+        if text is None:
+            continue
+        name = text.strip()
+        if name.startswith("refs/heads/"):
+            return name[len("refs/heads/"):] or None
+    return None
+
+
+def task_branch(cwd: str) -> Tuple[Optional[str], bool]:
+    """(branch, rebase in progress). During a rebase HEAD is detached, and the
+    branch is the one being rebased; a plain detached HEAD gives (None, False)."""
+    branch = current_branch(cwd)
+    if branch:
+        return branch, False
+    rebasing = rebase_branch(cwd)
+    return (rebasing, True) if rebasing else (None, False)
+
+
 # ---------------------------------------------------------------------------
 # Markdown parsing
 # ---------------------------------------------------------------------------
@@ -488,6 +721,8 @@ def _strip_inline_comment(value: str) -> str:
         elif ch in "\"'":
             quote = ch
         elif ch == "#" and (i == 0 or value[i - 1] in " \t"):
+            if i == 0 and value[1:2].isdigit() and value[1:2].isascii():
+                continue  # `pr: #57`: a number written the way skills write PR numbers
             return value[:i].rstrip()
     return value
 
@@ -748,12 +983,17 @@ def implementation_progress(
     warnings: List[str] = []
     log = parse_log(log_text) if log_text else {}
     checked: Dict[int, bool] = {}
+    # The plan's Phase Overview could not be read reliably: no checkboxes, or
+    # an unclosed code fence (the rest of the plan is ignored). Skills test
+    # this flag, not the warning texts.
+    plan_parse_error = False
     if mode == "oneshot":
         numbers = {1}
     else:
         overview = parse_phase_overview(plan_body) if plan_body is not None else []
         if plan_body is not None and not overview:
             warnings.append("%s has no Phase Overview checkboxes" % PLAN_FILE)
+        plan_parse_error = plan_body is not None and (not overview or has_unclosed_fence(plan_body))
         for number, is_checked in overview:
             checked[number] = is_checked
         numbers = set(checked)
@@ -784,6 +1024,7 @@ def implementation_progress(
         "inProgress": in_progress,
         "blocked": blocked,
         "phases": phases,
+        "planParseError": plan_parse_error,
     }, warnings
 
 
@@ -834,11 +1075,25 @@ def read_text(path: str) -> Optional[str]:
         return None
 
 
+_NUMBER_RE = re.compile(r"#?([0-9]+)")
+
+
+def normalize_mode(raw: Any) -> Any:
+    """The ticket `mode`: case and surrounding whitespace do not matter (`Quick` is quick).
+
+    Another value is returned unchanged; callers treat it as invalid.
+    """
+    if isinstance(raw, str) and raw.strip().lower() in MODES:
+        return raw.strip().lower()
+    return raw
+
+
 def _to_int(value: Any) -> Optional[int]:
+    """`57` or `#57` as an int; None for anything else (only ASCII digits count)."""
     if value is None:
         return None
-    text = str(value).strip().lstrip("#")
-    return int(text) if text.isdigit() else None
+    m = _NUMBER_RE.fullmatch(str(value).strip())
+    return int(m.group(1)) if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -964,34 +1219,73 @@ _FAIL_STATES = {"FAILURE", "ERROR"}
 _PENDING_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 
 
+def _is_status_context(item: Dict[str, Any]) -> bool:
+    return item.get("__typename") == "StatusContext" or ("state" in item and "conclusion" not in item)
+
+
+def check_item_state(item: Any) -> Optional[str]:
+    """One statusCheckRollup entry as passing | failing | pending; None if not an object."""
+    if not isinstance(item, dict):
+        return None
+    if _is_status_context(item):
+        state = str(item.get("state") or "").upper()
+        if state in _FAIL_STATES:
+            return "failing"
+        if state in _PENDING_STATES or not state:
+            return "pending"
+        return "passing"
+    status = str(item.get("status") or "").upper()
+    conclusion = str(item.get("conclusion") or "").upper()
+    if status and status != "COMPLETED":
+        return "pending"
+    if conclusion in _FAIL_CONCLUSIONS:
+        return "failing"
+    if not conclusion:
+        return "pending"
+    return "passing"
+
+
+def check_item_name(item: Any) -> Optional[str]:
+    """The check's name as GitHub shows it: `name` of a check run, `context` of a status."""
+    if not isinstance(item, dict):
+        return None
+    value = item.get("context") if _is_status_context(item) else item.get("name")
+    return value if isinstance(value, str) and value else None
+
+
 def summarize_checks(rollup: Any) -> str:
     """Reduce gh statusCheckRollup to passing | failing | pending | none."""
     if not isinstance(rollup, list) or not rollup:
         return "none"
-    failing = pending = False
-    for item in rollup:
-        if not isinstance(item, dict):
-            continue
-        if item.get("__typename") == "StatusContext" or ("state" in item and "conclusion" not in item):
-            state = str(item.get("state") or "").upper()
-            if state in _FAIL_STATES:
-                failing = True
-            elif state in _PENDING_STATES or not state:
-                pending = True
-            continue
-        status = str(item.get("status") or "").upper()
-        conclusion = str(item.get("conclusion") or "").upper()
-        if status and status != "COMPLETED":
-            pending = True
-        elif conclusion in _FAIL_CONCLUSIONS:
-            failing = True
-        elif not conclusion:
-            pending = True
-    if failing:
+    states = set(check_item_state(item) for item in rollup)
+    if "failing" in states:
         return "failing"
-    if pending:
+    if "pending" in states:
         return "pending"
     return "passing"
+
+
+def checks_by_name(rollup: Any) -> Dict[str, str]:
+    """{check name: state} of the latest entry per name (a rerun adds an entry).
+
+    Latest: the greatest `startedAt` (ISO 8601 compares as text), then the
+    later position in the list.
+    """
+    latest: Dict[str, Tuple[str, int, str]] = {}
+    for index, item in enumerate(rollup if isinstance(rollup, list) else []):
+        name, state = check_item_name(item), check_item_state(item)
+        if name is None or state is None:
+            continue
+        started = item.get("startedAt") if isinstance(item.get("startedAt"), str) else ""
+        key = (started, index, state)
+        if name not in latest or key[:2] >= latest[name][:2]:
+            latest[name] = key
+    return {name: key[2] for name, key in latest.items()}
+
+
+def required_check_state(rollup: Any, name: str) -> str:
+    """State of the check named ci.requiredCheck: passing | failing | pending | missing."""
+    return checks_by_name(rollup).get(name, "missing")
 
 
 def behind_main(top: str, cfg: Dict[str, Any], fetch: bool = True) -> Tuple[Optional[int], List[str]]:
@@ -1027,15 +1321,27 @@ def fetch_pr(top: str, cfg: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], L
         data = json.loads(out)
     except ValueError:
         return None, ["gh pr view returned invalid JSON"]
+    if not isinstance(data, dict):
+        return None, ["gh pr view returned no JSON object; PR state unknown"]
     behind, warnings = behind_main(top, cfg)
+    rollup = data.get("statusCheckRollup")
+    required_name = (cfg.get("ci") or DEFAULT_CI)["requiredCheck"]
+    required = required_check_state(rollup, required_name)
     pr = {
         "number": data.get("number"),
         "state": data.get("state"),
         "reviewDecision": data.get("reviewDecision") or None,
-        "checks": summarize_checks(data.get("statusCheckRollup")),
+        "checks": summarize_checks(rollup),
+        "requiredCheck": required,
         "mergeStateStatus": data.get("mergeStateStatus"),
         "behindMain": behind,
     }
+    if required != "missing":
+        others = sorted(name for name, state in checks_by_name(rollup).items()
+                        if state == "failing" and name != required_name)
+        if others:
+            warnings.append("PR #%s has failing checks besides the required check '%s': %s"
+                            % (pr["number"], required_name, ", ".join(others)))
     return pr, warnings
 
 
@@ -1070,7 +1376,7 @@ def task_phase(
     """
     impl = impl or {}
     phases = impl.get("phases") or []
-    if impl.get("inProgress"):
+    if impl.get("inProgress") is not None:
         return "implement", impl["inProgress"]
     blocked = impl.get("blocked")
     not_done = [p.get("number") for p in phases if p.get("status") != "done"]
@@ -1117,20 +1423,20 @@ def event_context(cwd: str) -> Optional[Dict[str, Any]]:
     cfg, _ = load_config(top)
     if cfg is None:
         return None
-    branch = current_branch(top)
+    branch, _ = task_branch(top)
     m = BRANCH_RE.match(branch or "")
     if not m or branch == cfg["mainBranch"]:
         return None
     task_dir, archived, _ = find_task_dir(work_dir_abs(top, cfg), int(m.group(2)), m.group(3))
     if not task_dir or archived:
         return None
-    mode = parse_frontmatter(read_text(os.path.join(task_dir, TICKET_FILE)) or "").get("mode")
+    mode = normalize_mode(parse_frontmatter(read_text(os.path.join(task_dir, TICKET_FILE)) or "").get("mode"))
     artifacts = []
     for name, phase in ARTIFACT_FILES:
         text = read_text(os.path.join(task_dir, name))
         if text is not None:
-            fm = parse_frontmatter(text)
-            artifacts.append({"phase": fm.get("phase") or phase, "status": fm.get("status")})
+            status, _ = artifact_status(name, parse_frontmatter(text).get("status"))
+            artifacts.append({"phase": phase, "status": status})
     plan_text = read_text(os.path.join(task_dir, PLAN_FILE))
     plan_body = split_frontmatter(plan_text)[1] if plan_text is not None else None
     impl, _ = implementation_progress(mode, plan_body, read_text(os.path.join(task_dir, LOG_FILE)))
@@ -1234,7 +1540,8 @@ def events_metrics(events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     for run in runs.values():
         for segment in run["segments"]:
             value = segment[-1].get("duration_s") if segment else None
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+            # NaN fails both comparisons; Infinity and absurd values fail the upper bound.
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= MAX_SEGMENT_SECONDS:
                 seconds += value
     parts = ["%s (%s)" % (
         _plural(len(runs), "subagent run", "subagent runs"),
@@ -1275,7 +1582,30 @@ def task_metrics(task_dir: str) -> Optional[Dict[str, Any]]:
 UNCLOSED_FENCE_WARNING = "%s has an unclosed code fence; the rest of the file is ignored"
 
 
-def build_artifacts(top: str, cfg: Dict[str, Any], task_dir: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+def artifact_status(name: str, raw: Any) -> Tuple[Optional[str], List[str]]:
+    """Normalize an artifact's frontmatter `status` (LOOM_SPEC.md 13.1).
+
+    Case and surrounding whitespace do not matter (`Approved` is approved).
+    A missing status is None. Any other value gets a warning and counts as
+    in-review, so no route reruns the phase and overwrites the artifact.
+    """
+    if raw is None:
+        return None, []
+    text = raw.strip().lower() if isinstance(raw, str) else ""
+    if text in ARTIFACT_STATUSES:
+        return text, []
+    return "in-review", ["%s has an unknown status %s (allowed: %s); treated as in-review" % (
+        name, json.dumps(raw, ensure_ascii=False), ", ".join(ARTIFACT_STATUSES))]
+
+
+def build_artifacts(
+    top: str, cfg: Dict[str, Any], task_dir: str, stale_check: bool = True
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Artifacts 01-04 that exist. The phase comes from the file name.
+
+    stale_check=False skips the stale research check (`stale` is false
+    without a warning): the statusline does not show it.
+    """
     artifacts: List[Dict[str, Any]] = []
     warnings: List[str] = []
     for name, phase in ARTIFACT_FILES:
@@ -1283,21 +1613,29 @@ def build_artifacts(top: str, cfg: Dict[str, Any], task_dir: str) -> Tuple[List[
         if text is None:
             continue
         fm, body = split_frontmatter(text)
-        status = fm.get("status")
-        if not status:
+        status, w = artifact_status(name, fm.get("status"))
+        warnings.extend(w)
+        if status is None:
             warnings.append("%s has no status in its frontmatter" % name)
+        declared = fm.get("phase")
+        if declared is not None and (not isinstance(declared, str) or declared.strip().lower() != phase):
+            warnings.append("%s has phase %s in its frontmatter; the file name says %s, and the file name wins"
+                            % (name, json.dumps(declared, ensure_ascii=False), phase))
         if has_unclosed_fence(body):
             warnings.append(UNCLOSED_FENCE_WARNING % name)
         item: Dict[str, Any] = {
             "file": name,
-            "phase": fm.get("phase") or phase,
-            "status": status or None,
+            "phase": phase,
+            "status": status,
             "openQuestions": count_open_questions(body),
         }
         if phase in ("design", "plan"):
             item["acceptedByDefault"] = count_accepted_by_default(body)
         if phase == "research":
-            stale, files, w = stale_research(top, cfg, fm.get("git_commit"), body)
+            if stale_check:
+                stale, files, w = stale_research(top, cfg, fm.get("git_commit"), body)
+            else:
+                stale, files, w = False, [], []
             item["stale"] = stale
             if files:
                 item["staleFiles"] = files
@@ -1306,8 +1644,12 @@ def build_artifacts(top: str, cfg: Dict[str, Any], task_dir: str) -> Tuple[List[
     return artifacts, warnings
 
 
-def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
-    """Compute the task state for cwd, or None when loom does not apply."""
+def compute_state(cwd: str, with_pr: bool = False, for_line: bool = False) -> Optional[Dict[str, Any]]:
+    """Compute the task state for cwd, or None when loom does not apply.
+
+    for_line: the statusline (`--line`) needs neither the stale research
+    check nor workingTreeDocsOnly, so both are skipped.
+    """
     top = find_toplevel(cwd)
     if not top:
         return None
@@ -1315,17 +1657,25 @@ def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
     if cfg is None:
         return None
     main_branch = cfg["mainBranch"]
-    branch = current_branch(top)
+    branch, rebasing = task_branch(top)
+    if rebasing:
+        warnings.append("a rebase of %s is in progress (HEAD is detached); continue it with "
+                        "`git rebase --continue` or abort it with `git rebase --abort`" % branch)
     state: Dict[str, Any] = {
         "today": datetime.date.today().isoformat(),
         "branch": branch,
+        "rebaseInProgress": rebasing,
         "mainBranch": main_branch,
         "onMain": branch == main_branch,
         # Resolved configuration (LOOM_SPEC.md 19.1): skills read these, never loom.json.
+        "workDir": cfg["workDir"],
         "docs": cfg["docs"],
         "checks": {key: cfg["checks"].get(key) for key in CHECK_KEYS},
         "ci": cfg["ci"],
         "pullRequest": cfg["pullRequest"],
+        "rounds": cfg["rounds"],
+        "implement": cfg["implement"],
+        "hooks": cfg["hooks"],
         "task": None,
         "artifacts": [],
         "implementation": None,
@@ -1338,7 +1688,7 @@ def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
     tree, w = working_tree_status(top, cfg)
     state["workingTree"] = tree
     warnings.extend(w)
-    if tree == "dirty":
+    if tree == "dirty" and not for_line:
         # Dirty only in docs paths: below docsDir or at or below a docs map path
         # (an interrupted describe-pr writes docs before its commit).
         docs_tree, _ = working_tree_status(top, cfg, extra_ignore=(LOOM_DIR,) + tuple(docs_change_paths(cfg)))
@@ -1361,10 +1711,16 @@ def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
                 if size not in SIZES:
                     warnings.append("%s has an invalid size (got %r)" % (TICKET_FILE, ticket.get("size")))
                     size = None
-            mode = ticket.get("mode")
+            mode = normalize_mode(ticket.get("mode"))
             if mode not in MODES:
                 warnings.append("%s has no valid mode (got %r)" % (TICKET_FILE, mode))
                 mode = mode or None
+            pr_number = _to_int(ticket.get("pr"))
+            if pr_number is not None and pr_number < 1:
+                pr_number = None  # PR numbers start at 1
+            if pr_number is None and ticket.get("pr") is not None:
+                warnings.append("%s has an invalid pr %s (a PR number such as 57); ignored"
+                                % (TICKET_FILE, json.dumps(ticket.get("pr"), ensure_ascii=False)))
             state["task"] = {
                 "number": number,
                 "slug": dirname[len("%d-" % number):],
@@ -1373,10 +1729,10 @@ def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
                 "size": size,
                 "archived": archived,
                 "url": ticket.get("url"),
-                "pr": _to_int(ticket.get("pr")),
+                "pr": pr_number,
                 "metrics": task_metrics(task_dir),
             }
-            artifacts, w = build_artifacts(top, cfg, task_dir)
+            artifacts, w = build_artifacts(top, cfg, task_dir, stale_check=not for_line)
             state["artifacts"] = artifacts
             warnings.extend(w)
             plan_text = read_text(os.path.join(task_dir, PLAN_FILE))
@@ -1393,6 +1749,7 @@ def compute_state(cwd: str, with_pr: bool = False) -> Optional[Dict[str, Any]]:
         state["pr"] = pr
         warnings.extend(w)
 
+    warnings.extend(routing_warnings(state))
     state["next"] = decide_next(state)
     return state
 
@@ -1420,7 +1777,9 @@ def _phase_notes(arts: Dict[str, Dict[str, Any]], mode: str) -> str:
     return "".join("; note: %s" % n for n in notes)
 
 
-def _route_pr(pr: Dict[str, Any]) -> Optional[Dict[str, str]]:
+def _route_pr(pr: Dict[str, Any], required_name: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """PR routing (LOOM_SPEC.md 6.2). The required check (ci.requiredCheck),
+    when the PR reports it, decides instead of the overall checks."""
     number = pr.get("number")
     label = "PR #%s" % number if number is not None else "PR"
     state = str(pr.get("state") or "").upper()
@@ -1428,8 +1787,13 @@ def _route_pr(pr: Dict[str, Any]) -> Optional[Dict[str, str]]:
         return _next("/loom:finish-task", "%s is merged; /loom:finish-task completes the cleanup" % label)
     if state != "OPEN":
         return None
-    checks = pr.get("checks")
+    required = pr.get("requiredCheck")
+    by_required = required in ("passing", "failing", "pending")
+    checks = required if by_required else pr.get("checks")
+    check_label = "required check '%s'" % required_name if required_name else "the required check"
     if checks == "failing":
+        if by_required:
+            return _next("/loom:iterate", "%s: %s is failing" % (label, check_label))
         return _next("/loom:iterate", "%s has failing checks" % label)
     if str(pr.get("reviewDecision") or "").upper() == "CHANGES_REQUESTED":
         return _next("/loom:iterate", "%s has requested changes" % label)
@@ -1437,17 +1801,113 @@ def _route_pr(pr: Dict[str, Any]) -> Optional[Dict[str, str]]:
     if (isinstance(behind, int) and behind > 0) or str(pr.get("mergeStateStatus") or "").upper() == "BEHIND":
         return _next("/loom:iterate rebase", "%s branch is behind the main branch" % label)
     if checks == "pending":
+        if by_required:
+            return _next("/loom:finish-task", "%s: %s is pending; /loom:finish-task watches it" % (label, check_label))
         return _next("/loom:finish-task", "%s checks are pending; /loom:finish-task watches them" % label)
     if checks == "none":
         return _next("/loom:finish-task", "%s reports no checks and no requested changes" % label)
+    if by_required:
+        return _next("/loom:finish-task", "%s: %s passed and no changes are requested" % (label, check_label))
     return _next("/loom:finish-task", "%s checks are green and no changes are requested" % label)
+
+
+def _impl_started(impl: Dict[str, Any]) -> bool:
+    """Implementation started: a log.md entry or a ticked plan phase (LOOM_SPEC.md 9.12 row 4)."""
+    return bool(
+        impl.get("blocked") or impl.get("inProgress") is not None or (impl.get("done") or 0) > 0
+        or any(p.get("status") != "pending" for p in impl.get("phases") or [])
+    )
+
+
+def _plan_artifact(artifacts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    return next((a for a in artifacts if a.get("phase") == "plan"), None)
+
+
+def plan_gate_holds(task: Dict[str, Any], artifacts: List[Dict[str, Any]]) -> bool:
+    """The implement gate (LOOM_SPEC.md 13.1): oneshot, or quick/full with 04-plan.md approved.
+
+    An invalid mode never holds the gate.
+
+    decide_next never returns /loom:implement while it does not hold.
+    """
+    mode = task.get("mode")
+    if mode == "oneshot":
+        return True
+    plan = _plan_artifact(artifacts)
+    return mode in MODES and plan is not None and plan.get("status") == "approved"
+
+
+def _all_done(impl: Dict[str, Any]) -> bool:
+    total = impl.get("total") or 0
+    return total > 0 and (impl.get("done") or 0) >= total
+
+
+def _plan_reopened(task: Dict[str, Any], artifacts: List[Dict[str, Any]], impl: Dict[str, Any]) -> bool:
+    """A plan change after implementation started (row 4): the plan exists and is not approved."""
+    plan = _plan_artifact(artifacts)
+    return (
+        _impl_started(impl)
+        and task.get("mode") != "oneshot"
+        and plan is not None
+        and plan.get("status") != "approved"
+    )
+
+
+UNCOMMITTED_BEFORE_PLAN_WARNING = (
+    "working tree has uncommitted changes; they are not part of research, design, or plan "
+    "(commit, stash, or discard them before /loom:implement)"
+)
+
+
+def routing_warnings(state: Dict[str, Any]) -> List[str]:
+    """Warnings that explain a route of decide_next. Pure function.
+
+    Before the plan gate holds (oneshot, or 04-plan.md approved), a dirty
+    tree or a phase in progress does not route to implement (row 5).
+    """
+    task = state.get("task")
+    if state.get("onMain") or not task or task.get("archived"):
+        return []
+    if task.get("mode") not in MODES:
+        # An invalid mode routes to the mode change; the plan is not the reason.
+        return []
+    impl = state.get("implementation") or {}
+    artifacts = state.get("artifacts") or []
+    if plan_gate_holds(task, artifacts) or _plan_reopened(task, artifacts, impl):
+        return []
+    warnings: List[str] = []
+    if impl.get("inProgress") is not None:
+        warnings.append("%s has implementation phase %s in progress, but %s is not approved; "
+                        "implementation waits for the plan gate" % (LOG_FILE, impl["inProgress"], PLAN_FILE))
+    if state.get("workingTree") == "dirty" and not _all_done(impl):
+        warnings.append(UNCOMMITTED_BEFORE_PLAN_WARNING)
+    return warnings
+
+
+# Commands that need a known working tree: never routed while git status failed.
+TREE_SENSITIVE_COMMANDS = ("/loom:describe-pr", "/loom:finish-task")
 
 
 def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
     """Return the next step for a state dict. First matching row wins.
 
     Pure function: it reads only `state` (the loom-state JSON without `next`).
+    Invariants: /loom:implement only while the plan gate holds (oneshot, or
+    04-plan.md approved); /loom:describe-pr and /loom:finish-task only with a
+    known working tree (`workingTree` clean or dirty, not null after a failed
+    git status).
     """
+    result = _decide(state)
+    if result["command"] in TREE_SENSITIVE_COMMANDS and state.get("workingTree") not in ("clean", "dirty"):
+        return _next(
+            "/loom:iterate <feedback>",
+            "git status failed, so uncommitted changes are unknown; fix the git error in the warnings, "
+            "then run /loom:next again (%s needs a known working tree)" % result["command"],
+        )
+    return result
+
+
+def _decide(state: Dict[str, Any]) -> Dict[str, str]:
     branch = state.get("branch")
     task = state.get("task")
 
@@ -1475,30 +1935,35 @@ def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
             "task #%s is archived; /loom:start-task #%s offers to restore it" % (number, number),
         )
 
+    # A stopped rebase of the task branch (HEAD detached): nothing else can
+    # run until it is continued or aborted; /loom:iterate rebase handles it.
+    if state.get("rebaseInProgress"):
+        return _next(
+            "/loom:iterate rebase",
+            "a rebase of %s is in progress and has to be continued or aborted" % (branch or "the task branch"),
+        )
+
+    # An invalid mode: every later row depends on the mode (gates, phases,
+    # the plan gate), so nothing else runs until the mode is set again.
+    if task.get("mode") not in MODES:
+        return _next("/loom:iterate mode <oneshot|quick|full>",
+                     "%s has no valid mode; set it with a mode change" % TICKET_FILE)
+
     impl = state.get("implementation") or {}
     artifacts = state.get("artifacts") or []
 
     # The plan gate after implementation started: a plan changed by
     # /loom:iterate (draft while the edit runs, then in-review) must be
     # finished and approved again before anything else happens.
-    started = bool(
-        impl.get("blocked") or impl.get("inProgress") or (impl.get("done") or 0) > 0
-        or any(p.get("status") != "pending" for p in impl.get("phases") or [])
-    )
-    plan = next((a for a in artifacts if a.get("phase") == "plan"), None)
-    plan_reopened = (
-        started
-        and task.get("mode") != "oneshot"
-        and plan is not None
-        and plan.get("status") != "approved"
-    )
+    plan = _plan_artifact(artifacts)
+    plan_reopened = _plan_reopened(task, artifacts, impl)
+    # The implement gate: /loom:implement is never the answer without it.
+    gate = plan_gate_holds(task, artifacts)
 
-    # Row 3: a blocked artifact, or a blocked implementation phase while the
-    # plan gate holds (plan approved, no plan, or oneshot). /loom:iterate
-    # handles it, also when its unfinished fix leaves the tree dirty.
-    for art in artifacts:
-        if art.get("status") == "blocked":
-            return _next("/loom:iterate <fix>", "%s is blocked" % art.get("file"))
+    # Row 3: a blocked implementation phase while the plan is not reopened
+    # (plan approved, no plan, or oneshot). /loom:iterate handles it, also
+    # when its unfinished fix leaves the tree dirty. (Artifacts have no
+    # `blocked` status: artifact_status() reports it as an unknown status.)
     blocked = impl.get("blocked")
     if blocked and not plan_reopened:
         reason = blocked.get("reason") or "no reason recorded"
@@ -1520,44 +1985,49 @@ def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
         if plan.get("status") == "draft":
             return _next("/loom:iterate <feedback>", prefix + "04-plan.md edit not finished (draft)")
         if open_q > 0:
-            return _next("/loom:iterate <answers>", prefix + "04-plan.md has %d open questions" % open_q)
+            return _next("/loom:iterate <answers>", prefix + "04-plan.md has %s"
+                         % _plural(open_q, "open question", "open questions"))
         return _next(
             "/loom:iterate approve",
             prefix + "04-plan.md is %s and must be approved first" % (plan.get("status") or "without status"),
         )
 
     # Row 5: an implementation phase in progress, or a dirty working tree
-    # while implementation phases are left (resume flow). With all phases
-    # done, a dirty tree is not implement's work: changes only below docsDir
-    # are an interrupted describe-pr (fall through, normally to row 9), and
-    # code changes go to /loom:iterate.
+    # while implementation phases are left (resume flow), only while the
+    # plan gate holds. Before it holds (no approved plan), the changes are
+    # not implementation work: fall through to the later rows; compute_state
+    # adds a warning (routing_warnings). With all phases done, a dirty tree
+    # is not implement's work: changes only below docsDir are an interrupted
+    # describe-pr (fall through, normally to row 9), and code changes go to
+    # /loom:iterate.
     total = impl.get("total") or 0
     done = impl.get("done") or 0
-    all_done = total > 0 and done >= total
-    if impl.get("inProgress"):
+    all_done = _all_done(impl)
+    if impl.get("inProgress") is not None and gate:
         return _next(
             "/loom:implement",
             "implementation phase %s is in progress (resume flow)" % impl["inProgress"],
         )
     if state.get("workingTree") == "dirty":
         if not all_done:
-            return _next("/loom:implement", "working tree has uncommitted changes (resume flow)")
-        pr_state = state.get("pr")
-        if isinstance(pr_state, dict) and str(pr_state.get("state") or "").upper() == "MERGED":
-            # The work is merged: /loom:finish-task cleans up (it offers a stash first).
-            return _route_pr(pr_state)
-        if not state.get("workingTreeDocsOnly"):
-            return _next(
-                "/loom:iterate <feedback>",
-                "uncommitted code changes after all %d implementation phases are done; "
-                "/loom:iterate keeps them as a fix or stashes or discards them" % total,
-            )
+            if gate:
+                return _next("/loom:implement", "working tree has uncommitted changes (resume flow)")
+        else:
+            pr_state = state.get("pr")
+            if isinstance(pr_state, dict) and str(pr_state.get("state") or "").upper() == "MERGED":
+                # The work is merged: /loom:finish-task cleans up (it offers a stash first).
+                return _route_pr(pr_state)
+            if not state.get("workingTreeDocsOnly"):
+                return _next(
+                    "/loom:iterate <feedback>",
+                    "uncommitted code changes after all %d implementation phases are done; "
+                    "/loom:iterate keeps them as a fix or stashes or discards them" % total,
+                )
 
     mode = task.get("mode")
-    valid_mode = mode in MODES
     arts = {a.get("phase"): a for a in artifacts}
-    notes = _phase_notes(arts, mode) if valid_mode else ""
-    gates = [arts[p] for p in GATES_BY_MODE[mode] if p in arts] if valid_mode else []
+    notes = _phase_notes(arts, mode)
+    gates = [arts[p] for p in GATES_BY_MODE[mode] if p in arts]
 
     # Gate work beats PR routing and "all phases done": a design or plan that
     # went back to review (e.g. a plan change after the PR) is never skipped.
@@ -1565,55 +2035,56 @@ def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
     # and a draft gate before implementation is unfinished, so row 11 reruns
     # its phase (after implementation started, row 4 handles a draft plan).
     # Row 6: a gate artifact has open questions.
-    for gate in gates:
-        if gate.get("status") == "in-review" and (gate.get("openQuestions") or 0) > 0:
+    for item in gates:
+        if item.get("status") == "in-review" and (item.get("openQuestions") or 0) > 0:
             return _next(
                 "/loom:iterate <answers>",
-                "%s has %d open questions%s" % (gate.get("phase"), gate["openQuestions"], notes),
+                "%s has %s%s" % (item.get("phase"), _plural(item["openQuestions"], "open question",
+                                                            "open questions"), notes),
             )
 
     # Row 7: a gate artifact is in review with no open questions.
-    for gate in gates:
-        if gate.get("status") == "in-review":
+    for item in gates:
+        if item.get("status") == "in-review":
             return _next(
                 "/loom:iterate approve",
-                "%s is in review with no open questions%s" % (gate.get("phase"), notes),
+                "%s is in review with no open questions%s" % (item.get("phase"), notes),
             )
 
-    # Row 8: pull request routing (section 6.2). An open PR with
-    # implementation phases left (a plan change after the PR) goes to
-    # implement first, before every OPEN sub-route; row 4 already holds the
-    # plan gate, so the plan is approved here (or the mode is oneshot).
+    # Row 8: pull request routing (section 6.2). With implementation phases
+    # left and the plan gate (a plan change after the PR), an open PR goes to
+    # implement first, before every OPEN sub-route; so does a PR known only
+    # from the ticket (state not read: no --pr).
     pr = state.get("pr")
-    if isinstance(pr, dict) and str(pr.get("state") or "").upper() == "OPEN" and not all_done:
-        if task.get("mode") == "oneshot" or any(
-            a.get("phase") == "plan" and a.get("status") == "approved" for a in artifacts
-        ):
-            return _next(
-                "/loom:implement",
-                "PR #%s is open and %d of %d implementation phases are done" % (pr.get("number"), done, total),
-            )
+    if isinstance(pr, dict) and str(pr.get("state") or "").upper() == "OPEN" and not all_done and gate:
+        return _next(
+            "/loom:implement",
+            "PR #%s is open and %d of %d implementation phases are done" % (pr.get("number"), done, total),
+        )
     if isinstance(pr, dict):
-        routed = _route_pr(pr)
+        routed = _route_pr(pr, (state.get("ci") or {}).get("requiredCheck"))
         if routed:
             return routed
     elif task.get("pr"):
-        return _next(
-            "/loom:finish-task",
-            "PR #%s exists but its state was not read (loom-state --pr); "
-            "/loom:finish-task checks it before merging" % task["pr"],
-        )
+        if all_done:
+            return _next(
+                "/loom:finish-task",
+                "PR #%s exists but its state was not read (loom-state --pr); "
+                "/loom:finish-task checks it before merging" % task["pr"],
+            )
+        if gate:
+            return _next(
+                "/loom:implement",
+                "PR #%s exists (its state was not read) and %d of %d implementation phases are done"
+                % (task["pr"], done, total),
+            )
 
     # Row 9: all implementation phases done.
     if all_done:
         return _next("/loom:describe-pr", "all %d implementation phases are done" % total)
 
-    if not valid_mode:
-        return _next("/loom:iterate", "%s has no valid mode; set it with a mode change" % TICKET_FILE)
-
     # Row 10: plan approved (or oneshot) and implementation phases left.
-    plan = arts.get("plan")
-    if mode == "oneshot" or (plan and plan.get("status") == "approved"):
+    if gate:
         if total == 0 or done < total:
             if total:
                 reason = "%d of %d implementation phases done" % (done, total)
@@ -1637,7 +2108,11 @@ def decide_next(state: Dict[str, Any]) -> Dict[str, str]:
         else:
             reason = "%s is %s (unfinished)" % (PHASE_FILE[phase], art.get("status") or "without status")
         return _next(PHASE_COMMAND[phase], reason + notes)
-    return _next("/loom:implement", "no missing phase found" + notes)
+    # Unreachable with a valid state: the plan reached here is approved (row
+    # 10) or in review (row 7). Keep the implement gate anyway.
+    if gate:
+        return _next("/loom:implement", "no missing phase found" + notes)
+    return _next("/loom:plan", "%s is not approved and no other route applies%s" % (PLAN_FILE, notes))
 
 
 # ---------------------------------------------------------------------------
@@ -1662,10 +2137,14 @@ def format_line(state: Optional[Dict[str, Any]]) -> str:
         parts.append("impl %d/%d" % (impl.get("done") or 0, impl.get("total") or 0))
         if impl.get("blocked"):
             parts.append("blocked")
-        elif impl.get("inProgress"):
+        elif impl.get("inProgress") is not None:
             parts.append("in progress")
     else:
         artifacts = state.get("artifacts") or []
+        mode = task.get("mode")
+        if mode in MODES:
+            # Only the mode's phases: after a mode change, a leftover design does not show.
+            artifacts = [a for a in artifacts if a.get("phase") in PHASES_BY_MODE[mode]]
         if artifacts:
             latest = artifacts[-1]
             parts.append("%s:%s" % (latest.get("phase"), latest.get("status") or "?"))
@@ -1712,7 +2191,20 @@ def slugify(title: str) -> str:
     return slug or SLUG_FALLBACK
 
 
+def _utf8_output() -> None:
+    """Print UTF-8 (`·`, non-ASCII titles) under any locale; escape what cannot be encoded."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (ValueError, OSError):
+            pass
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    _utf8_output()
     args_in = sys.argv[1:] if argv is None else argv
     if len(args_in) == 2 and args_in[0] == "--slug":
         # Before argparse: a title that starts with `-` would look like an option.
@@ -1740,7 +2232,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.docs:
         sys.stderr.write("loom-state: --docs is not implemented yet (planned for v1.2)\n")
         return 2
-    state = compute_state(cwd, with_pr=args.pr)
+    state = compute_state(cwd, with_pr=args.pr, for_line=args.line)
     if state is None:
         return 0
     if args.line:

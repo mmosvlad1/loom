@@ -45,8 +45,9 @@ Read these files before you ask the user anything. The skill's tool permissions 
 ### Values
 
 - `<current>`: the current branch, `git symbolic-ref --short HEAD` (it works on an empty repository too). Do not take `branch` from the state: the state is empty before `.claude/loom.json` exists.
-- `<main>`: `mainBranch` from `.claude/loom.json` if the file exists. Otherwise the default branch on GitHub: `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`. If that is empty (an empty GitHub repository), `git symbolic-ref --short refs/remotes/origin/HEAD` without the `origin/` prefix. If that fails too, ask the user, and propose `main`.
-- `<workDir>`: `workDir` from `.claude/loom.json`, else the template default.
+- `<main>`: `mainBranch` from the state when the state is not empty (`.claude/loom.json` exists). Otherwise the default branch on GitHub: `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`. If that is empty (an empty GitHub repository), `git symbolic-ref --short refs/remotes/origin/HEAD` without the `origin/` prefix. If that fails too, ask the user, and propose `main`.
+- `<workDir>`: `workDir` from the state when it is not empty, else the `workDir` of `templates/loom.json`.
+- **State after a switch**: the state above was read before any `git switch`. After a switch to the setup branch, run `loom-state --json` again and take the values from that output.
 - **Docs paths**: one path per docs role, from `docs` in the state (the docs map) when `.claude/loom.json` exists. Before the file exists, the state is empty. The template `loom.json` has no `docs` key, so every role then takes its default: the path of its skeleton file relative to `templates/`. Never build a doc path in another way. After step 7 writes `.claude/loom.json`, `loom-state --json` reports the same paths in `docs`.
 - `<n>`: the number of the issue "Set up loom". `<branch>` is `chore/<n>-loom-setup`. `<task dir>` is `<workDir>/<n>-loom-setup`.
 - `<drafts>`: `<workDir>/_drafts`. Write issue bodies and the first commit message there. The work directory is ignored by git, and `loom-state` never takes `_drafts` for a task directory.
@@ -64,7 +65,7 @@ Take the first matching row. Stop rows end in the `final-answer.md` format, with
 | `gh repo view --json nameWithOwner,visibility,defaultBranchRef` fails | Stop: `Result: gh cannot read the repository: <the error>`, `Next: gh auth login, then /loom:setup` |
 | `<current>` matches `chore/<k>-loom-setup` | Re-run on the setup branch: `<n>` = `<k>`. Go to [Resume on the setup branch](#resume-on-the-setup-branch). |
 | `task` is set and not archived | Stop: `Result: task #<task.number> is active on <current>; finish it before setup`, `Next:` from `next.command` |
-| `git branch --list 'chore/*-loom-setup'` lists a branch, or `git branch -r --list 'origin/chore/*-loom-setup'` lists one (a fresh clone has only the remote branch) | An earlier run created it. Several branches: ask which one. Take `<n>` from its name; for a remote-only branch, `git switch chore/<n>-loom-setup` creates the local tracking branch. If `gh pr list --head <that branch> --state merged --json number` lists a PR, the setup is merged (for example in the GitHub UI): stop with `Result: the setup PR of #<n> is merged; the cleanup is left`, `Next: /loom:finish-task #<n>`. Run `git switch <that branch>` and go to [Resume on the setup branch](#resume-on-the-setup-branch). Uncommitted changes go with you (often the files of the stopped run); the resume plan lists them, so the user can keep out what does not belong to setup. Every final message of this run then adds `Warning: uncommitted changes moved to <that branch>: <paths>`. If git refuses the switch, stop as in the dirty-tree row below. |
+| `git branch --list 'chore/*-loom-setup'` lists a branch, or `git branch -r --list 'origin/chore/*-loom-setup'` lists one (a fresh clone has only the remote branch) | An earlier run created it. Several branches: ask which one. Take `<n>` from its name; for a remote-only branch, `git switch chore/<n>-loom-setup` creates the local tracking branch. If `gh pr list --head <that branch> --state merged --json number` lists a PR, the setup is merged (for example in the GitHub UI): stop with `Result: the setup PR of #<n> is merged; the cleanup is left`, `Next: git switch <main>, then git pull --ff-only, then /loom:finish-task #<n>`. Run `git switch <that branch>` and go to [Resume on the setup branch](#resume-on-the-setup-branch). Uncommitted changes go with you (often the files of the stopped run); the resume plan lists them, so the user can keep out what does not belong to setup. Every final message of this run then adds `Warning: uncommitted changes moved to <that branch>: <paths>`. If git refuses the switch, stop as in the dirty-tree row below. |
 | The repository has commits (`git rev-parse --verify --quiet HEAD` succeeds) and `git ls-remote --exit-code --heads origin <main>` fails | Stop: `Result: <main> is not on origin; describe-pr cannot open a PR against it`, `Next: push <main> yourself (git push -u origin <main>), then /loom:setup`. The guard allows only the first push of a one-commit repository, so setup does not push here. |
 | The repository has no commits, and `git ls-remote --exit-code --heads origin <main>` succeeds | Stop: `Result: origin has <main> but this clone has no commits`, `Next: git pull origin <main>, then /loom:setup` |
 | The repository has commits and the working tree is dirty (see Values) | Offer the stash of `git-flow.md` (confirmation), with `<workDir>` in place of `<task dir>`; `git-flow.md` gives the commands. Without "yes", stop: `Result: working tree has uncommitted changes`, `Next: commit or stash the changes, then /loom:setup` |
@@ -94,7 +95,7 @@ Check the marker files at the git top level (the recipes give the details):
 | `go.mod`, `Cargo.toml`, or anything else | no recipe in v1 | below |
 | No source files (a new repository) | ask the user | below |
 
-- **No recipe**: investigate before you ask. Read the README, an existing `Makefile` or `justfile`, the workflows in `.github/workflows/`, and the build files. Propose the four check commands (`lint`, `typecheck`, `test`, `check`) and a CI workflow that runs `check` in one job named `check`, with action versions pinned to exact release tags. Ask the user to confirm or correct them.
+- **No recipe**: investigate before you ask. Read the README, an existing `Makefile` or `justfile`, the workflows in `.github/workflows/`, and the build files. Propose `check`, and those of `lint`, `typecheck`, and `test` that the project really has. A check the project does not have is `null` in `loom.json`; never invent a command for it. Propose a CI workflow that runs `check` in one job named `check`, with action versions pinned to exact release tags, or reuse an existing workflow as the recipes describe. Ask the user to confirm or correct them.
 - **New repository**: ask which stack the project uses: python-uv, node, or another. For python-uv and node, the recipe says how to create the marker files.
 - Monorepos with several stacks are out of scope for v1. If you find several, ask the user which one the checks cover.
 
@@ -104,9 +105,9 @@ Prefer what exists. For each target file, record one state: **missing**, **ident
 
 | Target | What setup writes |
 |---|---|
-| `.claude/loom.json` | `templates/loom.json` with `mainBranch` = `<main>` and `checks` from the recipe. Every other key stays as in the template. If the file exists, keep its values; add only missing keys. |
+| `.claude/loom.json` | `templates/loom.json` with `mainBranch` = `<main>` and `checks` from the recipe. With a kept CI workflow, also `"ci": { "requiredCheck": "<check name>" }` (the recipe's "Reuse an existing workflow"). Every other key stays as in the template. If the file exists, keep its values; add only missing keys. |
 | `Makefile` (python-uv) or `scripts` in `package.json` (node) | The recipe's checks entry point. Reuse existing targets and scripts. |
-| `.github/workflows/ci.yml` | The recipe's CI template with its placeholders filled. Reuse an existing workflow if the user agrees. |
+| `.github/workflows/ci.yml` | The recipe's CI template with its placeholders filled. Reuse an existing workflow if the user agrees; never rename its jobs. |
 | `.claude/settings.json` | `templates/settings.json`, merged (see [Merge settings.json](#merge-settingsjson)). |
 | `.claude/loom-statusline.py` | `templates/loom-statusline.py`, unchanged, if the user wants the status line. |
 | The docs skeleton: one target per docs role (table below) | Only missing files; an existing file is kept as it is. |
@@ -125,7 +126,7 @@ The docs skeleton, by docs role. The paths come from the docs paths (see Values)
 
 Run `git check-ignore -v -- <path>` for every target file. A global or repository ignore rule can hide one (a global `core.excludesFile` that ignores `CLAUDE.md` is common). Name each ignored target and its rule in the plan.
 
-Fill `CLAUDE.md` from the README and the user's notes: the project name, one or two sentences about the project, the check commands, `<main>`, and the docs paths in the doc links. Keep it short; it loads into every session.
+Fill `CLAUDE.md` from the README and the user's notes: the project name, one or two sentences about the project, the check commands, `<main>`, and the docs paths in the doc links. Leave out the line of a `null` check. Keep it short; it loads into every session.
 
 ### Setup issue and labels
 
@@ -154,7 +155,7 @@ Only on `<main>`, never on the setup branch: if every target file is identical a
 
 Show one plan. Then ask for confirmation once. The plan names every command that changes something outside the working tree, exactly as you will run it:
 
-1. **Detected**: the stack, the package manager, `<main>`, and the check commands for `loom.json`.
+1. **Detected**: the stack, the package manager, `<main>`, the check commands for `loom.json` (a missing check as `null`), and the required CI check (`ci.requiredCheck`).
 2. **Empty repository only**: `git branch -m <main>` if `<current>` is not `<main>`, the first commit on `<main>` (only `.gitignore` and `README.md`), then `git push -u origin <main>`. List the other untracked files; they go into the setup commit unless the user excludes them. An excluded file must be moved out of the repository, or the task cannot reach a clean working tree.
 3. **Labels**: the missing labels, each as its `gh label create` command. Optional: the user may skip them. Create labels only after "yes".
 4. **Issue**: `gh issue create` for "Set up loom" (step 5), or the open issue you reuse.
@@ -269,8 +270,8 @@ Next: /clear, then /loom:describe-pr
 
 An earlier run stopped on `<branch>` (for example after failing checks). Continue where it stopped. Never write a second `in-progress` entry after a `done` entry.
 
-1. `<task dir>` is `<workDir>/<n>-loom-setup`. Read `.claude/loom.json` if it exists for `<main>` and `<workDir>`; the docs paths come from `docs` in the state. Compare with `origin/<main>`, not the local `<main>`: a fresh clone may have no local `<main>`. Run `git fetch origin <main>` first.
-   - If `gh pr list --head <branch> --state merged --json number` lists a PR, stop: `Result: the setup PR of #<n> is merged; the cleanup is left`, `Next: /loom:finish-task #<n>`.
+1. `<task dir>` is `<workDir>/<n>-loom-setup`. `<main>`, `<workDir>`, and the docs paths come from the state when `.claude/loom.json` exists (Values). Compare with `origin/<main>`, not the local `<main>`: a fresh clone may have no local `<main>`. Run `git fetch origin <main>` first.
+   - If `gh pr list --head <branch> --state merged --json number` lists a PR, stop: `Result: the setup PR of #<n> is merged; the cleanup is left`, `Next: git switch <main>, then git pull --ff-only, then /loom:finish-task #<n>`.
    - If `gh pr list --head <branch> --state open --json number` lists a PR, stop: `Result: the setup PR is open`, `Next:` from `next.command` (`loom-state` routes the open PR).
 2. `log.md` has `## Phase 1 — done`: the setup commit exists. Write nothing. Go to step 10 (`next.command` is `/loom:describe-pr`).
 3. The setup commit exists (`git log --format=%h --grep='^Phase 1: oneshot' origin/<main>..HEAD` prints a hash), but `log.md` has no `done` entry (also on a fresh clone, where the ignored task directory is missing):

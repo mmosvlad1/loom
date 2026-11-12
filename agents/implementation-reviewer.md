@@ -19,7 +19,14 @@ The prompt gives you one of these references:
 
 The prompt may also include the implementer's report. Use it to understand deviations, but verify every statement against the diff.
 
-The prompt also names the project's conventions document, as resolved by `loom-state`: `Conventions: <path>`.
+The prompt also gives the configuration, as resolved by `loom-state`. Do not read `.claude/loom.json`:
+
+```text
+Conventions: <path of the conventions document>
+Main branch: <name of the main branch>
+```
+
+If the prompt has no `Main branch:` line, run `loom-state --json` and take `mainBranch` from its output.
 
 ## Limits
 
@@ -27,6 +34,7 @@ The prompt also names the project's conventions document, as resolved by `loom-s
 - Use Bash only for these read-only commands:
   - `git status`, `git diff`, `git log`, `git show`, `git ls-files`, `git rev-parse`
   - `ls`
+  - `loom-state --json`, only when the prompt has no `Main branch:` line
 - Do not run any other command. Do not run the checks; the implementer and a hook run them.
 - Run one command per Bash call. Do not run `cd`: your working directory is already the git top level, so give paths instead. Do not chain commands with `&&`, `||`, `;`, or a newline. Add no pipe or subshell. Permission rules match one command, so a chained call needs a permission prompt or is denied.
 - Do not run git commands that change state (`add`, `commit`, `stash`, `checkout`, `switch`, `restore`, `reset`, `clean`).
@@ -67,7 +75,7 @@ In fix mode the implementation phase may already be committed: `iterate` fixes p
 git log --format='%h %s' --grep='^Phase N:' origin/<mainBranch>..HEAD
 ```
 
-`<mainBranch>` comes from `.claude/loom.json` (default `main`). If `origin/<mainBranch>` does not exist, use the local `<mainBranch>..HEAD` instead.
+`<mainBranch>` is the `Main branch:` line of the prompt. If `origin/<mainBranch>` does not exist, use the local `<mainBranch>..HEAD` instead.
 
 - **Phase not committed yet** (a fix attempt inside `implement`): the diff holds the phase and the fix. Review the whole phase against the plan, as for an implementation phase. A fix item that the diff does not resolve goes under Planned but missing.
 - **Phase already committed**: the uncommitted diff holds only the fix. Categorize against the fix items only:

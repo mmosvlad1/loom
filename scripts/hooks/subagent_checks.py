@@ -21,7 +21,16 @@ when the cap is reached.
 The counter is always read: it, not `stop_hook_active`, ends the loop
 (Claude Code's own cap of 8 stop-hook continuations resets on every tool
 call). A counter file older than STALE_SECONDS is left from an interrupted
-run and counts as 0. `stop_hook_active` is only recorded in the file.
+run and counts as 0. `stop_hook_active` is recorded in the file.
+
+When the counter cannot be read or written (permissions, a full disk), the
+check still blocks while `stop_hook_active` is false, and lets the subagent
+stop with a `systemMessage` while it is true: the loop ends after one retry.
+
+A `.claude/loom.json` that exists but cannot be read as a JSON object does
+not block: the hook exits 0 with a `systemMessage` that names the problem.
+With a readable config, loom-state's config warnings are appended to the
+failure text the subagent receives.
 
 Matcher in hooks.json: `^loom:implementer$` (plugin agents report the
 plugin-scoped `agent_type`). The script checks `agent_type` again, so it never
@@ -36,7 +45,7 @@ import os
 import sys
 import tempfile
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,18 +64,21 @@ def counter_path(session_id: str, agent_id: str) -> str:
     return os.path.join(tempfile.gettempdir(), COUNTER_DIR_NAME, key + ".json")
 
 
-def read_failures(path: str) -> int:
-    """Failed attempts so far; 0 for a missing, unreadable, or stale file."""
+def read_failures(path: str) -> Optional[int]:
+    """Failed attempts so far: 0 for a missing or stale file, None when the file cannot be read."""
     try:
         if time.time() - os.path.getmtime(path) > STALE_SECONDS:
             return 0
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        return 0
     except OSError:
-        return 0
+        return None
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            value = json.load(fh).get("failures", 0)
-    except (OSError, ValueError, AttributeError):
-        return 0
+        value = json.loads(raw.decode("utf-8")).get("failures", 0)
+    except (ValueError, AttributeError):
+        return 0  # a damaged file (also not UTF-8): start again
     return value if isinstance(value, int) and value >= 0 else 0
 
 
@@ -106,13 +118,32 @@ def check_command(cfg: Dict[str, Any]) -> Optional[str]:
     return command if isinstance(command, str) and command.strip() else None
 
 
+def config_problem(ls: Any, warnings: List[str]) -> Optional[str]:
+    """The warning about a loom.json that cannot be read as a JSON object, if any."""
+    prefixes = ("cannot read %s" % ls.CONFIG_PATH, "%s is not a JSON object" % ls.CONFIG_PATH)
+    for warning in warnings:
+        if warning.startswith(prefixes):
+            return warning[:-len("; using defaults")] if warning.endswith("; using defaults") else warning
+    return None
+
+
 def main() -> None:
     data = loomhook.read_input()
     if data.get("agent_type") not in AGENT_TYPES:
         return
     ls = loomhook.loom_state()
-    top, cfg = ls.load_repo_config(loomhook.hook_cwd(data))
+    top = ls.find_toplevel(loomhook.hook_cwd(data))
+    if not top:
+        return
+    cfg, warnings = ls.load_config(top)
     if cfg is None:
+        return
+    problem = config_problem(ls, warnings)
+    if problem:
+        loomhook.system_message(
+            "loom: the implementer checks did not run: %s. Fix %s; /loom:implement still runs the checks "
+            "itself before it commits." % (problem, ls.CONFIG_PATH)
+        )
         return
     command = check_command(cfg)
     if command is None:
@@ -126,22 +157,41 @@ def main() -> None:
         remove(path)
         return
 
-    failures += 1
     what = "timed out after %d seconds" % CHECK_TIMEOUT if code is None else "failed (exit %d)" % code
-    if failures >= limit:
-        remove(path)
+    counter_error = None if failures is not None else "cannot read %s" % path
+    if failures is not None:
+        failures += 1
+        if failures >= limit:
+            remove(path)
+            loomhook.system_message(
+                "loom: `%s` %s for the implementer %d times (hooks.maxCheckAttempts = %d). "
+                "The implementer may stop now; /loom:implement records the implementation phase as blocked."
+                % (command, what, failures, limit)
+            )
+            return
+        try:
+            write_failures(path, failures, data)
+        except OSError as exc:
+            counter_error = "cannot write %s: %s" % (path, exc)
+    if counter_error and data.get("stop_hook_active"):
+        # Without a counter, one retry is the limit: the loop must end.
         loomhook.system_message(
-            "loom: `%s` %s for the implementer %d times (hooks.maxCheckAttempts = %d). "
+            "loom: `%s` %s for the implementer again, and the attempt counter is not available (%s). "
             "The implementer may stop now; /loom:implement records the implementation phase as blocked."
-            % (command, what, failures, limit)
+            % (command, what, counter_error)
         )
         return
-    write_failures(path, failures, data)
+    attempt = "attempt %d of %d" % (failures, limit) if not counter_error else (
+        "attempt counter not available: %s; you get one retry" % counter_error)
+    notes = ""
+    if warnings:
+        notes = "\n\nWarnings about %s (loom-state):\n%s" % (
+            ls.CONFIG_PATH, "\n".join("- %s" % w for w in warnings))
     sys.stderr.write(
-        "loom: `%s` %s (attempt %d of %d). You cannot finish while the checks fail. "
+        "loom: `%s` %s (%s). You cannot finish while the checks fail. "
         "Fix the cause inside the scope of your implementation phase, run the checks again, then finish. "
-        "Do not weaken tests or checks.\n\n%s\n"
-        % (command, what, failures, limit, loomhook.output_tail(output))
+        "Do not weaken tests or checks.%s\n\n%s\n"
+        % (command, what, attempt, notes, loomhook.output_tail(output))
     )
     sys.exit(2)
 

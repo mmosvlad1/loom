@@ -10,13 +10,14 @@ You orchestrate. The `loom:implementer` agent changes the code; it never commits
 - **First run**: one of these:
   - **phase mode**: build implementation phase N (`implement`, or `iterate` for a blocked phase with a clean working tree).
   - **Fix mode**: fix a numbered list of fix items (`iterate`). Each item names the file, the expected result, and the reference.
-- **Limit**: `implement.maxFixAttempts` from `.claude/loom.json` (default `2`). It counts the fix attempts after the first run.
+- **Limit**: `implement.maxFixAttempts` from the `loom-state --json` output (default `2`). It counts the fix attempts after the first run.
 - **Configuration**: the agents do not read `.claude/loom.json`. Every prompt carries the resolved values from `loom-state --json`, as these lines. Write a command in backticks, and `null` without backticks for a check that is `null` in the state (the project has no such check):
   ```text
   Checks: check = `<checks.check>`; lint = `<checks.lint>`; typecheck = `<checks.typecheck>`; test = `<checks.test>`
   Conventions: <docs.conventions>
+  Main branch: <mainBranch>
   ```
-  The implementer gets both lines. The reviewer gets the `Conventions:` line.
+  The implementer gets the `Checks:` and `Conventions:` lines. The reviewer gets the `Conventions:` and `Main branch:` lines.
 
 ## Steps
 
@@ -30,7 +31,7 @@ You orchestrate. The `loom:implementer` agent changes the code; it never commits
    - The `SubagentStop` hook already ran it when the implementer finished. The hook blocks the implementer while the checks fail, but lets it stop after `hooks.maxCheckAttempts` failed attempts.
    - So failing checks here mean the hook gave up. Stop the loop. The result is **blocked**, with the reason `checks.check fails: <the key failure lines>`.
    - Never commit while the checks fail.
-4. **Reviewer.** Launch `loom:implementation-reviewer` with the same reference, the `Conventions:` line, the implementer's report, and the fix items (if any). Use fix mode when the run had fix items: write `fix mode` and the items in the prompt.
+4. **Reviewer.** Launch `loom:implementation-reviewer` with the same reference, the `Conventions:` and `Main branch:` lines, the implementer's report, and the fix items (if any). Use fix mode when the run had fix items: write `fix mode` and the items in the prompt.
 5. **Verdict.**
    - `pass` (no `blocking` items): the result is **done**.
    - `changes-needed`: if fewer than `implement.maxFixAttempts` fix attempts ran, launch `loom:implementer` in Fix mode with **only** the `blocking` items, copied word for word. Then continue with step 2.

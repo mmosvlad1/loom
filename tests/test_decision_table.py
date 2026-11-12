@@ -8,6 +8,9 @@ from typing import Any, Dict, List
 from loomtest import loom_state
 
 decide = loom_state().decide_next
+warn = loom_state().routing_warnings
+UNCOMMITTED = ("working tree has uncommitted changes; they are not part of research, design, or plan "
+               "(commit, stash, or discard them before /loom:implement)")
 
 
 def art(phase: str, status: str, open_q: int = 0, **extra: Any) -> Dict[str, Any]:
@@ -86,9 +89,10 @@ class DecisionTableTest(unittest.TestCase):
         s = state(artifacts=FULL_APPROVED, implementation=impl(3, 1, blocked={"phase": 2, "reason": "API missing"}))
         self.assertNext(s, "/loom:iterate <fix>", "API missing")
 
-    def test_row3_blocked_artifact(self):
+    def test_row3_no_artifact_status_blocked(self):
+        # Artifacts have no `blocked` status (artifact_status reports it as unknown, in-review).
         s = state(artifacts=[art("research", "blocked")])
-        self.assertNext(s, "/loom:iterate <fix>", "02-research.md is blocked")
+        self.assertNext(s, "/loom:research-questions")
 
     def test_row3_beats_pr(self):
         s = state(artifacts=FULL_APPROVED, implementation=impl(3, 2, blocked={"phase": 3, "reason": None}),
@@ -123,7 +127,7 @@ class DecisionTableTest(unittest.TestCase):
 
     def test_row4_blocked_plan_open_round(self):
         s = self.plan_changed(art("plan", "in-review", 1))
-        self.assertNext(s, "/loom:iterate <answers>", "1 open questions")
+        self.assertNext(s, "/loom:iterate <answers>", "04-plan.md has 1 open question")
 
     def test_row4_blocked_dirty_tree_plan_in_review(self):
         s = self.plan_changed(art("plan", "in-review"), tree="dirty")
@@ -160,7 +164,8 @@ class DecisionTableTest(unittest.TestCase):
 
     def test_row4_open_round_dirty_tree(self):
         s = self.reopened(art("plan", "in-review", 1), done=1, workingTree="dirty")
-        self.assertNext(s, "/loom:iterate <answers>", "1 open questions")
+        r = self.assertNext(s, "/loom:iterate <answers>", "1 open question")
+        self.assertNotIn("questions", r["reason"])
 
     def test_row4_from_log_entries_only(self):
         phases = [{"number": 1, "status": "done", "commit": "abc"}, {"number": 2, "status": "pending", "commit": None}]
@@ -182,9 +187,58 @@ class DecisionTableTest(unittest.TestCase):
         self.assertNext(s, "/loom:iterate approve", "phase 2 is blocked")
 
     # Row 5
-    def test_row5_dirty_tree(self):
+    def test_row5_dirty_tree_before_the_plan_gate_falls_through(self):
+        # Research, design, and plan never change code: a dirty tree is not implement's work.
         s = state(artifacts=[art("design", "in-review", 3)], workingTree="dirty")
+        self.assertNext(s, "/loom:iterate <answers>", "design has 3 open questions")
+        self.assertEqual(warn(s), [UNCOMMITTED])
+        s = state("quick", [art("research", "approved"), art("plan", "in-review")], workingTree="dirty")
+        self.assertNext(s, "/loom:iterate approve", "plan is in review")
+        s = state(artifacts=[art("research-questions", "approved")], workingTree="dirty")
+        self.assertNext(s, "/loom:research", "02-research.md is missing")
+        s = state("quick", [art("research", "approved"), art("plan", "draft")], workingTree="dirty")
+        self.assertNext(s, "/loom:plan", "draft")
+        self.assertEqual(warn(s), [UNCOMMITTED])
+
+    def test_row5_in_progress_without_an_approved_plan_falls_through(self):
+        s = state("quick", [art("research", "approved")], implementation=impl(1, 0, in_progress=1))
+        self.assertNext(s, "/loom:plan", "04-plan.md is missing")
+        self.assertEqual(len(warn(s)), 1)
+        self.assertIn("phase 1 in progress, but 04-plan.md is not approved", warn(s)[0])
+
+    def test_row5_no_warning_once_the_gate_holds(self):
+        s = state(artifacts=FULL_APPROVED, implementation=impl(3, 1), workingTree="dirty")
+        self.assertEqual(warn(s), [])
+        s = state("oneshot", implementation=impl(1, 0), workingTree="dirty")
         self.assertNext(s, "/loom:implement", "uncommitted")
+        self.assertEqual(warn(s), [])
+        # Row 4 (a plan change) explains itself: no extra warning.
+        s = self.reopened(art("plan", "in-review"), done=1, workingTree="dirty")
+        self.assertEqual(warn(s), [])
+
+    def test_implement_needs_the_plan_gate(self):
+        """Invariant: /loom:implement only for oneshot or an approved 04-plan.md."""
+        earlier = {"full": FULL_APPROVED[:3], "quick": [art("research", "approved")], "oneshot": [], None: []}
+        for mode in ("full", "quick", "oneshot", None):
+            for plan_status in (None, "draft", "in-review", "approved"):
+                for tree in ("clean", "dirty", None):
+                    for progress in (impl(), impl(2, 0, in_progress=1), impl(2, 1), impl(2, 1, in_progress=2),
+                                     impl(2, 2), impl(1, 0, blocked={"phase": 1, "reason": "x"})):
+                        for ticket_pr in (None, 57):
+                            for pr in (None, open_pr(), open_pr(checks="failing")):
+                                arts = list(earlier[mode])
+                                if plan_status:
+                                    arts.append(art("plan", plan_status))
+                                s = state(mode=mode, artifacts=arts, workingTree=tree,
+                                          implementation=copy.deepcopy(progress), pr=pr)
+                                s["task"]["pr"] = ticket_pr
+                                with self.subTest(mode=mode, plan=plan_status, tree=tree, impl=progress,
+                                                  ticket_pr=ticket_pr, pr=pr):
+                                    r = decide(s)
+                                    if r["command"] == "/loom:implement":
+                                        self.assertTrue(mode == "oneshot" or plan_status == "approved", r)
+                                    if tree is None:
+                                        self.assertNotIn(r["command"], ("/loom:describe-pr", "/loom:finish-task"))
 
     def test_row5_phases_left_and_dirty(self):
         s = state(artifacts=FULL_APPROVED, implementation=impl(3, 1), workingTree="dirty")
@@ -240,7 +294,8 @@ class DecisionTableTest(unittest.TestCase):
 
     def test_row6_plan_open_questions_quick(self):
         s = state("quick", [art("research", "approved"), art("plan", "in-review", 1)])
-        self.assertNext(s, "/loom:iterate <answers>", "plan has 1 open questions")
+        r = self.assertNext(s, "/loom:iterate <answers>", "plan has 1 open question")
+        self.assertNotIn("1 open questions", r["reason"])
 
     def test_row6_design_before_plan(self):
         s = state(artifacts=[art("design", "in-review", 1), art("plan", "in-review", 2)])
@@ -351,6 +406,50 @@ class DecisionTableTest(unittest.TestCase):
         s["task"]["pr"] = 57
         self.assertNext(s, "/loom:finish-task", "PR #57")
 
+    def test_row8_pr_from_ticket_with_phases_left_goes_to_implement(self):
+        # A plan change on an open PR, approved again; SessionStart and Next: lines run without --pr.
+        for mode, arts, progress in (("full", FULL_APPROVED, impl(3, 2)), ("oneshot", [], impl(1, 0)),
+                                     ("quick", [art("research", "approved"), art("plan", "approved")], impl())):
+            with self.subTest(mode=mode):
+                s = state(mode, arts, implementation=progress)
+                s["task"]["pr"] = 57
+                r = self.assertNext(s, "/loom:implement", "PR #57 exists (its state was not read)")
+                self.assertIn("%d of %d implementation phases are done" % (progress["done"], progress["total"]),
+                              r["reason"])
+
+    def test_row8_pr_from_ticket_without_the_plan_gate_falls_through(self):
+        s = state("quick", [art("research", "approved")], implementation=impl(2, 1))
+        s["task"]["pr"] = 57
+        self.assertNext(s, "/loom:plan", "missing")
+
+    # Row 8: the required check (ci.requiredCheck) decides when the PR reports it.
+    def test_row8_required_check_decides(self):
+        cases = (
+            ("failing", "passing", "/loom:iterate", "required check 'build' is failing"),
+            ("passing", "failing", "/loom:finish-task", "required check 'build' passed"),
+            ("pending", "failing", "/loom:finish-task", "required check 'build' is pending"),
+            ("missing", "failing", "/loom:iterate", "has failing checks"),
+            ("missing", "passing", "/loom:finish-task", "checks are green"),
+            ("missing", "pending", "/loom:finish-task", "checks are pending"),
+        )
+        for required, overall, command, reason in cases:
+            with self.subTest(required=required, overall=overall):
+                s = state(artifacts=FULL_APPROVED, implementation=impl(3, 3),
+                          pr=open_pr(checks=overall, requiredCheck=required), ci={"requiredCheck": "build"})
+                self.assertNext(s, command, reason)
+
+    def test_row8_required_check_passing_still_routes_review_and_rebase(self):
+        s = state(artifacts=FULL_APPROVED, implementation=impl(3, 3),
+                  pr=open_pr(checks="failing", requiredCheck="passing", reviewDecision="CHANGES_REQUESTED"))
+        self.assertNext(s, "/loom:iterate", "requested changes")
+        s = state(artifacts=FULL_APPROVED, implementation=impl(3, 3),
+                  pr=open_pr(checks="failing", requiredCheck="pending", behindMain=1))
+        self.assertNext(s, "/loom:iterate rebase", "behind")
+
+    def test_row8_required_check_without_ci_in_state(self):
+        s = state(artifacts=FULL_APPROVED, implementation=impl(3, 3), pr=open_pr(requiredCheck="failing"))
+        self.assertNext(s, "/loom:iterate", "the required check is failing")
+
     # Row 9
     def test_row9_all_phases_done(self):
         s = state(artifacts=FULL_APPROVED, implementation=impl(3, 3))
@@ -368,9 +467,9 @@ class DecisionTableTest(unittest.TestCase):
                   implementation=impl(2, 2))
         self.assertNext(s, "/loom:describe-pr")
 
-    def test_invalid_mode_still_routes_pr(self):
+    def test_invalid_mode_beats_pr_routing(self):
         s = state(mode=None, pr=open_pr(checks="failing"))
-        self.assertNext(s, "/loom:iterate", "failing checks")
+        self.assertNext(s, "/loom:iterate mode <oneshot|quick|full>", "no valid mode")
 
     # Row 10
     def test_row10_plan_approved(self):
@@ -424,7 +523,93 @@ class DecisionTableTest(unittest.TestCase):
         self.assertIn("stale", r["reason"])
 
     def test_invalid_mode(self):
-        self.assertNext(state(mode=None), "/loom:iterate", "no valid mode")
+        self.assertNext(state(mode=None), "/loom:iterate mode <oneshot|quick|full>", "no valid mode")
+
+    def test_invalid_mode_always_routes_to_a_mode_change(self):
+        """With an invalid mode only rows 1, 2, and the rebase row come first."""
+        approved = [art("research", "approved"), art("plan", "approved")]
+        variants = {
+            "in-progress": dict(implementation=impl(2, 1, in_progress=2)),
+            "dirty": dict(implementation=impl(2, 1), workingTree="dirty"),
+            "dirty all done": dict(implementation=impl(2, 2), workingTree="dirty"),
+            "ticket pr": dict(implementation=impl(2, 1)),
+            "ticket pr all done": dict(implementation=impl(2, 2)),
+            "open pr": dict(implementation=impl(2, 1), pr=open_pr()),
+            "merged pr": dict(implementation=impl(2, 2), pr=open_pr(state="MERGED")),
+            "all done": dict(implementation=impl(2, 2)),
+            "blocked": dict(implementation=impl(2, 1, blocked={"phase": 2, "reason": "x"})),
+            "plan reopened": dict(implementation=impl(2, 1)),
+            "unknown tree": dict(implementation=impl(2, 2), workingTree=None),
+        }
+        for mode in (None, "fast", "Quick"):
+            for name, overrides in variants.items():
+                arts = approved[:1] + [art("plan", "in-review")] if name == "plan reopened" else approved
+                s = state(mode=mode, artifacts=arts, **overrides)
+                if name.startswith("ticket pr"):
+                    s["task"]["pr"] = 57
+                with self.subTest(mode=mode, variant=name):
+                    self.assertNext(s, "/loom:iterate mode <oneshot|quick|full>", "no valid mode")
+        self.assertNext(state(mode="fast", onMain=True), "/loom:start-task #<n>")
+        self.assertNext(state(mode="fast", rebaseInProgress=True), "/loom:iterate rebase")
+        s = state(mode="fast")
+        s["task"]["archived"] = True
+        self.assertNext(s, "/loom:start-task #42", "archived")
+
+    # A stopped rebase of the task branch.
+    def test_rebase_in_progress(self):
+        for overrides in ({}, {"workingTree": "dirty"}, {"implementation": impl(2, 1, in_progress=2)},
+                          {"pr": open_pr(checks="failing")}):
+            with self.subTest(overrides=overrides):
+                s = state(artifacts=FULL_APPROVED, rebaseInProgress=True, **overrides)
+                self.assertNext(s, "/loom:iterate rebase",
+                                "a rebase of feat/42-auth-flow is in progress and has to be continued or aborted")
+
+    def test_rebase_in_progress_without_a_task(self):
+        self.assertNext(state(branch="spike/x", task=None, rebaseInProgress=True), "/loom:start-task #<n>")
+        s = state(rebaseInProgress=True)
+        s["task"]["archived"] = True
+        self.assertNext(s, "/loom:start-task #42", "archived")
+
+    # An unknown working tree (git status failed) fails closed.
+    def test_unknown_tree_never_describes_or_finishes(self):
+        cases = (
+            state(artifacts=FULL_APPROVED, implementation=impl(3, 3)),
+            state(artifacts=FULL_APPROVED, implementation=impl(3, 3), pr=open_pr()),
+            state(artifacts=FULL_APPROVED, implementation=impl(3, 3), pr=open_pr(state="MERGED")),
+            state(artifacts=FULL_APPROVED, implementation=impl(3, 3), pr=open_pr(checks="pending")),
+        )
+        for s in cases:
+            s["workingTree"] = None
+            with self.subTest(pr=s["pr"]):
+                r = self.assertNext(s, "/loom:iterate <feedback>", "git status failed")
+                self.assertIn("needs a known working tree", r["reason"])
+
+    def test_unknown_tree_keeps_other_routes(self):
+        s = state(artifacts=FULL_APPROVED, implementation=impl(3, 1), workingTree=None)
+        self.assertNext(s, "/loom:implement", "1 of 3")
+        s = state(artifacts=FULL_APPROVED, implementation=impl(3, 3), workingTree=None, pr=open_pr(checks="failing"))
+        self.assertNext(s, "/loom:iterate", "failing checks")
+        s = state(artifacts=[art("design", "in-review", 2)], workingTree=None)
+        self.assertNext(s, "/loom:iterate <answers>")
+
+
+class PlanGateTest(unittest.TestCase):
+    def test_plan_gate_holds(self):
+        gate = loom_state().plan_gate_holds
+        self.assertTrue(gate({"mode": "oneshot"}, []))
+        self.assertTrue(gate({"mode": "quick"}, [art("plan", "approved")]))
+        self.assertFalse(gate({"mode": None}, [art("plan", "approved")]))
+        self.assertFalse(gate({"mode": "fast"}, [art("plan", "approved")]))
+        for status in ("draft", "in-review", None):
+            self.assertFalse(gate({"mode": "full"}, [art("plan", status)]))
+        self.assertFalse(gate({"mode": "full"}, []))
+
+    def test_routing_warnings_outside_a_task(self):
+        self.assertEqual(warn(state(onMain=True, workingTree="dirty")), [])
+        self.assertEqual(warn(state(task=None, workingTree="dirty")), [])
+        s = state(workingTree="dirty")
+        s["task"]["archived"] = True
+        self.assertEqual(warn(s), [])
 
 
 if __name__ == "__main__":

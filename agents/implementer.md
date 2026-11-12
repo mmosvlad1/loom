@@ -82,7 +82,7 @@ Never run:
 
 - During the work you may run narrower commands (`checks.test`, `checks.lint`, a single test file) to get fast feedback. Never run a check that is `null`. Run a configured `checks` command as one Bash call, also when it chains commands.
 - Before you finish, run `checks.check` once, exactly as configured and unfiltered. Run it as one Bash call, also when it chains commands. Add no pipe, redirection, or shell variable:
-  - a hook blocks filters such as `head`, `tail`, and `grep`, because filtered output hides failures;
+  - a hook blocks filters such as `head`, `tail`, and `grep`, because filtered output hides failures; a configured check that has a pipe itself is allowed exactly as configured;
   - in default permission mode, a command with a `${...}` variable (for example `| tee "${TMPDIR:-/tmp}/check.log"`) or several operations needs a permission prompt, and the prompt can deny it.
   Read the full output.
 - If `checks.check` fails, fix the cause and run it again.

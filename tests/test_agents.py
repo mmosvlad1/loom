@@ -231,6 +231,13 @@ class AgentPromptTest(unittest.TestCase):
         self.assertIn("already committed are not missing", body)
         self.assertIn("--grep='^Phase N:' origin/<mainBranch>..HEAD", body)
         self.assertNotIn("-n 10", body)
+        # The main branch comes from the prompt (implementation-loop.md), with a loom-state fallback.
+        self.assertIn("Main branch: <name of the main branch>", body)
+        self.assertIn("`<mainBranch>` is the `Main branch:` line of the prompt.", body)
+        self.assertIn("If the prompt has no `Main branch:` line, run `loom-state --json` and take `mainBranch`", body)
+        self.assertIn("`loom-state --json`, only when the prompt has no `Main branch:` line", body)
+        self.assertNotRegex(body, r"(?<!not )[Rr]ead `?\.claude/loom\.json")
+        self.assertNotIn("from `.claude/loom.json`", body)
         self.assertNotIn("edits files in the task directory", body)
 
     def test_bash_agents_run_one_command_per_call(self):
@@ -299,7 +306,7 @@ class SharedSnippetsTest(unittest.TestCase):
         for needle in ("one command per Bash call", "Do not run `cd`", "`&&`, `||`, `;`, or a newline",
                        "pipe, redirection, subshell, or shell variable", "`loom-state --json`, not `python3 bin/loom-state --json`",
                        "Read, Grep, and Glob", "matches one command", "\"Checks\" in the shared `git-flow.md`",
-                       "Exception: run a command that a skill gives, and `checks.check`"):
+                       "Exception: run a command that a skill gives, and a check command (`checks.check`"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, text)
         checks = read(os.path.join(SHARED_DIR, "git-flow.md")).split("## Checks", 1)[1].split("\n## ", 1)[0]

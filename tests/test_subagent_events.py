@@ -278,12 +278,47 @@ class ParseResultTest(unittest.TestCase):
         self.assertEqual(ev.parse_result("implementer", "### Checks\n- `make check`: **fail** - 2 errors\n"), "fail")
         self.assertEqual(ev.parse_result("implementer", "### Checks\n`make lint`: pass\n"), "unknown")
         self.assertEqual(ev.parse_result("implementer", "### Checks\n`make ci`: fail\n", "make ci"), "fail")
-        self.assertEqual(ev.parse_result("implementer", "### Checks\n`make check`: passed\n"), "unknown")
+        self.assertEqual(ev.parse_result("implementer", "### Checks\n`make check`: passing\n"), "unknown")
         no_line = IMPLEMENTER_REPORT.replace("`make check`: %s\n", "")
         self.assertEqual(ev.parse_result("implementer", no_line), "unknown")
         self.assertEqual(ev.parse_result("implementer", "I could not finish."), "unknown")
         # A pass outside the Checks section does not count.
         self.assertEqual(ev.parse_result("implementer", "### Files changed\n- x: pass\n"), "unknown")
+
+    def test_reviewer_near_misses(self):
+        for text, expected in (
+            ("## Verdict: pass.\n", "pass"),
+            ("## Verdict: Pass!\n", "pass"),
+            ("## Verdict: pass (with nits)\n", "pass"),
+            ("**Verdict:** pass (minor nits).\n", "pass"),
+            ("## Verdict: Changes needed\n", "changes-needed"),
+            ("Verdict: changes needed.\n", "changes-needed"),
+            ("## Verdict: **changes-needed**\n", "changes-needed"),
+            ("## Verdict\npass\n### As planned\n", "pass"),
+            ("## Verdict\n\n**Changes needed**\n", "changes-needed"),
+            ("**Verdict:**\nchanges-needed\n", "changes-needed"),
+            ("## Verdict: pass, but see below\n", "unknown"),
+            ("## Verdict\nI think it passes\n", "unknown"),
+            ("## Verdict: pass\n\n## Verdict\nChanges needed\n", "unknown"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(ev.parse_result("implementation-reviewer", text), expected)
+
+    def test_implementer_near_misses(self):
+        for text, expected in (
+            ("### Checks\n`make check`: passed (42 tests)\n", "pass"),
+            ("### Checks\n`make check`: failed\n", "fail"),
+            ("### Checks\n- `make check` - pass\n", "pass"),
+            ("### Checks\n`make check` \u2014 fail\n", "fail"),
+            ("### Checks:\n`make check`: pass\n", "pass"),
+            ("**Checks**\n`make check`: pass\n\n**Deviations**\nNone\n", "pass"),
+            ("**Checks:**\n- `make check`: **failed**\n", "fail"),
+            ("**Checks**\n\n**Deviations**\n`make check`: pass\n", "unknown"),
+            ("### Checks\n`make check`: passing\n", "unknown"),
+            ("### Checks\n`make check` pass\n", "unknown"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(ev.parse_result("implementer", text), expected)
 
     def test_other_agents_are_done(self):
         for agent in ("codebase-locator", "codebase-analyzer", "codebase-pattern-finder", "web-search-researcher"):

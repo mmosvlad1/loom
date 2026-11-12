@@ -50,7 +50,7 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 | `task.mode` is `oneshot` | `oneshot mode has no plan; implement works from 00-ticket.md` | `/loom:implement` |
 | `02-research.md` is missing or `draft` | `plan needs finished research (02-research.md)` | `/loom:research` |
 | full mode: `03-design.md` is missing or `draft` | `plan needs a finished design (03-design.md)` | `/loom:design` |
-| full mode: `03-design.md` is `in-review` with open questions | `03-design.md has <n> open questions` | `/loom:iterate <answers>` |
+| full mode: `03-design.md` is `in-review` with open questions | `03-design.md has <k> open questions` (`1 open question` for k = 1) | `/loom:iterate <answers>` |
 | full mode: `03-design.md` is `in-review` without open questions | `03-design.md is not approved` | `/loom:iterate approve` |
 | any implementation phase has status other than `pending` | `implementation started; change the plan with /loom:iterate` | `/loom:iterate <feedback>` |
 | `04-plan.md` exists with status `in-review` or `approved` | ask the user first (see below) | — |
@@ -88,7 +88,7 @@ Spawn agents only if the inputs do not show something the plan needs (an exact c
 - `loom:codebase-analyzer`: explains how a specific part works.
 - `loom:codebase-pattern-finder`: finds test patterns and similar implementations to follow.
 
-Do not use `general-purpose`, `Explore`, or `Plan`. Wait for all agents before you write.
+Do not use `general-purpose`, `Explore`, or `Plan`. Every prompt to `loom:codebase-locator`, `loom:codebase-analyzer`, or `loom:codebase-pattern-finder` carries the line `Work directory: <workDir>` (`workDir` from the state). The agent skips that directory: it holds the loom artifacts, the ticket too. Wait for all agents before you write.
 
 ## 4. Cut the implementation phases
 
@@ -139,12 +139,12 @@ Use the template you read at the start (`${CLAUDE_SKILL_DIR}/references/template
 - If nothing is uncertain, write `## Open Questions` with the single line `None.`.
 - Otherwise write `## Open Questions — Round 1` and follow `question-rounds.md` exactly: `**Q<n>.` at the start of the line, 2-4 options, exactly one `— recommended: <one-line reason>`, and the independence rule.
 - Write every question as open. Do not resolve it yourself. Write the plan for the recommended option and point to the question ("Assumes Q1 a").
-- Size: `task.size`, or `M` in quick mode and `L` in full mode if it is `null`. Cap: `.claude/loom.json` → `rounds.cap.<size>` (defaults `S` = 2, `M` = 3, `L` = 5). `/loom:iterate` applies the cap.
+- Size: `task.size`, or `M` in quick mode and `L` in full mode if it is `null`. Cap: `rounds.cap.<size>` from the state. `/loom:iterate` applies the cap.
 - Do not write the round-cap marker from `question-rounds.md`. Only `/loom:iterate` writes it, at the cap.
 
 ## 7. Finish
 
-- Check that `loom-state` parses the plan: run `loom-state --json`. `implementation.total` must equal the number of `## Phase <N>:` sections, and `warnings` must not mention `04-plan.md`. Fix the plan if not.
+- Check that `loom-state` parses the plan: run `loom-state --json`. `implementation.total` must equal the number of `## Phase <N>:` sections, and `implementation.planParseError` must be `false`. Fix the plan if not.
 - Set `status: in-review` and `updated` to today.
 - Run `loom-state --json` again and compute the `Next:` line as `final-answer.md` describes.
 - End with the `final-answer.md` format and nothing else. Write `Open questions` with the round if a round is open, e.g. `2 (round 1)`. Add the `Warning:` lines from step 1.

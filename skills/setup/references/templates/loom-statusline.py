@@ -63,16 +63,22 @@ def same_dir(a, b):
         return False
 
 
+def text(value):
+    return value if isinstance(value, str) else None
+
+
 def from_installs(root, project):
+    """The install of loom from installed_plugins.json; None for a missing or malformed file."""
     data = read_json(os.path.join(root, "installed_plugins.json"))
-    entries = data.get("plugins", {}).get(PLUGIN_ID) if isinstance(data, dict) else None
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    entries = plugins.get(PLUGIN_ID) if isinstance(plugins, dict) else None
     if not isinstance(entries, list):
         return None
     entries = [e for e in entries if isinstance(e, dict)]
     # Prefer the install for this project, then the others in file order.
-    entries.sort(key=lambda e: 0 if project and same_dir(e.get("projectPath") or "", project) else 1)
+    entries.sort(key=lambda e: 0 if project and same_dir(text(e.get("projectPath")) or "", project) else 1)
     for entry in entries:
-        found = usable(entry.get("installPath"))
+        found = usable(text(entry.get("installPath")))
         if found:
             return found
     return None
@@ -83,7 +89,7 @@ def from_marketplace(root):
     entry = data.get(MARKETPLACE) if isinstance(data, dict) else None
     if not isinstance(entry, dict):
         return None
-    return usable(entry.get("installLocation"))
+    return usable(text(entry.get("installLocation")))
 
 
 def from_cache(root):
@@ -100,7 +106,14 @@ def find_loom_state(project):
     if override:
         return usable(os.path.expanduser(override))
     root = plugins_root()
-    return from_installs(root, project) or from_marketplace(root) or from_cache(root)
+    for finder in (lambda: from_installs(root, project), lambda: from_marketplace(root), lambda: from_cache(root)):
+        try:
+            found = finder()
+        except (OSError, TypeError, ValueError, AttributeError):
+            found = None  # a malformed file: try the next source
+        if found:
+            return found
+    return None
 
 
 def session_dir():

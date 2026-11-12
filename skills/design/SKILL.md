@@ -79,12 +79,12 @@ Spawn agents only if the research does not answer something the design needs. Us
 - `loom:codebase-analyzer`: explains how a specific part works.
 - `loom:codebase-pattern-finder`: finds existing patterns to follow, with code excerpts.
 
-Do not use `general-purpose`, `Explore`, or `Plan`. Wait for all agents before you write. Skip this step when the research already gives the context.
+Do not use `general-purpose`, `Explore`, or `Plan`. Every prompt to `loom:codebase-locator`, `loom:codebase-analyzer`, or `loom:codebase-pattern-finder` carries the line `Work directory: <workDir>` (`workDir` from the state). The agent skips that directory: it holds the loom artifacts, the ticket too. Wait for all agents before you write. Skip this step when the research already gives the context.
 
 ## 4. Size the rounds
 
 - Read the size from `task.size` in the state. If it is `null`, use `L` (full mode).
-- Read the round cap from `.claude/loom.json` (at the git top level) → `rounds.cap.<size>`. If a key is missing, use the default: `S` = 2, `M` = 3, `L` = 5.
+- The round cap is `rounds.cap.<size>` from the state.
 - Write the expected number of rounds `~M` in the heading as `question-rounds.md` describes (S → 2, M → 3, L → 5).
 - This is round 1.
 

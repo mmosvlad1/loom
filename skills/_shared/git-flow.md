@@ -24,7 +24,7 @@ Below, `<main>` is `mainBranch` from the `loom-state` output, `<n>` is `task.num
 
 - Run `checks.check` from the `loom-state --json` output (`checks.check`, the resolved command) exactly as configured, from the git top level.
 - Run it as one Bash call, also when it chains commands.
-- Run it unfiltered: no pipe into `head`, `tail`, `grep`, `sed`, or similar filters. A hook blocks that, because filtered output hides failures.
+- Run it unfiltered: add no pipe into `head`, `tail`, `grep`, `sed`, or similar filters. A hook blocks that, because filtered output hides failures. A configured check that has a pipe itself runs exactly as configured: the hook allows a command that equals a configured check.
 - Add no pipe, redirection, or shell variable to it (the shared `bash-calls.md`). Such a command needs a permission prompt, which a subagent or a later turn may not get.
 - Read the result from the exit status and the full output.
 
@@ -43,7 +43,7 @@ Below, `<main>` is `mainBranch` from the `loom-state` output, `<n>` is `task.num
 
 ### Body
 
-The first body line names the implementation phase. `loom-state`, `iterate`, and the reviewer find phase commits by it (`git log --grep='^Phase N:'`).
+The first body line names the implementation phase. The resume flow of `implement`, `iterate`, and the reviewer find phase commits by it (`git log --grep='^Phase N:'`). `loom-state` does not read commits: it takes a phase's commit from its `log.md` heading.
 
 | Commit | Made by | Subject | Body |
 |---|---|---|---|
@@ -111,6 +111,8 @@ Both change the working tree. Confirm them first: show the exact commands and th
 ## Rebase
 
 Rebase the task branch on the main branch before the PR is opened (`describe-pr`), when the branch is behind (`iterate rebase`), and never during `implement`.
+
+A stopped rebase (`rebaseInProgress` is `true` in the `loom-state` output: HEAD is detached, and `branch` is the branch being rebased) is handled only by `/loom:iterate rebase`. It continues or aborts that rebase and never starts a new one. `implement`, `describe-pr`, and `finish-task` stop with `Next: /loom:iterate rebase`.
 
 1. The working tree must be clean (`workingTree` is `clean`).
 2. Choose the base. Run `git remote get-url origin`.

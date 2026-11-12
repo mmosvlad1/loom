@@ -14,6 +14,17 @@ This file lists the notable changes of every loom version. The format follows [K
 - `loom-state --json` validates these keys, reports invalid values in `warnings`, and outputs the resolved `docs`, `checks`, `ci`, and `pullRequest` in every output, also without a task.
 - `finish-task` also reads the classic branch protection of the main branch (read-only `gh api` GET). It skips the ruleset offer when a ruleset or the protection already requires the check.
 - Glossary terms **docs role** and **docs map**.
+- `loom-state` outputs `workDir`, `rounds`, `implement`, and `hooks` with validation, so skills no longer read `.claude/loom.json`. Unknown top-level keys in `loom.json` get a warning.
+- `loom-state --pr` reports `pr.requiredCheck`, the state of the check named `ci.requiredCheck`, and routes on it; other failing checks are a warning.
+- `loom-state` reports `rebaseInProgress`, keeps the task during a stopped rebase of the task branch, and routes to `/loom:iterate rebase`.
+- `implementation.planParseError` in the state: `true` when the Phase Overview of `04-plan.md` cannot be read reliably.
+- Warnings for overlapping docs map roles, docs paths at or below `workDir`, and `checks.*` commands that pipe into an output filter.
+- `iterate` continues or aborts a stopped rebase (`rebaseInProgress`) before anything else, and repairs an invalid ticket mode at any time, also after implementation started. `implement`, `describe-pr`, and `finish-task` stop during a stopped rebase with `Next: /loom:iterate rebase`.
+- `finish-task` without required checks on GitHub (no ruleset or branch protection): it waits for all checks, then enforces `ci.requiredCheck` by name through `pr.requiredCheck`, and refuses the merge while that check fails. Only when no check of that name ran does it still ask for "yes, merge without required checks".
+- `next` shows the state of the required check in its PR line.
+- The setup allowlist adds the read-only `gh run list`, `gh pr list`, `gh label list`, and `gh repo view`.
+- loom's CI runs `make test` on Python 3.9 too (`actions/setup-python@v7.1.0`), in the one job `check`, on a pinned `ubuntu-24.04` runner (no Python 3.9 build exists for Ubuntu 26.04).
+- The SessionStart hook also runs for forked sessions (`fork` matcher). On the main branch and on a branch without a task, it also prints the `loom-state` warnings.
 
 ### Changed
 
@@ -24,6 +35,50 @@ This file lists the notable changes of every loom version. The format follows [K
 - `workingTreeDocsOnly` and the `Stop` hook count a change as a docs change when it is below `docsDir` or at or below any path of the docs map. The `Stop` hook does nothing when `checks.lint` is `null`; the output filtering hook skips `null` checks.
 - An empty `checks.lint`, `checks.typecheck`, or `checks.test` still turns the check off, now with a warning to use `null`. An empty or other invalid `checks.check`, and any other invalid check value, takes its default with a warning.
 - Eval case `describe-pr-quick`: the fixture maps `docs.tasks` to `notes/loom-tasks` and requires `## Test plan`; two new graders check the mapped task summary and the required section.
+- `/loom:implement` is never the next step before the plan gate holds (oneshot, or `04-plan.md` approved): a dirty working tree or a phase in progress before that falls through to the question, approval, and missing-phase routes, with a warning that names the uncommitted changes.
+- An invalid ticket mode routes to `/loom:iterate mode <oneshot|quick|full>` before every route except the main branch, a missing or archived task, and a stopped rebase. The mode ignores case and surrounding whitespace.
+- A ticket `pr:` without `--pr` routes to `/loom:implement` while implementation phases are left.
+- Artifact `status` ignores case and whitespace; an unknown status (also `blocked`) is a warning and counts as `in-review`. The file name decides an artifact's phase.
+- `--line` shows only the mode's phases and skips the stale research check and the docs-only `git status`.
+- Skills, shared snippets, and agents take `mainBranch`, `workDir`, `rounds.cap`, `implement.*`, and `hooks.*` from the state, never from `.claude/loom.json` (`setup` only while the file does not exist). The reviewer gets the main branch as a `Main branch:` line in its prompt, with a `loom-state` fallback. A lint in `tests/test_skills.py` checks every skill, reference, shared snippet, and agent.
+- `finish-task` runs on the session's model (`model: inherit`, no `effort`) instead of `haiku` with `effort: low`.
+- `implement`, `iterate`, and `plan` test `implementation.planParseError` instead of searching the warnings for `04-plan.md`.
+- `implement`, `describe-pr`, and `finish-task` stop when `git status` failed (`workingTree` is `null`). `iterate` stops too, whatever the argument is, before every section that reads or changes the working tree or commits; answers, approval, a mode change, and feedback on an artifact before implementation started still run.
+- `/loom:finish-task #<n>` on a main branch without `.claude/loom.json` (a setup PR merged before the pull) runs `git pull --ff-only` and reads the state again. `setup` names that pull when it finds the setup PR merged.
+- `research-questions`, `research`, `design`, `plan`, and `iterate` give every codebase agent the line `Work directory: <workDir>`; the agents skip that directory (`.loom/` without the line).
+- `finish-task` watches a pending required check at most 3 times, then stops.
+- `start-task` and `finish-task` update the main branch with `git pull --ff-only`.
+- The final message writes `/loom:start-task …`, `/loom:backlog`, and `/loom:setup` as they are, without a `/loom:next` hop.
+- `iterate`: a post-PR fix on a branch behind the main branch rebases first, then collects the fix items, and pushes once at the end.
+- `setup` keeps an existing CI workflow without a job named `check`: it writes the check name of the job that runs the checks into `ci.requiredCheck` and never renames a job. For a stack without a recipe it proposes only the checks the project has; a missing one is `null`, and `CLAUDE.md` leaves out its line.
+- The main-branch guard reads commands with its own bash parser. It also catches commits and pushes inside `$( … )` (also in double quotes), backticks, process substitutions, here-docs, here-strings, or `echo … |` fed to a shell. It also catches them behind wrappers such as `timeout`, `nice`, `xargs`, and `env`, through `GIT_DIR`/`GIT_WORK_TREE`, and through aliases set with `git -c alias.<name>=…`.
+- The guard is conservative when it cannot resolve a command. An unresolvable `cd`, `git -C`, or `GIT_DIR` target means the original cwd. An unresolvable branch means the real current branch. An unreadable alias counts as commit and push. A `cd` inside a subshell no longer leaks. The right side of `||` is checked as if the left side failed.
+- The guard follows `git switch -`, `@{-1}`, `git checkout <branch> --`, `git symbolic-ref HEAD`, `git branch -m`, and `switch -c`/`checkout -b` of an existing branch, which git refuses.
+- Here-doc delimiters such as `<<'END-MSG'` and `$'…'` strings are parsed. The fallback for unparsable commands is linear in the text. It now also denies, from any branch, a push that names the main branch.
+- On the main branch, `git push` is allowed when it cannot update the main branch: tags, other branches, deletions of other branches, `--dry-run`. A push without a refspec, `HEAD`, `--all`, and `--mirror` stay blocked, with a new reason text. A dry run is allowed from any branch.
+- The output filtering hook allows a command that is exactly a configured check, also when it has a filter. Filter stages and setup steps (`npm ci`) inside a configured check are no longer check commands.
+- The output filtering hook also blocks `rg` and `wc`, checks inside `( … )`, `{ …; }`, and `bash -c`, `pnpm`/`yarn`/`bun` test runs, and checks behind `timeout`.
+- The output filtering hook allows `--version`, `--help`, `make -n`, `pytest --collect-only`, and `command -v`.
+- The `Stop` lint hook does nothing in plan mode and while background tasks are in flight.
+- The `SubagentStop` checks hook still enforces the checks when its attempt counter cannot be read or written: it blocks once, then lets the implementer stop with a message. A `.claude/loom.json` that cannot be read no longer blocks the implementer; the user gets a message instead. Config warnings are added to the failure text.
+- Subagent events classify near-miss report wording: `Verdict: pass.`, `Changes needed`, `` `make check`: passed ``, `### Checks:`.
+
+### Fixed
+
+- `.claude/loom.json` with a UTF-8 byte order mark is read.
+- `mainBranch`, `workDir`, and `docsDir` are trimmed and validated; reserved directories compare ignoring case; `.md` in any case is accepted; `null` objects and control characters get a warning.
+- A failed `git status` never routes to `/loom:describe-pr` or `/loom:finish-task`.
+- `pr: #57` in the ticket parses; a non-numeric, zero, or negative `pr` gets a warning instead of a crash or a silent `null`.
+- Implementation phase 0 is not ignored.
+- `loom-state` prints UTF-8 under any locale and survives non-object `gh` output, lone surrogates in `loom.json`, and non-finite `duration_s` values.
+- One open question is no longer "1 open questions", in `loom-state` and in the skills' stop messages.
+- LOOM_SPEC.md: a project-enabled loom still needs `claude plugin install loom@loom --scope project` once per clone (§19.3); plain review comments do not change the PR route (§6.2); artifacts have no `blocked` status (§9.12).
+- `_shared/git-flow.md` names the right readers of the `Phase N:` commit body: `loom-state` takes the phase commit from `log.md`.
+- Main-branch guard bypasses through common command forms, such as `cd "$(git rev-parse --show-toplevel)" && git commit`, `git switch -`, `echo "$(git commit …)"`, `timeout 30 git commit`, and `git -c alias.x=commit x`.
+- A false positive of the guard on `git switch main && git pull && git switch - && git push`.
+- `git push --repo=origin main` and the matching refspec `git push origin :` were not recognized as pushes to the main branch.
+- A configured check with a pipe (`go test ./... | grep -v …`) could not run as configured.
+- The status line script stopped at a malformed `installed_plugins.json` instead of trying the marketplace and the cache.
 
 ## [1.1.0] - 2026-11-11
 

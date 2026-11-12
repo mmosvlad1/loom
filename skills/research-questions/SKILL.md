@@ -67,7 +67,7 @@ Spawn agents in parallel by their namespaced name. Use only these agents. Do not
 - `loom:codebase-pattern-finder`: finds similar implementations and conventions.
 - `loom:web-search-researcher`: only if the ticket depends on an external library, API, or service.
 
-Tell each agent what to find, not how to search. Wait for all agents before you write.
+Tell each agent what to find, not how to search. Every prompt to `loom:codebase-locator`, `loom:codebase-analyzer`, or `loom:codebase-pattern-finder` carries the line `Work directory: <workDir>` (`workDir` from the state). The agent skips that directory: it holds the loom artifacts, the ticket too. Wait for all agents before you write.
 
 ## 4. Write the questions
 

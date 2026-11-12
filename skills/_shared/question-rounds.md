@@ -112,7 +112,7 @@ Rounds end when no open question affects the plan, not at a fixed count.
 | L | 3-5 | 5 |
 
 - Read the size from `task.size` in the `loom-state --json` output (validated there; start-task copies it from the `size:*` label). If it is `null`, use the size that matches the mode: quick → M, full → L.
-- The caps come from `.claude/loom.json` → `rounds.cap` (defaults above).
+- The caps come from `rounds.cap` in the `loom-state --json` output (validated there; defaults above).
 - For `~M` in the design heading, use the upper bound of the expected range (S → 2, M → 3, L → 5).
 
 ### Accepted by default

@@ -35,14 +35,24 @@ AGENT_PREFIX = "loom:"
 EVENTS = {"SubagentStart": "start", "SubagentStop": "stop"}
 TS_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
-# `## Verdict: pass`, also `**Verdict:** changes-needed`; the template line `pass | changes-needed` does not match.
-_VERDICT_RE = re.compile(
-    r"^[ \t]*(?:#{1,6}[ \t]*)?\**[ \t]*Verdict[ \t]*:?[ \t]*\**[ \t]*:?[ \t]*"
-    r"(pass|changes-needed)[ \t]*\**[ \t]*$",
+# The verdict word, with the near-miss forms reviewers write: `pass.`,
+# `pass (with nits)`, `Changes needed`, `**changes-needed**`.
+_VERDICT_WORD = r"\**[ \t]*(pass|changes[- ]needed)[ \t]*\**[ \t]*(?:[.!]|\([^()\n]*\)[ \t]*[.!]?)?[ \t]*\**[ \t]*$"
+_VERDICT_HEAD = r"^[ \t]*(?:#{1,6}[ \t]*)?\**[ \t]*Verdict[ \t]*:?[ \t]*\**[ \t]*:?[ \t]*"
+# `## Verdict: pass` on one line, or the verdict alone on the next non-empty line.
+# The template line `pass | changes-needed` does not match.
+_VERDICT_RE = re.compile(_VERDICT_HEAD + _VERDICT_WORD, re.I | re.M)
+_VERDICT_NEXT_LINE_RE = re.compile(_VERDICT_HEAD + r"\n(?:[ \t]*\n)*[ \t]*" + _VERDICT_WORD, re.I | re.M)
+# The heading of the implementer's Checks section: `### Checks`, `### Checks:`, `**Checks**`, `**Checks:**`.
+_CHECKS_HEADING_RE = re.compile(r"^[ \t]*(?:#{1,6}[ \t]*Checks[ \t]*:?|\*\*Checks:?\*\*:?)[ \t]*$", re.I | re.M)
+# The next section heading: a markdown heading or a line that is only bold text.
+_SECTION_END_RE = re.compile(r"^[ \t]*(?:#{1,6}[ \t]|\*\*[^*\n]+\*\*:?[ \t]*$)", re.M)
+# A command line of the Checks section: `` `make check`: pass (42 passed) ``,
+# also `passed`/`failed` and a dash instead of the colon.
+_CHECKS_RE = re.compile(
+    r"^[ \t]*(?:[-*][ \t]+)?\**`([^`\n]+)`\**[ \t]*(?::|-|–|—)[ \t]*\**[ \t]*(pass|fail)(?:ed)?\b",
     re.I | re.M,
 )
-# A command line of the implementer's `### Checks` section: `` `make check`: pass (42 passed) ``.
-_CHECKS_RE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?\**`([^`\n]+)`\**[ \t]*:[ \t]*\**[ \t]*(pass|fail)\b", re.I | re.M)
 
 
 def format_ts(moment: datetime.datetime) -> str:
@@ -63,23 +73,28 @@ def parse_ts(value: Any) -> Optional[datetime.datetime]:
 
 
 def parse_result(agent: str, message: Any, check_command: str = "make check") -> str:
-    """The result of a run from its last message.
+    """The result of a run from its report text (today `last_assistant_message`).
 
-    - implementation-reviewer: the verdict line (`## Verdict: pass | changes-needed`):
-      `pass`, `changes-needed`, or `unknown`.
-    - implementer: the line of its `### Checks` section whose backticked command
-      is `check_command` (`checks.check`), e.g. `` `make check`: pass (42 passed) ``:
-      `pass`, `fail`, or `unknown`.
+    - implementation-reviewer: the verdict line (`## Verdict: pass | changes-needed`),
+      also `pass.`, `pass (with nits)`, `Changes needed`, or the verdict on the
+      line after the heading: `pass`, `changes-needed`, or `unknown`.
+    - implementer: the line of its Checks section (`### Checks`, `### Checks:`,
+      `**Checks**`) whose backticked command is `check_command` (`checks.check`),
+      e.g. `` `make check`: pass (42 passed) ``, also `passed`/`failed` and
+      `` `make check` - pass ``: `pass`, `fail`, or `unknown`.
     - every other agent: `done`.
     """
     text = message if isinstance(message, str) else ""
     if agent == "implementation-reviewer":
-        found = {m.group(1).lower() for m in _VERDICT_RE.finditer(text)}
+        found = {m.group(1).lower().replace(" ", "-")
+                 for rx in (_VERDICT_RE, _VERDICT_NEXT_LINE_RE) for m in rx.finditer(text)}
         return found.pop() if len(found) == 1 else "unknown"
     if agent == "implementer":
-        checks = re.split(r"^#{1,6}\s*Checks\s*$", text, maxsplit=1, flags=re.M)
-        if len(checks) == 2:
-            section = re.split(r"^#{1,6}\s", checks[1], maxsplit=1, flags=re.M)[0]
+        heading = _CHECKS_HEADING_RE.search(text)
+        if heading:
+            rest = text[heading.end():]
+            end = _SECTION_END_RE.search(rest)
+            section = rest[:end.start()] if end else rest
             for m in _CHECKS_RE.finditer(section):
                 if m.group(1).strip() == check_command.strip():
                     return m.group(2).lower()

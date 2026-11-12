@@ -234,6 +234,88 @@ class SubagentChecksTest(RepoTestCase):
         self.assertEqual((proc.returncode, proc.stdout), (0, ""))
 
 
+class SubagentChecksHardeningTest(RepoTestCase):
+    """Counter I/O failures and a broken loom.json (LOOM_SPEC.md 11.4)."""
+
+    loom_config = {"checks": {"check": "echo check-ran; exit 1"}}
+
+    def setUp(self):
+        super().setUp()
+        self.tmpdir = os.path.join(self.tmp, "hooktmp")
+        os.makedirs(self.tmpdir)
+        self.env = {"TMPDIR": self.tmpdir}
+
+    def run_checks(self, stop_hook_active=False):
+        payload = stop_payload(self.repo, event="SubagentStop", stop_hook_active=stop_hook_active,
+                               agent_id="agent-1", agent_type="loom:implementer")
+        return run_hook(CHECKS, payload, env=self.env)
+
+    def lock_counter_dir(self, mode):
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        path = os.path.join(self.tmpdir, "loom-subagent-checks")
+        os.makedirs(path, exist_ok=True)
+        os.chmod(path, mode)
+        self.addCleanup(os.chmod, path, 0o700)
+
+    def test_unwritable_counter_still_blocks_once(self):
+        self.lock_counter_dir(0o500)
+        first = self.run_checks()
+        self.assertEqual(first.returncode, 2, first.stdout)
+        self.assertIn("attempt counter not available", first.stderr)
+        self.assertIn("check-ran", first.stderr)
+        second = self.run_checks(stop_hook_active=True)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        message = json.loads(second.stdout)["systemMessage"]
+        self.assertIn("attempt counter is not available", message)
+        self.assertIn("blocked", message)
+
+    def test_unreadable_counter_still_blocks_once(self):
+        self.lock_counter_dir(0o000)
+        self.assertEqual(self.run_checks().returncode, 2)
+        self.assertEqual(self.run_checks(stop_hook_active=True).returncode, 0)
+
+    def test_pass_with_a_locked_counter(self):
+        self.lock_counter_dir(0o000)
+        self.write_config({"checks": {"check": "true"}})
+        proc = self.run_checks()
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""))
+
+    def test_counter_that_is_not_utf8_counts_as_zero(self):
+        self.write_config({"checks": {"check": "echo check-ran; exit 1"}, "hooks": {"maxCheckAttempts": 3}})
+        self.assertEqual(self.run_checks().returncode, 2)
+        directory = os.path.join(self.tmpdir, "loom-subagent-checks")
+        (name,) = os.listdir(directory)
+        with open(os.path.join(directory, name), "wb") as fh:
+            fh.write(b"\xff\xfe{")
+        proc = self.run_checks(stop_hook_active=True)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("attempt 1 of 3", proc.stderr)
+
+    def test_broken_config_does_not_block(self):
+        write(self.path("Makefile"), "check:\n\t@echo make-check-ran; exit 1\n")
+        for raw in ("{ not json", "", "[1, 2]"):
+            with self.subTest(raw=raw):
+                with open(self.path(".claude", "loom.json"), "w") as fh:
+                    fh.write(raw)
+                proc = self.run_checks()
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                message = json.loads(proc.stdout)["systemMessage"]
+                self.assertIn(".claude/loom.json", message)
+                self.assertIn("did not run", message)
+                self.assertNotIn("using defaults", message)
+
+    def test_config_warnings_reach_the_implementer(self):
+        self.write_config({"checks": {"check": "echo check-ran; exit 1"}, "docs": {"nope": "x"}})
+        proc = self.run_checks()
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("Warnings about .claude/loom.json (loom-state):", proc.stderr)
+        self.assertIn("docs.nope", proc.stderr)
+
+    def test_no_warning_section_without_warnings(self):
+        self.assertNotIn("Warnings about", self.run_checks().stderr)
+
+
 class CheckTimeoutTest(unittest.TestCase):
     def test_timeout_kills_the_process_group(self):
         import sys
@@ -320,6 +402,31 @@ class StopLintTest(RepoTestCase):
         write(self.path("src", "app.py"), "x = 1\n")
         proc = self.run_lint(stop_hook_active=True)
         self.assertEqual((proc.returncode, proc.stderr), (0, ""))
+
+    def run_lint_with(self, **extra):
+        return run_hook(LINT, stop_payload(self.repo, **extra))
+
+    def test_plan_mode_skips_lint(self):
+        write(self.path("src", "app.py"), "x = 1\n")
+        proc = self.run_lint_with(permission_mode="plan")
+        self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "", ""))
+        self.assertEqual(self.run_lint_with(permission_mode="acceptEdits").returncode, 2)
+
+    def test_background_work_skips_lint(self):
+        # Stop input `background_tasks`: in-flight tasks (Claude Code hooks docs, Stop input).
+        write(self.path("src", "app.py"), "x = 1\n")
+        running = [{"id": "task-001", "type": "subagent", "status": "running",
+                    "description": "implement phase 2", "agent_type": "loom:implementer"}]
+        for tasks in (running, [{"id": "t", "type": "shell"}], ["opaque"]):
+            with self.subTest(tasks=tasks):
+                proc = self.run_lint_with(background_tasks=tasks)
+                self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "", ""))
+
+    def test_finished_or_no_background_work_still_lints(self):
+        write(self.path("src", "app.py"), "x = 1\n")
+        for tasks in ([], None, "x", [{"id": "t", "type": "shell", "status": "completed"}]):
+            with self.subTest(tasks=tasks):
+                self.assertEqual(self.run_lint_with(background_tasks=tasks).returncode, 2)
 
     def test_no_config_is_a_silent_no_op(self):
         os.remove(self.path(".claude", "loom.json"))

@@ -53,6 +53,36 @@ class FrontmatterTest(unittest.TestCase):
     def test_unterminated_frontmatter(self):
         self.assertEqual(ls.parse_frontmatter("---\nstatus: draft\n"), {})
 
+    def test_hash_number_is_a_value(self):
+        fm = ls.parse_frontmatter("---\npr: #57\nissue: #42 # the issue\nnote: # a comment\n---\n")
+        self.assertEqual((fm["pr"], fm["issue"], fm["note"]), ("#57", "#42", None))
+
+    def test_to_int(self):
+        for value, expected in (("57", 57), ("#57", 57), (" #57 ", 57), (57, 57), ("0", 0), ("²", None),
+                                ("٥", None), ("5.7", None), ("# 57", None), ("abc", None), ("", None), (None, None),
+                                (["57"], None)):
+            with self.subTest(value=value):
+                self.assertEqual(ls._to_int(value), expected)
+
+
+class ArtifactStatusTest(unittest.TestCase):
+    def test_known_statuses_are_normalized(self):
+        for raw, status in (("draft", "draft"), ("Approved", "approved"), (" IN-REVIEW ", "in-review")):
+            with self.subTest(raw=raw):
+                self.assertEqual(ls.artifact_status("04-plan.md", raw), (status, []))
+
+    def test_missing_status(self):
+        self.assertEqual(ls.artifact_status("04-plan.md", None), (None, []))
+
+    def test_unknown_status_is_in_review_with_a_warning(self):
+        for raw in ("in review", "blocked", "", ["approved"]):
+            with self.subTest(raw=raw):
+                status, warnings = ls.artifact_status("03-design.md", raw)
+                self.assertEqual(status, "in-review")
+                self.assertEqual(len(warnings), 1)
+                self.assertIn("03-design.md has an unknown status", warnings[0])
+                self.assertIn("allowed: draft, in-review, approved", warnings[0])
+
 
 class OpenQuestionsTest(unittest.TestCase):
     def test_counts_latest_round_only(self):
@@ -341,6 +371,58 @@ class ChecksSummaryTest(unittest.TestCase):
         self.assertEqual(ls.summarize_checks([ok, bad, running]), "failing")
         self.assertEqual(ls.summarize_checks([ok, running]), "pending")
         self.assertEqual(ls.summarize_checks([ok, ctx_pending]), "pending")
+
+    def test_checks_by_name(self):
+        rollup = [
+            {"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": "FAILURE"},
+            {"__typename": "StatusContext", "context": "ci/legacy", "state": "PENDING"},
+            {"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"},  # no name
+            "not an object",
+        ]
+        self.assertEqual(ls.checks_by_name(rollup), {"build": "passing", "ci/legacy": "pending"})
+        self.assertEqual(ls.required_check_state(rollup, "build"), "passing")
+        self.assertEqual(ls.required_check_state(rollup, "ci/legacy"), "pending")
+        self.assertEqual(ls.required_check_state(rollup, "check"), "missing")
+        self.assertEqual(ls.required_check_state(None, "check"), "missing")
+
+    def test_latest_by_start_time(self):
+        rollup = [
+            {"name": "build", "status": "COMPLETED", "conclusion": "SUCCESS", "startedAt": "2026-11-12T10:00:00Z"},
+            {"name": "build", "status": "COMPLETED", "conclusion": "FAILURE", "startedAt": "2026-11-12T09:00:00Z"},
+        ]
+        self.assertEqual(ls.required_check_state(rollup, "build"), "passing")
+        rollup[1]["startedAt"] = "2026-11-12T11:00:00Z"
+        self.assertEqual(ls.required_check_state(rollup, "build"), "failing")
+
+
+class PipedFilterTest(unittest.TestCase):
+    def test_filters(self):
+        cases = {
+            "make test | grep -v x": "grep",
+            "go test ./... 2>&1|tail -5": "tail",
+            "pytest |& FOO=1 /usr/bin/head": "head",
+            "pytest | tee out.log | wc -l": "wc",
+            "pytest | rg FAIL": "rg",
+            "make check": None,
+            "make test | tee out.log": None,
+            "make test || head x": None,
+            "npm ci && npm run check": None,
+            "echo 'a | grep'": None,
+            "echo \"unclosed": None,
+        }
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(ls.piped_filter(command), expected)
+
+
+class MetricsDurationTest(unittest.TestCase):
+    def test_non_finite_and_absurd_durations_are_skipped(self):
+        events = []
+        for i, value in enumerate((float("inf"), float("nan"), -1, 10 ** 400, ls.MAX_SEGMENT_SECONDS + 1, True, 30)):
+            events.append({"event": "start", "agent_id": "a%d" % i, "phase": "implement"})
+            events.append({"event": "stop", "agent_id": "a%d" % i, "phase": "implement", "duration_s": value})
+        self.assertEqual(ls.events_metrics(events)["subagentSeconds"], 30)
 
 
 if __name__ == "__main__":

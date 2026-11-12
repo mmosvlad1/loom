@@ -73,6 +73,8 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 | `onMain` is `true` | `on the main branch; no task` | `/loom:start-task #<n>` |
 | `task` is `null` | `branch <branch> matches no task` | `/loom:start-task #<n>` |
 | `task.archived` is `true` | `task #<n> is archived` | `/loom:start-task #<n>` (offers a restore) |
+| `rebaseInProgress` is `true` | `a rebase of <branch> is in progress` | `/loom:iterate rebase` |
+| `workingTree` is `null` | `git status failed: <the error from its warning>` | `fix the git error, then /loom:next` |
 | `pr.state` is `MERGED` | `PR #<number> is merged` | `/loom:finish-task` |
 | `pr.state` is `OPEN` | `PR #<number> is already open; change it with /loom:iterate` | from `next.command` |
 | `implementation.blocked` or `implementation.inProgress` is set | `implementation is not finished` | from `next.command` |

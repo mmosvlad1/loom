@@ -12,6 +12,15 @@ Loop guard: when `stop_hook_active` is true (Claude already continues because
 a stop hook blocked it), the hook does nothing. Each stop sequence gets at
 most one lint block.
 
+The hook also does nothing in plan mode (`permission_mode` is "plan": no code
+is written) and while background work is in flight (`background_tasks` has an
+entry that is not finished, for example a background implementer still
+writing code). The Claude Code hooks docs (Stop input) describe
+`background_tasks` as the list of in-flight tasks, empty when nothing is in
+flight; an entry with a finished status is ignored to be safe.
+The hook cannot tell who changed the working tree: changes the user made by
+hand are linted too.
+
 A silent no-op outside a git repository and without .claude/loom.json.
 """
 from __future__ import annotations
@@ -26,12 +35,29 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # report a timeout.
 LINT_TIMEOUT = 270
 LOOM_DIR = ".loom"
+# Task statuses that mean the task no longer runs (the docs do not list the
+# statuses; in-flight tasks are the norm in `background_tasks`).
+FINISHED_STATUSES = {"completed", "done", "failed", "killed", "stopped", "cancelled", "canceled", "error"}
+
+
+def background_work(data: dict) -> bool:
+    """True when the Stop input lists background work that is still in flight."""
+    tasks = data.get("background_tasks")
+    if not isinstance(tasks, list):
+        return False
+    for task in tasks:
+        status = task.get("status") if isinstance(task, dict) else None
+        if not (isinstance(status, str) and status.lower() in FINISHED_STATUSES):
+            return True
+    return False
 
 
 def main() -> None:
     data = loomhook.read_input()
     if data.get("stop_hook_active"):
         return
+    if data.get("permission_mode") == "plan" or background_work(data):
+        return  # plan mode writes no code; background work is still changing the tree
     ls = loomhook.loom_state()
     top, cfg = ls.load_repo_config(loomhook.hook_cwd(data))
     if cfg is None:
