@@ -115,7 +115,7 @@ Write `<tasks>/<n>-<slug>.md` from `summary-template.md`:
 - **Process metrics**: if `task.metrics` in the state is not `null`, end the Implementation section with the line `Process metrics: <task.metrics.line>`. Copy `task.metrics.line` exactly. If `task.metrics` is `null`, write no Process metrics line. Never estimate the numbers yourself.
 - **Deviations from Plan**: from `log.md` (`Deviations:`, `Additions:`, `Fix:` lines, and `## Plan change` entries).
 - **Verification**: the checks and the manual steps. Mark a manual step as passed only if the user confirmed it.
-- **Follow-ups**: out-of-scope items, worthwhile nits, and open risks. Step 9 proposes them as issues.
+- **Follow-ups**: out-of-scope items, worthwhile nits, and open risks. Step 9 proposes them as issues. On the onboarding task (`task.setup` is `true` and `task.mode` is `full`), the Follow-ups include every `Follow-up:` line of the Out of Scope section of `03-design.md`: each gap that the onboarding design deferred to an issue.
 - Remove every guidance comment.
 
 ## 4. ADRs (quick and full)
@@ -186,7 +186,7 @@ Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`,
 
 ## 9. Follow-up issues
 
-1. Collect follow-ups: the task summary's Follow-ups (oneshot: worthwhile nits and open problems from `log.md`).
+1. Collect follow-ups: the task summary's Follow-ups (oneshot: worthwhile nits and open problems from `log.md`). On the onboarding task, check that every `Follow-up:` line of the design's Out of Scope is among them; add a missing one.
 2. If there are none, skip this step.
 3. Draft each follow-up as an issue in the format of `issue-format.md`: Context starts with `Follow-up from #<n>` and links the PR.
 4. Show the drafts. Ask the user which ones to create. Create only confirmed issues, with `gh issue create` as `issue-format.md` describes.

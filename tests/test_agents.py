@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
 import unittest
@@ -202,6 +203,26 @@ class AgentPromptTest(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, body)
+
+    def test_implementer_writes_loom_json_first_and_takes_the_new_checks(self):
+        """A phase that changes `.claude/loom.json` (LOOM_SPEC.md 9.9, 9.13.5)."""
+        body = self.body("implementer")
+        rule = body.split("**Work that changes `.claude/loom.json`.**", 1)[1].split("\n## ", 1)[0]
+        for needle in ("When your work changes `.claude/loom.json` (the plan phase, the ticket, or a fix item asks for it",
+                       "When the plan or the ticket lists `.claude/loom.json`, write it before every other file",
+                       "the `SubagentStop` hook then already runs the new `checks.check`",
+                       "that Read serves the edit only, not the configuration",
+                       "Run `loom-state --json` right after the change.",
+                       "Use the `checks` of its output instead of the `Checks:` line",
+                       "also the `checks.check` run before you finish", "List `.claude/loom.json` under Files changed."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, rule)
+        self.assertLess(body.index("**Work that changes `.claude/loom.json`.**"), body.index("## Before you edit"))
+        # The implementer runs it through Bash; the kickoff and the fast path allowlist it in .claude/settings.json.
+        fm = split_frontmatter(read(os.path.join(AGENTS_DIR, "implementer.md")))[0]
+        self.assertIn("Bash", [t.strip() for t in fm["tools"].split(",")])
+        settings = json.loads(read(os.path.join(ROOT, "skills", "setup", "references", "templates", "settings.json")))
+        self.assertIn("Bash(loom-state --json)", settings["permissions"]["allow"])
 
     def test_implementer_never_reads_loom_json(self):
         body = read(os.path.join(AGENTS_DIR, "implementer.md"))

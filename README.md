@@ -24,7 +24,9 @@ In a project that `/loom:setup` prepared, `.claude/settings.json` registers the 
 ## Getting started
 
 1. **Install** the plugin (above), then open your project in Claude Code.
-2. **`/loom:setup`** detects the stack and writes `.claude/loom.json`, the checks entry point (`Makefile` or `package.json` scripts), CI with a `check` job (or keeps an existing workflow and records the check name of its job in `ci.requiredCheck`), `.claude/settings.json`, the `docs/` skeleton, and a short `CLAUDE.md`. It shows every change first and works through loom's own flow: an issue "Set up loom" and a `chore/<n>-loom-setup` branch.
+2. **`/loom:setup`** works through loom's own flow: an issue "Set up loom" and a `chore/<n>-loom-setup` branch. It shows every change first. It takes one of two paths, and the plan names it:
+   - **Fast setup** (an empty or new repository, or `/loom:setup --oneshot`): one `oneshot` task. Setup detects the stack and writes `.claude/loom.json`, the checks entry point (`Makefile` or `package.json` scripts), CI with a `check` job (or keeps an existing workflow and records the check name of its job in `ci.requiredCheck`), `.claude/settings.json`, the `docs/` skeleton, and a short `CLAUDE.md`, in one commit.
+   - **Onboarding** (a repository with code): a `full`-mode setup task. Setup does only the kickoff: the ticket, a minimal `.claude/loom.json`, the permission rules of `.claude/settings.json`, and a fixed list of research questions. Then `/clear` and `/loom:next` run research (it also times the existing check commands), design (a discussion of the checks, the required CI check, the docs, the project's own rules, and the agent instruction files), plan, and implement, as for any task.
 3. **`/loom:describe-pr`**, then **`/loom:finish-task`** merge the setup PR. After the merge, `finish-task` offers a ruleset that protects the main branch.
 4. **`/loom:backlog`** discusses ideas, helps fill `docs/product/vision.md`, and creates GitHub issues (labels `type:*`, `size:*`, `mode:*`).
 5. **`/loom:start-task #<n>`** picks the mode, creates the branch and `.loom/tasks/<n>-<slug>/00-ticket.md`.
@@ -54,6 +56,7 @@ Run the working copy with `claude --plugin-dir /path/to/loom` in a sandbox repos
   | `research-full` | `/loom:research` writes `02-research.md` in review with `file:line` references and never reads `00-ticket.md`; the subagent events hook writes `events.jsonl` |
   | `design-full` | `/loom:design` writes round 1 with every question open and an empty Resolved Decisions table |
   | `implement-manual` | `/loom:implement` commits phase 1 and stops for manual verification before phase 2; `events.jsonl` has the reviewer's verdict and the implementer's checks result |
+  | `design-onboarding` | `/loom:design` on the onboarding task reads its onboarding reference and writes round 1 with every question open, an empty Resolved Decisions table, a question that names `AGENTS.md` and the push or the confirmation, and a question that names `ci.requiredCheck` and the CI job `test`; it never reads `01-research-questions.md` |
   | `guard-main` | the hook blocks `git commit` on `main` |
   | `describe-pr-quick` | `/loom:describe-pr` writes `pr-body.md` with Why, Special things to note, Change outline, Verification, and Decisions, and does not push or open the PR |
 

@@ -22,6 +22,8 @@ Scenarios:
   guard-main        on main with a staged change and no task
   describe-pr-quick quick mode, both implementation phases done and committed, no remote, no PR;
                     loom.json maps docs.tasks to notes/loom-tasks and requires the PR section ## Test plan
+  design-onboarding the onboarding task #1 (setup task, full mode) on chore/1-loom-setup after the kickoff
+                    commit, research approved; AGENTS.md without CLAUDE.md, a CI job named `test`
 """
 from __future__ import annotations
 
@@ -647,8 +649,12 @@ def git(*args: str, date: Optional[str] = None) -> str:
     return proc.stdout.strip()
 
 
-def build_repo(config: Optional[Dict[str, Any]] = None) -> None:
-    """Project files, one commit on main, and local git identity for later commits."""
+def build_repo(config: Optional[Dict[str, Any]] = None, loom_json: bool = True,
+               gitignore: str = GITIGNORE, extra: Optional[Dict[str, str]] = None) -> None:
+    """Project files, one commit on main, and local git identity for later commits.
+
+    `loom_json=False` leaves out `.claude/loom.json` (a repository before setup); `extra` adds files.
+    """
     write("shop/__init__.py", '"""A tiny shop library."""\n')
     write("shop/cart.py", CART_PY)
     write("shop/pricing.py", PRICING_PY)
@@ -658,8 +664,11 @@ def build_repo(config: Optional[Dict[str, Any]] = None) -> None:
     write("tests/test_pricing.py", TEST_PRICING_PY)
     write("Makefile", MAKEFILE)
     write("README.md", README_MD)
-    write(".gitignore", GITIGNORE)
-    write(".claude/loom.json", json.dumps(config or LOOM_JSON, indent=2) + "\n")
+    write(".gitignore", gitignore)
+    if loom_json:
+        write(".claude/loom.json", json.dumps(config or LOOM_JSON, indent=2) + "\n")
+    for path, text in sorted((extra or {}).items()):
+        write(path, text)
     git("init", "-q", "-b", "main")
     # Later commits (implement, the guard scenario) run without global config.
     git("config", "user.name", "Shop Dev")
@@ -733,12 +742,325 @@ def scenario_guard_main() -> None:
     git("add", "README.md")
 
 
+# ---------------------------------------------------------------------------
+# design-onboarding: the onboarding task of a repository with code (LOOM_SPEC.md 9.13)
+# ---------------------------------------------------------------------------
+
+SETUP_ISSUE = 1
+SETUP_TASK = "%d-loom-setup" % SETUP_ISSUE
+SETUP_BRANCH = "chore/" + SETUP_TASK
+SETUP_TASK_DIR = os.path.join(".loom", "tasks", SETUP_TASK)
+SETUP_ISSUE_URL = "https://github.com/example/shop/issues/%d" % SETUP_ISSUE
+
+# The kickoff's minimal loom.json (LOOM_SPEC.md 9.13.2 step 7): every other key keeps its default.
+KICKOFF_LOOM_JSON = {"version": 1, "mainBranch": "main"}
+
+# The kickoff's settings.json (9.13.2 step 8): the permission rules of the setup template,
+# without the rule for the check commands (`Bash(make *)`), and the `$schema` line of a new file.
+KICKOFF_SETTINGS = {
+    "$schema": "https://json.schemastore.org/claude-code-settings.json",
+    "permissions": {
+        "allow": [
+            "Bash(git status *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git add *)",
+            "Bash(git commit *)", "Bash(git switch *)", "Bash(git pull *)", "Bash(git fetch *)",
+            "Bash(git rebase *)", "Bash(git stash push *)", "Bash(git stash list *)",
+            "Bash(git stash show *)", "Bash(git stash pop *)", "Bash(git branch *)",
+            "Bash(gh issue view *)", "Bash(gh issue list *)", "Bash(gh pr view *)", "Bash(gh pr checks *)",
+            "Bash(gh run view *)", "Bash(gh run list *)", "Bash(gh pr list *)", "Bash(gh label list *)",
+            "Bash(gh repo view *)", "Bash(loom-state --json)", "Bash(loom-state --json --pr)",
+            "Bash(loom-state --slug *)", "Bash(mkdir -p .loom/tasks/_archive)",
+            "Bash(mv .loom/tasks/* .loom/tasks/_archive/)", "Bash(mv .loom/tasks/_archive/* .loom/tasks/)",
+        ],
+        "ask": [
+            "Bash(git push *)", "Bash(gh pr create *)", "Bash(gh pr edit *)", "Bash(gh pr merge *)",
+            "Bash(gh issue create *)", "Bash(gh label create *)", "Bash(gh api *)",
+        ],
+    },
+}
+
+# An AGENTS.md that Claude Code loads by itself (no CLAUDE.md), with a rule that conflicts with loom.
+AGENTS_MD = """\
+# Agent instructions
+
+- Run `make check` before you finish a change.
+- Work on a branch named `feature/<short-name>`.
+- Push and open pull requests without asking for confirmation.
+- Keep commit subjects short and in the imperative mood.
+"""
+
+# The existing CI: one job named `test` that runs only the unit tests, not `make check`.
+CI_YML = """\
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: make test
+"""
+
+ONBOARDING_GITIGNORE = "__pycache__/\n"
+
+# The issue body of templates/setup-issue-onboarding.md, verbatim (tests/test_evals.py compares them).
+SETUP_ISSUE_BODY = """\
+## Context
+
+The project starts to use the loom plugin for issue-to-PR work. The repository already has code, so this setup runs as a loom task in full mode: research describes the repository, design discusses how loom fits the project, and the plan and its implementation phases write the configuration. `/loom:setup` does only the kickoff: the minimal `.claude/loom.json`, the permission rules of `.claude/settings.json`, and the fixed research questions.
+
+## Acceptance Criteria
+
+- [ ] `.claude/loom.json` is complete: the check commands, the docs map, and `ci.requiredCheck`
+- [ ] `checks.check` passes on the main branch and finishes within 540 seconds
+- [ ] The required CI check runs `checks.check` on pull requests and on pushes to the main branch, and `ci.requiredCheck` names it
+- [ ] `.claude/settings.json` registers the loom marketplace, enables `loom@loom`, and allowlists the routine commands and the check commands
+- [ ] Each docs role (vision, overview, decisions, conventions, tasks) has a document: mapped, migrated, or created
+- [ ] `CLAUDE.md` has the loom section; a new `CLAUDE.md` imports `@AGENTS.md` when the repository has an `AGENTS.md`
+- [ ] `.gitignore` ignores the loom work directory
+
+## Out of Scope
+
+- Every other gap of the repository: each one becomes a follow-up issue after this PR.
+- No migration of issues, labels, or branches.
+- The main branch ruleset: `/loom:finish-task` offers it after this PR is merged, when the required CI check exists on the main branch.
+"""
+
+# skills/setup/references/onboarding-questions.md with the Key Context Pointers of `--setup-path` filled
+# (tests/test_evals.py compares them).
+ONBOARDING_QUESTIONS_BODY = """\
+# Research Questions
+
+## Key Context Pointers
+
+- Instruction files: `AGENTS.md`
+- Workflows: `.github/workflows/ci.yml`
+- PR templates: None.
+- Docs directories: None.
+
+## Questions
+
+1. **Stacks and check commands.** Which languages, package managers, and lock files does the repository use, and where? Which commands run lint, format check, typecheck, unit tests, build, and e2e tests today (`Makefile`, `justfile`, `Taskfile.yml`, `package.json` scripts, `tox.ini`, `noxfile.py`, `scripts/`)? Is there one root command that runs several of them? Which services, secrets, or network access does each command need? What are the exit status and the run time of each command that research runs (the check runs rule of research)?
+2. **CI.** Which workflows exist in `.github/workflows/` (and other CI configuration)? For each: the triggers, the check names as GitHub reports them (job `name`, with matrix suffixes), the commands each job runs, how actions and tools are pinned, and how long the jobs ran in the latest run on the main branch (`gh run list`, `gh run view`).
+3. **Documentation.** Where do the docs live (README, `docs/`, `doc/`, ADR directories, wiki links)? What are the structure, the file formats, and the file naming? Which documents describe the product and its users, the architecture and its components, past decisions (with their file name pattern and layout), code conventions, and past work (changelogs, task notes)?
+4. **Agent instruction files and Claude Code configuration.**
+   - Which of `AGENTS.md`, `.claude/AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/`, `.cursorrules`, `.cursor/rules/`, `.github/copilot-instructions.md`, `.github/instructions/`, `GEMINI.md`, and similar files exist, at the git top level and in subdirectories?
+   - Which of them does Claude Code load (the instruction files rule of research), and which does `CLAUDE.md` import with `@`?
+   - What do they state about branches, commits, push, pull requests, confirmations, the planning workflow, checks, and code? Quote each rule with `file:line`.
+   - What else does `.claude/` hold: `commands/`, `skills/`, `agents/`, the hooks and the enabled plugins of `.claude/settings.json`?
+5. **Conventions.** Which linter, formatter, and type checker configurations exist, with their main settings? How are tests laid out (directories, naming, fixtures)? How are modules and packages laid out?
+6. **Git process.**
+   - What are the default branch, the branch name patterns in use, and the commit message format on the main branch?
+   - Which merge method does the history show, and which merge methods does the repository allow (`gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed,deleteBranchOnMerge`)?
+   - Which local git hooks exist (`.pre-commit-config.yaml`, `.husky/`, `lefthook.yml`, `core.hooksPath`), and what does each run on commit and on push?
+   - Which PR templates exist, with which sections? Which CI steps or actions read the PR title, the PR body, or the commit subjects?
+   - Which labels, open issues, and milestones exist?
+   - Which rulesets or branch protection rules apply to the main branch (required checks, required approvals, signed commits)?
+7. **loom requirements.** For each item, does it exist today, and where:
+   - one root command that runs lint, typecheck, and unit tests; separate commands for each;
+   - a CI job that runs that command on pull requests and on pushes to the main branch;
+   - a document in each docs role: `vision` (what the product is, for whom, non-goals), `overview` (components and data flow), `decisions` (decision records), `conventions` (code style, testing rules, module layout), `tasks` (notes on past work);
+   - tests, and the result of the latest CI run on the main branch;
+   - `.claude/settings.json`, and its keys;
+   - a git ignore rule that covers `.claude/`, `CLAUDE.md`, or a document of a docs role (`git check-ignore -v`).
+"""
+
+ONBOARDING_RESEARCH_BODY = """\
+# Research
+
+## Summary
+
+The repository is a Python standard library package, `shop/`, with `unittest` tests in `tests/`. A `Makefile` runs every check: `make check` runs `lint`, `typecheck`, and `test` (`Makefile:15`), and it passed in 0.4 seconds on this branch. One GitHub Actions workflow has one job, `test`, which runs `make test` only (`.github/workflows/ci.yml:12-19`). The only document is `README.md`. `AGENTS.md` at the git top level holds the agent rules; no `CLAUDE.md` exists, so Claude Code loads `AGENTS.md` at the start.
+
+## Findings
+
+### 1. One Makefile runs lint, typecheck, and tests, and `make check` passes in 0.4 seconds
+
+Question: Stacks and check commands.
+
+The repository uses Python with the standard library only: no `pyproject.toml`, no lock file, no dependencies. `shop/` holds the package (`shop/__init__.py:1`), `tests/` the tests (`tests/test_cart.py:1-3`).
+
+The `Makefile` defines four targets (`Makefile:4`):
+
+| Target | Command | Lines |
+|---|---|---|
+| `lint` | parses every `shop/*.py` and `tests/*.py` file with `ast` | `Makefile:6-7` |
+| `typecheck` | prints a message; no type checker runs | `Makefile:9-10` |
+| `test` | `python3 -B -m unittest discover -s tests -t .` | `Makefile:12-13` |
+| `check` | runs `lint`, `typecheck`, and `test` | `Makefile:15` |
+
+No command needs a service, a secret, or network access. `README.md:5` names `make check` as the way to run the checks.
+
+Check runs on this branch:
+
+| Command | Exit status | Run time | Result |
+|---|---|---|---|
+| `make check` | 0 | 0.4 s | passes: 7 tests |
+
+`git status --porcelain` was empty after the run.
+
+#### Testing patterns
+
+`tests/test_cart.py:6-22` and `tests/test_pricing.py:8-26` hold stdlib `unittest` test cases with literal carts; no fixtures or mocks.
+
+### 2. One workflow runs `make test` in a job named `test` on pull requests and pushes to main
+
+Question: CI.
+
+`.github/workflows/ci.yml` runs on `pull_request` and on `push` to `main` (`.github/workflows/ci.yml:3-6`), with `contents: read` (`.github/workflows/ci.yml:8-9`). Its one job is `test` (`.github/workflows/ci.yml:12`); GitHub reports the check name `test`. The job runs on `ubuntu-24.04`, sets up Python 3.12, and runs `make test` (`.github/workflows/ci.yml:13-19`). It does not run `make lint`, `make typecheck`, or `make check`. Actions are pinned to major tags: `actions/checkout@v4`, `actions/setup-python@v5` (`.github/workflows/ci.yml:15-16`).
+
+The latest run on `main` passed; the job `test` ran for 24 seconds (`gh run list`, `gh run view`).
+
+#### Testing patterns
+
+CI runs the same unit tests as `make test` (`.github/workflows/ci.yml:19`).
+
+### 3. The README is the only document
+
+Question: Documentation.
+
+`README.md:1-5` names the project, describes it in one sentence, and names `make check`. No `docs/` or `doc/` directory, no decision records, no changelog, and no task notes exist.
+
+#### Testing patterns
+
+No tests cover the docs.
+
+### 4. `AGENTS.md` is loaded at the start and allows push and PRs without confirmation
+
+Question: Agent instruction files and Claude Code configuration.
+
+| File | Loaded by Claude Code | Why |
+|---|---|---|
+| `AGENTS.md` | at the start (since Claude Code 2.1.277) | no `CLAUDE.md`, `.claude/CLAUDE.md`, or `CLAUDE.local.md` at the git top level |
+
+No other instruction file exists: no `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/`, `.cursorrules`, `.cursor/rules/`, `.github/copilot-instructions.md`, or `GEMINI.md`.
+
+Rules of `AGENTS.md`:
+
+- "Run `make check` before you finish a change." (`AGENTS.md:3`)
+- "Work on a branch named `feature/<short-name>`." (`AGENTS.md:4`)
+- "Push and open pull requests without asking for confirmation." (`AGENTS.md:5`)
+- "Keep commit subjects short and in the imperative mood." (`AGENTS.md:6`)
+
+`.claude/` holds only `loom.json` and `settings.json` of the kickoff commit: no `commands/`, `skills/`, `agents/`, hooks, or enabled plugins (`.claude/settings.json:2-3`).
+
+#### Testing patterns
+
+No tests cover the instruction files.
+
+### 5. Modules start with a docstring; tests use one `unittest` file per module
+
+Question: Conventions.
+
+No linter, formatter, or type checker configuration exists. Modules start with a one-line docstring and `from __future__ import annotations` (`shop/pricing.py:1-2`). Tests live in `tests/`, one `test_<module>.py` file per module, one `unittest.TestCase` class per file (`tests/test_cart.py:6`).
+
+#### Testing patterns
+
+`tests/__init__.py` is empty; `make test` discovers the tests from the top level (`Makefile:13`).
+
+### 6. The main branch has one commit; squash merges are allowed and nothing protects the branch
+
+Question: Git process.
+
+- The default branch is `main` (`gh repo view`). The history has one commit, `chore: initial shop library`; this branch adds the kickoff commit `chore(loom): start loom setup (#1)` (`git log`).
+- The repository allows squash merges, merge commits, and rebase merges, and does not delete branches on merge (`gh repo view`).
+- No local git hooks exist: no `.pre-commit-config.yaml`, `.husky/`, or `lefthook.yml`, and `core.hooksPath` is not set (`git config --get core.hooksPath`).
+- No PR template exists, and no CI step reads the PR title, the PR body, or the commit subjects.
+- The labels are the GitHub defaults plus `type:chore`, `size:M`, and `mode:full` (`gh label list`). The only open issue is #1 "Set up loom" (`gh issue list`). No milestones exist (`gh api`).
+- No ruleset and no classic branch protection apply to `main` (`gh api`: an empty rule list, and 404 for the protection).
+
+#### Testing patterns
+
+Not applicable.
+
+### 7. loom requirements
+
+Question: loom requirements.
+
+| Item | Exists | Where |
+|---|---|---|
+| One root command for lint, typecheck, and unit tests | exists | `make check` (`Makefile:15`) |
+| Separate commands for each | exists | `make lint`, `make typecheck`, `make test` (`Makefile:6-13`) |
+| A CI job that runs the root command on pull requests and pushes to main | does not exist | the job `test` runs `make test` (`.github/workflows/ci.yml:19`) |
+| `vision` document | exists | `README.md:3` (one sentence) |
+| `overview` document | does not exist | — |
+| `decisions` document | does not exist | — |
+| `conventions` document | does not exist | — |
+| `tasks` document | does not exist | — |
+| Tests | exists | `tests/`, 7 tests; the latest CI run on `main` passed |
+| `.claude/settings.json` | exists | the kickoff permission rules: `$schema` and `permissions` (`.claude/settings.json:2-3`) |
+| An ignore rule for `.claude/`, `CLAUDE.md`, or a document of a docs role | does not exist | `git check-ignore -v` matched none |
+
+#### Testing patterns
+
+Not applicable.
+
+## Patterns & Conventions
+
+- Modules start with a one-line docstring and `from __future__ import annotations` (`shop/pricing.py:1-2`).
+- Money values are floats, rounded only in `order_total` (`shop/pricing.py:26`).
+
+## External Sources
+
+None.
+
+## Not Found / Unclear
+
+- The run time of the job `test` in runs before the latest one was not read.
+"""
+
+
+def onboarding_artifact(name: str, phase: str, based_on: str, body: str, **extra: str) -> None:
+    fields = {"task": SETUP_TASK, "phase": phase, "status": "approved", "based_on": based_on}
+    fields.update(extra)
+    fields["updated"] = UPDATED
+    write(os.path.join(SETUP_TASK_DIR, name), frontmatter(fields) + "\n" + body)
+
+
+def scenario_design_onboarding() -> None:
+    """An onboarding task in full mode after the kickoff and an approved research.
+
+    The main branch has code, an AGENTS.md (no CLAUDE.md), and a CI job named `test`, and
+    no `.claude/loom.json`. The branch chore/1-loom-setup has the kickoff commit with the
+    minimal loom.json, the kickoff settings.json, and the `.loom/` line of .gitignore.
+    """
+    build_repo(loom_json=False, gitignore=ONBOARDING_GITIGNORE,
+               extra={"AGENTS.md": AGENTS_MD, ".github/workflows/ci.yml": CI_YML})
+    # The kickoff needs `origin`, and the research reads GitHub facts. The remote is never fetched:
+    # no remote-tracking ref exists, so loom-state and --setup-path read the local main branch.
+    git("remote", "add", "origin", "https://github.com/example/shop.git")
+    git("switch", "-q", "-c", SETUP_BRANCH)
+    write(".gitignore", ONBOARDING_GITIGNORE + ".loom/\n")
+    write(".claude/loom.json", json.dumps(KICKOFF_LOOM_JSON, indent=2) + "\n")
+    write(".claude/settings.json", json.dumps(KICKOFF_SETTINGS, indent=2) + "\n")
+    fields = {"task": SETUP_TASK, "phase": "ticket", "mode": "full", "size": "M", "issue": str(SETUP_ISSUE),
+              "url": SETUP_ISSUE_URL}
+    write(os.path.join(SETUP_TASK_DIR, "00-ticket.md"), frontmatter(fields) + (
+        "# Set up loom\n\nLabels: type:chore, size:M, mode:full\nURL: %s\n\n" % SETUP_ISSUE_URL) + SETUP_ISSUE_BODY)
+    git("add", "--", ".gitignore", ".claude/loom.json", ".claude/settings.json")
+    git("commit", "-q", "-m", "chore(loom): start loom setup (#%d)" % SETUP_ISSUE, date="2026-11-09T09:00:00+00:00")
+    onboarding_artifact("01-research-questions.md", "research-questions", "[]", ONBOARDING_QUESTIONS_BODY)
+    onboarding_artifact("02-research.md", "research", "[01-research-questions.md]", ONBOARDING_RESEARCH_BODY,
+                        git_commit=git("rev-parse", "--short", "HEAD"))
+
+
 SCENARIOS = {
     "research-full": scenario_research_full,
     "design-full": scenario_design_full,
     "implement-manual": scenario_implement_manual,
     "guard-main": scenario_guard_main,
     "describe-pr-quick": scenario_describe_pr_quick,
+    "design-onboarding": scenario_design_onboarding,
 }
 
 

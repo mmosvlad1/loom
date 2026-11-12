@@ -35,6 +35,8 @@ Read these files in full before you start:
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/final-answer.md` (format of your last message)
 - `${CLAUDE_SKILL_DIR}/references/template.md` (the template of `03-design.md`)
 
+**Onboarding task only.** When `task.setup` is `true` and `task.mode` is `full` (the onboarding task), also read `${CLAUDE_SKILL_DIR}/references/onboarding.md` in full (the onboarding discussion: section content, topics, and defaults). On every other task, the fast-path setup task included, do not read it.
+
 Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission.
 
 ## 1. Check preconditions
@@ -71,6 +73,8 @@ Follow this rule exactly. An eval checks it.
 
 When the ticket and the research disagree about current behavior, the research and the code win. When they disagree about the goal, the ticket wins.
 
+On the onboarding task, also follow "Inputs" in `onboarding.md`: until implementation phase 1 the state has the default `checks` and `docs`, so the project's facts come from the research.
+
 ## 3. Follow-up research (optional)
 
 Spawn agents only if the research does not answer something the design needs. Use only these agents, by their namespaced name:
@@ -102,6 +106,8 @@ Use the template you read at the start (`${CLAUDE_SKILL_DIR}/references/template
    - **Resolved Decisions**: the table header only. No rows.
    - **Testing Approach**: which existing test patterns to follow (with `path:line`), which new tests, and which checks cover them.
 3. Remove every guidance comment from the template.
+
+On the onboarding task, fill the sections as "Sections" in `onboarding.md` describes, and write round 1 over its "Topics". Its gaps deferred to issues go into Out of Scope as `Follow-up: <gap>` lines.
 
 ### All questions are open
 

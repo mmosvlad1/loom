@@ -35,6 +35,15 @@ Read these files in full before you start:
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/final-answer.md` (format of your last message)
 - `${CLAUDE_SKILL_DIR}/references/template.md` (the template of `04-plan.md`)
 
+**Onboarding task only.** When `task.setup` is `true` and `task.mode` is `full` (the onboarding task), also read these files in full. On every other task, the fast-path setup task included, do not read them:
+
+- `${CLAUDE_SKILL_DIR}/references/onboarding.md` (check commands from the design, the full `.claude/loom.json` first in phase 1, templates in the plan)
+- the loom templates that the plan copies: `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/loom.json`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/settings.json`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/CLAUDE.md`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/Makefile`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/ci.python-uv.yml`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/ci.node.yml`
+- the docs skeleton: `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/docs/product/vision.md`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/docs/architecture/overview.md`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/docs/conventions.md`
+- `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/loom-statusline.py` (the larger template: written unchanged to the task directory, never into the plan text)
+
+Read the templates with the Read tool. Copy them; never write them from memory.
+
 Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission.
 
 ## 1. Check preconditions
@@ -47,6 +56,7 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 | `onMain` is `true` | `on the main branch; no task` | `/loom:start-task #<n>` |
 | `task` is `null` | `branch <branch> matches no task` | `/loom:start-task #<n>` |
 | `task.archived` is `true` | `task #<n> is archived` | `/loom:start-task #<n>` (offers a restore) |
+| `task.setup` is `true` (the setup task), and `task.mode` is not `full` | `plan runs on the setup task only in full mode (mode: <mode>); /loom:setup owns the fast path` | from `next.command` |
 | `task.mode` is `oneshot` | `oneshot mode has no plan; implement works from 00-ticket.md` | `/loom:implement` |
 | `02-research.md` is missing or `draft` | `plan needs finished research (02-research.md)` | `/loom:research` |
 | full mode: `03-design.md` is missing or `draft` | `plan needs a finished design (03-design.md)` | `/loom:design` |
@@ -75,6 +85,7 @@ Follow this rule exactly. An eval checks it.
 - Do not read `*.superseded.md` files.
 - Read `docs.conventions` and `docs.overview` if they exist. Take the paths from `docs` in the state (the docs map); never build a doc path yourself.
 - Take the check commands from `checks` in the state (`lint`, `typecheck`, `test`, `check`). A `null` check does not exist in the project: never plan it, and never invent a command for it.
+- On the onboarding task, take the check commands from the design instead, as `onboarding.md` describes: until implementation phase 1 writes the full `.claude/loom.json`, the state has the defaults.
 - Read every file the arguments mention, in full.
 - Read the source files that the plan changes, as the research and the design reference them. You need them to write exact signatures and change points.
 
@@ -126,9 +137,15 @@ Use the template you read at the start (`${CLAUDE_SKILL_DIR}/references/template
    - `### Verification`: checkbox lines (see below).
 6. Remove every guidance comment from the template.
 
+On the onboarding task, also follow `onboarding.md`:
+
+- Implementation phase 1 writes the full `.claude/loom.json`, as the first file of its Changes.
+- The Changes carry the content of every small loom template they use, with the placeholders filled.
+- When the design chose the status line, write `loom-statusline.py` unchanged to `<task dir>/templates/loom-statusline.py`, and name that copy in the Changes.
+
 ### Verification lines
 
-- Start with `- [ ] Automated: <command>` lines: the check commands from `checks` in the state (e.g. `checks.test`; never a `null` one), plus specific commands where they help (a single test file, a curl call, a CLI run).
+- Start with `- [ ] Automated: <command>` lines: the check commands from `checks` in the state (e.g. `checks.test`; never a `null` one; on the onboarding task, the check commands of the design), plus specific commands where they help (a single test file, a curl call, a CLI run).
 - Add a `- [ ] Manual: <step>` line only if the check cannot reasonably be automated. Prefer a test or a script.
 - `implement` stops after every implementation phase that has a `Manual:` line. An implementation phase without manual steps has no `Manual:` line at all.
 - Do not add commit steps. `implement` commits each implementation phase.

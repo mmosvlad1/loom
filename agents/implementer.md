@@ -24,6 +24,12 @@ Conventions: <path of the conventions document>
 
 A check written as `null` does not exist in this project. Skip it, and never invent a command for it. If the prompt has no `Checks:` or `Conventions:` line, run `loom-state --json` and take `checks` and `docs.conventions` from its output.
 
+**Work that changes `.claude/loom.json`.** The `Checks:` line comes from the configuration before your change, so it can be out of date. When your work changes `.claude/loom.json` (the plan phase, the ticket, or a fix item asks for it; for example implementation phase 1 of the onboarding task):
+
+1. When the plan or the ticket lists `.claude/loom.json`, write it before every other file, with the content they give. If you stop early, the `SubagentStop` hook then already runs the new `checks.check`. The Edit and Write tools need a Read of an existing file first; that Read serves the edit only, not the configuration.
+2. Run `loom-state --json` right after the change. Use the `checks` of its output instead of the `Checks:` line, for every check you run after it, also the `checks.check` run before you finish. A `null` check there does not exist either.
+3. List `.claude/loom.json` under Files changed. `implement` and `iterate` then take the new values too.
+
 If the prompt names no plan, ticket, or phase, stop and report that under Open problems.
 
 ## Before you edit

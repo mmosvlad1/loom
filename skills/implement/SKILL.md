@@ -41,6 +41,8 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 The state holds the resolved configuration: `mainBranch`, the check commands (`checks`), the doc paths (`docs`), `implement.maxFixAttempts`, `implement.autoAdvance`, and `hooks.maxCheckAttempts`. Take every value from there, never from `.claude/loom.json`. Pass `checks`, `docs.conventions`, and `mainBranch` to the agents as the configuration lines of `implementation-loop.md`.
 
+**A phase that changes `.claude/loom.json`.** The state above holds the values from before the change. When the implementer's `Files changed` lists `.claude/loom.json`, or `git status --porcelain -- .claude/loom.json` shows it changed, run `loom-state --json` again (step 3 of `implementation-loop.md`). Take the configuration from that output (`checks`, `docs`, `mainBranch`, `implement`, `hooks`) for your own check run, the reviewer prompt, the fix attempts, and the later implementation phases.
+
 Below, `<n>` is `task.number` and `<task dir>` is `task.dir`.
 
 ### The `Next:` line

@@ -1,6 +1,6 @@
 ---
 name: research
-description: Documents the code as it exists today and writes 02-research.md with file:line references. Full mode reads only 01-research-questions.md, never the ticket; quick mode reads 00-ticket.md. Fans out 2 to 6 loom research agents, then verifies sample claims. Describes only - no recommendations.
+description: Documents the code as it exists today and writes 02-research.md with file:line references. Full mode reads only 01-research-questions.md, never the ticket; quick mode reads 00-ticket.md. Fans out 2 to 6 loom research agents, then verifies sample claims. Describes only - no recommendations. On the onboarding task it also reads GitHub facts and times each candidate check command once.
 disable-model-invocation: true
 argument-hint: "[notes or extra files]"
 model: inherit
@@ -42,6 +42,8 @@ Read these files in full before you start:
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/final-answer.md` (format of your last message)
 - `${CLAUDE_SKILL_DIR}/references/template.md` (the template of `02-research.md`)
 
+**Onboarding task only.** When `task.setup` is `true` and `task.mode` is `full` (the onboarding task), also read `${CLAUDE_SKILL_DIR}/references/onboarding.md` in full (the fixed questions, the GitHub facts, the local git facts, the check runs, and the instruction files). On every other task, do not read it.
+
 Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission.
 
 ## 1. Check preconditions
@@ -55,6 +57,8 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 | `task` is `null` | `branch <branch> matches no task` | `/loom:start-task #<n>` |
 | `task.archived` is `true` | `task #<n> is archived` | `/loom:start-task #<n>` (offers a restore) |
 | `task.mode` is `oneshot` | `oneshot mode has no research phase` | from `next.command` |
+| `task.setup` is `true` (the setup task), and `task.mode` is not `full` | `setup task #<n> has no valid mode for research (mode: <mode>); only /loom:setup changes it` | `/loom:setup` |
+| `task.setup` is `true`, and `01-research-questions.md` is missing or not `approved` | `the onboarding kickoff did not finish: 01-research-questions.md is missing or not approved` | `/loom:setup` |
 | full mode: `01-research-questions.md` is missing or `draft` | `research needs finished research questions` | `/loom:research-questions` |
 | `02-research.md` exists with status `in-review` or `approved`, and `stale` is `false` | ask the user first (see below) | — |
 
@@ -63,7 +67,7 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
   - If `03-design.md` or `04-plan.md` exists, show the `staleFiles` and offer to rerun the research. Continue only after the answer "rerun". The later artifacts may then need `/loom:iterate <feedback>`.
   - If neither exists, rerun it without asking.
   - Add a `Warning:` line with the `staleFiles` to the final message.
-- If `01-research-questions.md` is `in-review` (not approved), continue. Add `Warning: research questions not reviewed` to the final message.
+- If `01-research-questions.md` is `in-review` (not approved), continue. Add `Warning: research questions not reviewed` to the final message. On the setup task the row above stops first.
 
 ## 2. Input discipline
 
@@ -78,6 +82,8 @@ The inputs depend on `task.mode`. Follow this rule exactly. An eval checks it.
 - Tell your agents nothing from the ticket. Give them only the research questions, the Key Context Pointers, and what you found in the code.
 
 Research is blind to intent in full mode: it must describe the code without the bias of what will be built.
+
+The onboarding task is full mode, and this rule holds unchanged. Its `01-research-questions.md` holds the fixed questions of the kickoff and the questions the user added. The ticket holds nothing that this list misses.
 
 ### Quick mode: read `00-ticket.md`
 
@@ -111,6 +117,17 @@ Spawn agents by their namespaced name. Use only these agents. Do not use `genera
 - Wait for **all** agents to finish before you synthesize.
 - If an answer is still missing, run one more targeted pass with at most 3 agents. After that pass, put what is still missing under **Not Found / Unclear**.
 
+### Onboarding task: GitHub facts, local git facts, and check runs
+
+Only on the onboarding task. The agents answer the questions from the files. You do the rest yourself, in the main context, after all agents finished, as `onboarding.md` describes:
+
+1. Read the GitHub facts with the read-only `gh` commands of "GitHub facts".
+2. Read the local git facts with the read-only `git` commands of "Local git facts". The research agents cannot run git.
+3. Run each candidate check command once, as "Check runs" describes: `time <command>` with the 600-second Bash timeout, then `git status --porcelain`.
+4. Record for each instruction file whether Claude Code loads it, as "Instruction files" describes.
+
+Never ask an agent to run a check command, a `git` command, or a `gh` command.
+
 ## 4. Write the research
 
 Use the template you read at the start (`${CLAUDE_SKILL_DIR}/references/template.md`). Write `<task.dir>/02-research.md` from it:
@@ -136,6 +153,7 @@ Writing rules:
 - Use call trees, file trees, tables, signatures, and pseudocode where they show a shape faster than prose. Place each one next to the prose it supports.
 - Do not use `diff` blocks or `+`/`-` change markers. Nothing changes in research.
 - Do not add a `## Open Questions` section. Put open points under **Not Found / Unclear**.
+- On the onboarding task, also follow `onboarding.md`: question 7 is answered as `exists` or `does not exist` with the location, a GitHub fact names its command instead of a `path:line`, and the check runs go into one table in the findings of question 1.
 
 ## 5. Claim check
 
@@ -151,4 +169,4 @@ After the draft is written, verify it:
 
 - Set `status: in-review` and `updated` to today.
 - Run `loom-state --json` and compute the `Next:` line as `final-answer.md` describes.
-- End with the `final-answer.md` format and nothing else. `Open questions` is `0` for this artifact. Add the `Warning:` lines from step 1.
+- End with the `final-answer.md` format and nothing else. `Open questions` is `0` for this artifact. Add the `Warning:` lines from step 1. On the onboarding task, also add the `Warning:` line that names the files the check runs left.

@@ -139,7 +139,11 @@ The path `onboarding-rerun`: you are on `<branch>`, and the ticket has mode `ful
    - `.claude/loom.json` is missing: kickoff step 7.
    - `.claude/settings.json` lacks a kickoff rule: kickoff step 8.
    - The kickoff commit: kickoff step 9, with the files of kickoff steps 2, 7, and 8 that differ from `origin/<main>`.
-4. **Research questions file.** `<task dir>/01-research-questions.md` is missing or its `status` is not `approved`: show the question list again, and write the file after the confirmation, as `approved` (kickoff step 10). On a fresh clone the ignored task directory is missing: setup writes the ticket and the research questions again. Research, design, and plan are lost, as for every task.
+4. **Research questions file.** `<task dir>/01-research-questions.md` is missing or its `status` is not `approved`: show the question list again, and write the file after the confirmation, as `approved` (kickoff step 10).
+   - The file is missing: the list is the 7 fixed questions of `onboarding-questions.md`.
+   - The file exists and is not `approved`: it keeps its own questions. Read it, and show the list of that file, not the template, so no question the user added is lost. Write it back with `status: approved` and `updated: <today>`. Keep its Key Context Pointers and its questions, and append the questions the user adds in the answer, as in kickoff step 10.
+
+   On a fresh clone the ignored task directory is missing: setup writes the ticket and the research questions again. Research, design, and plan are lost, as for every task.
 5. **Open PR last.** If `gh pr list --head <branch> --state open --json number` lists a PR, stop: `Result: the setup PR is open`, plus the restored items, if any. `Next: /loom:next` (it reads the PR state).
 6. Otherwise run `loom-state --json` and stop: `Result: onboarding task #<n> continues on <branch>`, plus the restored items, or `nothing to restore`. `Next:` from `next.command`, mapped as `final-answer.md` describes. If `next.command` is still `/loom:setup`, add `Warning: loom-state routes to /loom:setup: <next.reason>`.
 

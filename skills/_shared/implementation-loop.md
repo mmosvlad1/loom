@@ -18,6 +18,7 @@ You orchestrate. The `loom:implementer` agent changes the code; it never commits
   Main branch: <mainBranch>
   ```
   The implementer gets the `Checks:` and `Conventions:` lines. The reviewer gets the `Conventions:` and `Main branch:` lines.
+  A run that changes `.claude/loom.json` makes these values out of date: step 3 takes them again.
 
 ## Steps
 
@@ -27,16 +28,22 @@ You orchestrate. The `loom:implementer` agent changes the code; it never commits
    - If the working tree already holds part of the work (a resumed run), add: `The working tree already contains part of this work; continue from it.`
    - If an earlier run was blocked, add the reason as context: `An earlier run was blocked by: <reason>.`
 2. **Open problems.** Read the implementer's report. If `Open problems` lists a problem that needs a design decision or a plan change (the form Expected / Found / Why it matters), stop the loop. The result is **blocked**, with that problem as the reason. Do not ask the implementer to guess.
-3. **Checks.** Run `checks.check` yourself, once, as the shared `git-flow.md` describes.
+3. **Configuration change.** Run `git status --porcelain -- .claude/loom.json`. If it shows the file changed, or the implementer's `Files changed` lists `.claude/loom.json`, the configuration you hold came from the state before the change. The report is a claim, so check both. Run `loom-state --json` again. Take the configuration from its output (`checks`, `docs`, `mainBranch`, `implement`, `hooks`), and use it from now on:
+   - for your own `checks.check` run in step 4;
+   - for the reviewer prompt in step 5;
+   - for the fix attempts in step 6 (the `Checks:` line of their prompt, and `implement.maxFixAttempts`);
+   - for the later implementation phases (`implement` only).
+   The implementer already ran `loom-state --json` after it changed the file. Implementation phase 1 of the onboarding task is such a run, but the rule holds for every task.
+4. **Checks.** Run `checks.check` yourself, once, as the shared `git-flow.md` describes.
    - The `SubagentStop` hook already ran it when the implementer finished. The hook blocks the implementer while the checks fail, but lets it stop after `hooks.maxCheckAttempts` failed attempts.
    - So failing checks here mean the hook gave up. Stop the loop. The result is **blocked**, with the reason `checks.check fails: <the key failure lines>`.
    - Never commit while the checks fail.
-4. **Reviewer.** Launch `loom:implementation-reviewer` with the same reference, the `Conventions:` and `Main branch:` lines, the implementer's report, and the fix items (if any). Use fix mode when the run had fix items: write `fix mode` and the items in the prompt.
-5. **Verdict.**
+5. **Reviewer.** Launch `loom:implementation-reviewer` with the same reference, the `Conventions:` and `Main branch:` lines, the implementer's report, and the fix items (if any). Use fix mode when the run had fix items: write `fix mode` and the items in the prompt.
+6. **Verdict.**
    - `pass` (no `blocking` items): the result is **done**.
    - `changes-needed`: if fewer than `implement.maxFixAttempts` fix attempts ran, launch `loom:implementer` in Fix mode with **only** the `blocking` items, copied word for word. Then continue with step 2.
    - `changes-needed` after `implement.maxFixAttempts` fix attempts: the result is **blocked**, with the remaining `blocking` items as the reason.
-6. **Record.** Keep for the `log.md` entry, also when the result is done:
+7. **Record.** Keep for the `log.md` entry, also when the result is done:
    - the checks result (the implementer's one-line summary, e.g. `lint ✓ typecheck ✓ test ✓ (42 passed)`)
    - the verdict and the number of fix attempts
    - every `nit` item

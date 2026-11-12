@@ -37,11 +37,22 @@ Read these files in full before you start:
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/bash-calls.md` (one command per Bash call: no `cd`, no chaining)
 - `${CLAUDE_PLUGIN_ROOT}/skills/_shared/final-answer.md` (format of your last message)
 
+**Onboarding design rounds only.** When `task.setup` is `true` and `task.mode` is `full` (the onboarding task), and this run writes `03-design.md` (answers to its open round, or feedback on the design), also read `${CLAUDE_PLUGIN_ROOT}/skills/design/references/onboarding.md` in full (the topics and defaults of the onboarding design). Decide this from the state and the argument, before you ask anything. On every other run, do not read it.
+
+**Onboarding plan changes only.** When the task is the onboarding task, and this run writes `04-plan.md` (answers to its open round, feedback on the plan, [Change an approved plan](#change-an-approved-plan), or [Finish a plan change](#finish-a-plan-change)), also read these files in full. Decide this from the state and the argument, before you ask anything. A run that reaches [Change an approved plan](#change-an-approved-plan) later (a scope change found in the feedback, or an open problem of the implementer) reads them at that point. On every other run, do not read them:
+
+- `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/onboarding.md` (check commands from the design, the full `.claude/loom.json` first in implementation phase 1, templates in the plan)
+- the loom templates that the plan copies: `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/loom.json`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/settings.json`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/CLAUDE.md`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/Makefile`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/ci.python-uv.yml`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/ci.node.yml`
+- the docs skeleton: `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/docs/product/vision.md`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/docs/architecture/overview.md`, `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/docs/conventions.md`
+- `${CLAUDE_PLUGIN_ROOT}/skills/setup/references/templates/loom-statusline.py` (written unchanged to the task directory, never into the plan text)
+
 Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission.
 
 ### Configuration
 
 The state holds the resolved configuration: `mainBranch`, the check commands (`checks`), the doc paths (`docs`), `rounds.cap`, and `implement.maxFixAttempts`. Take every value from there, never from `.claude/loom.json`. Pass `checks`, `docs.conventions`, and `mainBranch` to the agents as the configuration lines of `implementation-loop.md`.
+
+**A fix that changes `.claude/loom.json`.** The state above holds the values from before the change. When the implementer's `Files changed` lists `.claude/loom.json`, or `git status --porcelain -- .claude/loom.json` shows it changed, run `loom-state --json` again (step 3 of `implementation-loop.md`). Take the configuration from that output (`checks`, `docs`, `mainBranch`, `implement`, `hooks`) for your own check run, the reviewer prompt, and the fix attempts.
 
 Below, `<main>` is `mainBranch`, `<n>` is `task.number`, `<slug>` is `task.slug`, and `<task dir>` is `task.dir`. Never hard-code the main branch name or the work directory.
 
@@ -133,6 +144,8 @@ When the section has no round number (`## Open Questions` with `None.`, because 
 
 - Read the artifact in full.
 - Read its inputs as its phase does: design reads `00-ticket.md` and `02-research.md`; plan reads `00-ticket.md`, `02-research.md`, and `03-design.md` if it exists.
+- On the onboarding task, a round of `03-design.md` also follows the design's `onboarding.md` (read at the start): its sections, its topics and defaults, and the `Follow-up:` lines in Out of Scope hold in every round.
+- On the onboarding task, a round of `04-plan.md` also follows the plan's `onboarding.md` (read at the start): the check commands of the design, `.claude/loom.json` first in implementation phase 1, and the templates in the plan.
 
 ### Parse the answers
 
@@ -194,6 +207,7 @@ A `draft` artifact is unfinished: stop with `Result: <file> is a draft` and `Nex
 - If the code contradicts the feedback, do not apply that part. Add a `Clarify:` line that names what the code shows (`path:line`).
 - Edit the artifact in place. Keep its frontmatter, headings, and format.
 - Research stays descriptive: no recommendations. Every new claim has a `path:line` reference from code you or an agent read.
+- On the onboarding task, an edit of `03-design.md` also follows the design's `onboarding.md`, and an edit of `04-plan.md` follows the plan's `onboarding.md` (both read at the start).
 - In design or plan, a new open question joins the current round (next free number). If no round is open, it opens round `N+1` under the cap rule above. `N` is the highest value in the Round column of `## Resolved Decisions` (`0` if the table has no rows).
 
 ### Status
@@ -283,6 +297,7 @@ Used by this section, [Fix a blocked phase](#fix-a-blocked-phase), [Post-PR fix]
 Run the shared `implementation-loop.md` in Fix mode. `implement` runs the same loop in phase mode, so both skills mark a phase done or blocked by the same rules:
 
 1. Launch `loom:implementer` with a short prompt: the plan path `<task dir>/04-plan.md` and the phase number N (oneshot: the ticket path `<task dir>/00-ticket.md`), the word `Fix`, the fix items, and the `Checks:` and `Conventions:` lines of `implementation-loop.md`. The implementer never commits.
+   - If its `Files changed` lists `.claude/loom.json`, or `git status --porcelain -- .claude/loom.json` shows it changed, run `loom-state --json` again. Take the configuration (`checks`, `docs`, `mainBranch`, `implement`, `hooks`) from that output for the next steps and the fix attempts.
 2. Run `checks.check` yourself, once. The `SubagentStop` hook already enforced it on the implementer, so a failure here means the hook gave up: the result is blocked.
 3. Launch `loom:implementation-reviewer` in fix mode: the same plan path and phase number (or ticket path), the fix items, the `Conventions:` and `Main branch:` lines, and the implementer's report.
 4. If the verdict has `blocking` items, send only those back to `loom:implementer` in Fix mode, at most `implement.maxFixAttempts` times. Record `nit` items, deviations, and additions for `log.md`.
@@ -333,7 +348,7 @@ Run the shared `implementation-loop.md` in Fix mode. `implement` runs the same l
 The feedback changes `04-plan.md` after it was approved, or after implementation started, also with a PR open. New implementation phases go through `/loom:implement` after `/loom:iterate approve`; `implement` then updates the open PR.
 
 1. Read `04-plan.md`, `03-design.md` (if it exists), `00-ticket.md`, `02-research.md`, and `log.md` (if it exists). Never read `01-research-questions.md`.
-2. Verify the feedback against the code, as in [Feedback on an artifact](#feedback-on-an-artifact).
+2. Verify the feedback against the code, as in [Feedback on an artifact](#feedback-on-an-artifact). On the onboarding task, the change follows the plan's `onboarding.md` (read at the start): `Automated:` lines use the check commands of the design, not the defaults of the state.
 3. If implementation started, set `status: draft` in `04-plan.md` before the first change, so an interrupted edit stays visible. Then edit the plan:
    - An implementation phase is **done** if `implementation.phases` reports `done` for it. Do not change the section or the checkboxes of a done implementation phase.
    - New work for code that a done implementation phase built goes into a new implementation phase after the last one.
