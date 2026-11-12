@@ -72,6 +72,16 @@ def run_loom_state(cwd: str, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def run_loom_state_env(cwd: str, env: Dict[str, str], *args: str) -> subprocess.CompletedProcess:
+    """Run bin/loom-state with extra environment variables; stdout stays bytes."""
+    full_env = dict(os.environ)
+    full_env.update(env)
+    return subprocess.run(
+        [sys.executable, LOOM_STATE] + list(args),
+        cwd=cwd, env=full_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+
 def run_hook(
     script: str, payload: Optional[Dict[str, Any]], raw: Optional[str] = None, cwd: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,

@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 
-from loomtest import LOOM_STATE, RepoTestCase, git, loom_state, run_loom_state, write
+from loomtest import LOOM_STATE, RepoTestCase, git, loom_state, run_loom_state, run_loom_state_env, write
 
 ls = loom_state()
 
@@ -721,6 +721,685 @@ class EmptyRepoTest(RepoTestCase):
         self.assertEqual(s["branch"], "main")
         self.assertTrue(s["onMain"])
 
+
+
+DEFAULT_SETTINGS = {
+    "workDir": ".loom/tasks",
+    "rounds": {"cap": {"S": 2, "M": 3, "L": 5}},
+    "implement": {"maxFixAttempts": 2, "autoAdvance": True},
+    "hooks": {"stopLint": False, "maxCheckAttempts": 3},
+}
+
+
+class ConfigHardeningTest(RepoTestCase):
+    """BOM, whitespace, workDir and docsDir rules, null objects, control characters (LOOM_SPEC.md 19.1)."""
+
+    loom_config = {}
+
+    def resolved(self, config=None, raw=None):
+        if raw is not None:
+            with open(self.path(".claude", "loom.json"), "wb") as fh:
+                fh.write(raw)
+        elif config is not None:
+            self.write_config(config)
+        proc = run_loom_state(self.repo, "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        data = json.loads(proc.stdout)
+        return data, data["warnings"]
+
+    def test_unknown_top_level_keys(self):
+        data, warnings = self.resolved({"version": 1, "tracker": "github", "mainbranch": "trunk", "stopLint": True})
+        self.assertEqual(data["mainBranch"], "main")
+        self.assertEqual(warnings, [".claude/loom.json: unknown key 'mainbranch' ignored",
+                                    ".claude/loom.json: unknown key 'stopLint' ignored"])
+
+    def test_docs_default_inside_work_dir(self):
+        data, warnings = self.resolved({"workDir": "work/tasks", "docsDir": "work"})
+        self.assertEqual(data["docs"]["tasks"], "work/tasks")  # the only default: kept
+        self.assertEqual(warnings, [
+            ".claude/loom.json: 'docs.tasks' (work/tasks) is at or below workDir (work/tasks), where loom ignores "
+            "changes; set 'docs.tasks' or docsDir to a path outside workDir"])
+        data, warnings = self.resolved({"workDir": "work/tasks", "docsDir": "work", "docs": {"tasks": "work/done"}})
+        self.assertEqual((data["docs"]["tasks"], warnings), ("work/done", []))
+        data, warnings = self.resolved({"workDir": "docs", "docsDir": "documentation"})
+        self.assertEqual(warnings, [])
+
+    def test_byte_order_mark(self):
+        data, warnings = self.resolved(raw=b"\xef\xbb\xbf" + json.dumps({"mainBranch": "trunk"}).encode())
+        self.assertEqual(warnings, [])
+        self.assertEqual(data["mainBranch"], "trunk")
+        cfg, warnings = ls.load_config(self.repo)
+        self.assertEqual((cfg["mainBranch"], warnings), ("trunk", []))
+
+    def test_surrounding_whitespace_is_stripped(self):
+        data, warnings = self.resolved({"mainBranch": " main ", "workDir": " work/tasks/ ", "docsDir": "\tdocumentation "})
+        self.assertEqual(warnings, [])
+        self.assertEqual((data["mainBranch"], data["workDir"], data["docs"]["dir"]),
+                         ("main", "work/tasks", "documentation"))
+        self.assertTrue(data["onMain"])
+        self.assertEqual(data["docs"]["tasks"], "documentation/tasks")
+
+    def test_invalid_main_branch(self):
+        for value in ("", "  ", 5, None, "ma\nin", "main\x00"):
+            with self.subTest(value=value):
+                data, warnings = self.resolved({"mainBranch": value})
+                self.assertEqual(data["mainBranch"], "main")
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn("'mainBranch'", warnings[0])
+
+    def test_invalid_work_dir(self):
+        for value in ("", "/abs/tasks", "../tasks", "a/../../x", ".", ".git", ".git/tasks", ".GIT/tasks",
+                      ".claude/tasks", ".Claude", "ta\nsks", "tasks\x00", 7, None, ["x"]):
+            with self.subTest(value=value):
+                data, warnings = self.resolved({"workDir": value})
+                self.assertEqual(data["workDir"], ".loom/tasks")
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn("'workDir'", warnings[0])
+        for value in (".loom", ".loom/tasks", "work/tasks", "./work"):
+            with self.subTest(value=value):
+                data, warnings = self.resolved({"workDir": value})
+                self.assertEqual((data["workDir"], warnings), (value.lstrip("./") if value == "./work" else value, []))
+
+    def test_invalid_docs_dir(self):
+        for value in ("", "/docs", "../docs", ".", ".git", ".claude/docs", ".loom/docs", ".LOOM", ".loom/tasks/docs",
+                      "do\tcs", 3, None):
+            with self.subTest(value=value):
+                data, warnings = self.resolved({"docsDir": value})
+                self.assertEqual(data["docs"], DEFAULT_DOCS)
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn("'docsDir'", warnings[0])
+        data, warnings = self.resolved({"workDir": "work/tasks", "docsDir": "work/tasks/docs"})
+        self.assertEqual((data["docs"]["dir"], len(warnings)), ("docs", 1))
+        self.assertEqual(ls.load_config(self.repo)[0]["docsDir"], "docs")
+
+    def test_reserved_dirs_ignore_case(self):
+        for value in (".GIT/vision.md", ".Claude/vision.md", ".LOOM/vision.md", ".Loom/Tasks/x.md"):
+            with self.subTest(value=value):
+                data, warnings = self.resolved({"docs": {"vision": value}})
+                self.assertEqual(data["docs"]["vision"], DEFAULT_DOCS["vision"])
+                self.assertEqual(len(warnings), 1, warnings)
+        data, warnings = self.resolved({"workDir": "Work/Tasks", "docs": {"tasks": "work/tasks/done"}})
+        self.assertEqual(data["docs"]["tasks"], DEFAULT_DOCS["tasks"])
+        self.assertEqual(len(warnings), 1, warnings)
+
+    def test_markdown_extension_ignores_case(self):
+        data, warnings = self.resolved({"docs": {"vision": "README.MD", "overview": "docs/Arch.Md",
+                                                 "decisions": {"pattern": "ADR-<NNN>-<slug>.MD"}}})
+        self.assertEqual(warnings, [])
+        self.assertEqual((data["docs"]["vision"], data["docs"]["overview"], data["docs"]["decisions"]["pattern"]),
+                         ("README.MD", "docs/Arch.Md", "ADR-<NNN>-<slug>.MD"))
+
+    def test_null_objects_warn(self):
+        for key, expected in (("docs", DEFAULT_DOCS), ("ci", {"requiredCheck": "check"}),
+                              ("pullRequest", {"requiredSections": []})):
+            for value in (None, [], "x", 5):
+                with self.subTest(key=key, value=value):
+                    data, warnings = self.resolved({key: value})
+                    self.assertEqual(data[key], expected)
+                    self.assertEqual(len(warnings), 1, warnings)
+                    self.assertIn(key, warnings[0])
+
+    def test_control_characters_are_rejected(self):
+        data, warnings = self.resolved({
+            "docs": {"vision": "READ\nME.md", "tasks": "notes\ttasks",
+                     "decisions": {"dir": "adr\x00", "pattern": "<NNNN>-<slug>\n.md"}},
+            "ci": {"requiredCheck": "build\ntest"},
+            "pullRequest": {"requiredSections": ["## Test\tplan", "## Risks\x07", "## Fine"]},
+        })
+        self.assertEqual(data["docs"], DEFAULT_DOCS)
+        self.assertEqual(data["ci"], {"requiredCheck": "check"})
+        self.assertEqual(data["pullRequest"], {"requiredSections": ["## Fine"]})
+        self.assertEqual(len(warnings), 7, warnings)
+
+    def test_lone_surrogate_does_not_crash(self):
+        raw = b'{"mainBranch": "m\\ud800", "ci": {"requiredCheck": "\\udc80x"}, "docs": {"vision": "\\ud800.md"},' \
+              b' "checks": {"test": "make test \\ud800"}, "unknown\\ud800": 1}'
+        data, warnings = self.resolved(raw=raw)
+        self.assertEqual(data["mainBranch"], "main")
+        self.assertEqual(data["ci"], {"requiredCheck": "check"})
+        self.assertEqual(data["docs"]["vision"], DEFAULT_DOCS["vision"])
+        self.assertEqual(len(warnings), 4, warnings)  # mainBranch, ci, docs.vision, the unknown key
+        self.assertIn(".claude/loom.json: unknown key 'unknown\\ud800' ignored", warnings)
+        for warning in warnings:
+            warning.encode("utf-8")  # printable: no lone surrogate left
+        proc = run_loom_state(self.repo, "--line")
+        self.assertEqual((proc.returncode, proc.stderr), (0, ""))
+
+    def test_check_command_with_an_output_filter_warns(self):
+        data, warnings = self.resolved({"checks": {
+            "lint": "make lint", "typecheck": None,
+            "test": "go test ./... | grep -v 'no test files'", "check": "make check 2>&1 | tail -n 50"}})
+        self.assertEqual(data["checks"]["test"], "go test ./... | grep -v 'no test files'")  # kept as configured
+        self.assertEqual(warnings, [
+            ".claude/loom.json: 'checks.test' pipes its output into grep; filtered output can hide failures",
+            ".claude/loom.json: 'checks.check' pipes its output into tail; filtered output can hide failures",
+        ])
+        for command in ("make test | tee test.log", "npm ci && npm run check", "make check || true", "echo 'a | grep'"):
+            with self.subTest(command=command):
+                _, warnings = self.resolved({"checks": {"check": command}})
+                self.assertEqual(warnings, [])
+        for command, name in (("pytest | rg FAIL", "rg"), ("pytest |& LC_ALL=C wc -l", "wc"),
+                              ("make check | /usr/bin/head", "head")):
+            with self.subTest(command=command):
+                _, warnings = self.resolved({"checks": {"check": command}})
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn("pipes its output into %s" % name, warnings[0])
+
+    def test_filters_match_the_hook(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "block_output_filtering", os.path.join(os.path.dirname(LOOM_STATE), "..", "scripts", "hooks",
+                                                   "block_output_filtering.py"))
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        self.assertLessEqual(set(hook.FILTERS), set(ls.OUTPUT_FILTERS))
+
+
+class DocsOverlapTest(RepoTestCase):
+    """Docs map roles that collide get a warning; the configured values stay (LOOM_SPEC.md 19.1)."""
+
+    loom_config = {}
+
+    def resolved(self, docs):
+        self.write_config({"docs": docs})
+        cfg, warnings = ls.load_config(self.repo)
+        return cfg["docs"], warnings
+
+    def test_shared_role_file_is_allowed(self):
+        docs, warnings = self.resolved({"vision": "README.md", "overview": "README.md", "conventions": "README.md"})
+        self.assertEqual(warnings, [])
+        self.assertEqual((docs["vision"], docs["overview"], docs["conventions"]), ("README.md",) * 3)
+
+    def test_tasks_and_decisions_overlap(self):
+        for tasks, decisions in (("docs/adr", "docs/adr"), ("docs/adr/tasks", "docs/adr"), ("docs/notes", "docs/notes/adr"),
+                                 ("Docs/ADR", "docs/adr")):
+            with self.subTest(tasks=tasks, decisions=decisions):
+                docs, warnings = self.resolved({"tasks": tasks, "decisions": {"dir": decisions}})
+                self.assertEqual((docs["tasks"], docs["decisions"]["dir"]), (tasks, decisions))
+                self.assertEqual(warnings, [
+                    ".claude/loom.json: 'docs.tasks' (%s) and 'docs.decisions.dir' (%s) overlap; task summaries "
+                    "and decision records would mix" % (tasks, decisions)])
+
+    def test_role_file_below_a_role_directory(self):
+        docs, warnings = self.resolved({"vision": "docs/tasks/vision.md", "conventions": "docs/adr/conventions.md",
+                                        "decisions": {"dir": "docs/adr"}})
+        self.assertEqual(docs["vision"], "docs/tasks/vision.md")
+        self.assertEqual(warnings, [
+            ".claude/loom.json: 'docs.vision' (docs/tasks/vision.md) is at or below 'docs.tasks' (docs/tasks); "
+            "keep role files outside the task summary and decision directories",
+            ".claude/loom.json: 'docs.conventions' (docs/adr/conventions.md) is at or below 'docs.decisions.dir' "
+            "(docs/adr); keep role files outside the task summary and decision directories",
+        ])
+
+    def test_neighbours_do_not_overlap(self):
+        _, warnings = self.resolved({"tasks": "docs/task", "decisions": {"dir": "docs/tasks-adr"},
+                                     "vision": "docs/tasks.md"})
+        self.assertEqual(warnings, [])
+
+
+class SettingsTest(RepoTestCase):
+    """workDir, rounds, implement, and hooks in the state (LOOM_SPEC.md 8.2, 19.1)."""
+
+    loom_config = {}
+
+    def resolved(self, config):
+        self.write_config(config)
+        proc = run_loom_state(self.repo, "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        data = json.loads(proc.stdout)
+        return data, data["warnings"]
+
+    def test_defaults_in_every_output(self):
+        data, warnings = self.resolved({})
+        self.assertEqual(warnings, [])
+        for key, value in DEFAULT_SETTINGS.items():
+            self.assertEqual(data[key], value, key)
+        self.assertIs(data["rebaseInProgress"], False)
+        keys = list(data)
+        self.assertEqual(keys[keys.index("workDir"):keys.index("hooks") + 1],
+                         ["workDir", "docs", "checks", "ci", "pullRequest", "rounds", "implement", "hooks"])
+        git(self.repo, "switch", "-q", "-c", "spike/x")
+        data, _ = self.resolved({})
+        self.assertEqual(data["hooks"], DEFAULT_SETTINGS["hooks"])
+
+    def test_custom_values(self):
+        data, warnings = self.resolved({
+            "workDir": "work/tasks", "rounds": {"cap": {"S": 1, "L": 9}},
+            "implement": {"maxFixAttempts": 0, "autoAdvance": False},
+            "hooks": {"stopLint": True, "maxCheckAttempts": 5}})
+        self.assertEqual(warnings, [])
+        self.assertEqual(data["workDir"], "work/tasks")
+        self.assertEqual(data["rounds"], {"cap": {"S": 1, "M": 3, "L": 9}})
+        self.assertEqual(data["implement"], {"maxFixAttempts": 0, "autoAdvance": False})
+        self.assertEqual(data["hooks"], {"stopLint": True, "maxCheckAttempts": 5})
+
+    def test_invalid_values_take_their_default(self):
+        cases = (
+            ({"rounds": None}, "rounds", DEFAULT_SETTINGS["rounds"]),
+            ({"rounds": {"cap": [2, 3, 5]}}, "rounds", DEFAULT_SETTINGS["rounds"]),
+            ({"rounds": {"cap": {"S": 0}}}, "rounds", DEFAULT_SETTINGS["rounds"]),
+            ({"rounds": {"cap": {"M": True}}}, "rounds", DEFAULT_SETTINGS["rounds"]),
+            ({"rounds": {"cap": {"L": 2.5}}}, "rounds", DEFAULT_SETTINGS["rounds"]),
+            ({"rounds": {"cap": {"L": "5"}}}, "rounds", DEFAULT_SETTINGS["rounds"]),
+            ({"implement": {"maxFixAttempts": -1}}, "implement", DEFAULT_SETTINGS["implement"]),
+            ({"implement": {"maxFixAttempts": False}}, "implement", DEFAULT_SETTINGS["implement"]),
+            ({"implement": {"autoAdvance": 1}}, "implement", DEFAULT_SETTINGS["implement"]),
+            ({"implement": {"autoAdvance": "true"}}, "implement", DEFAULT_SETTINGS["implement"]),
+            ({"implement": "fast"}, "implement", DEFAULT_SETTINGS["implement"]),
+            ({"hooks": {"stopLint": None}}, "hooks", DEFAULT_SETTINGS["hooks"]),
+            ({"hooks": {"maxCheckAttempts": 0}}, "hooks", DEFAULT_SETTINGS["hooks"]),
+            ({"hooks": {"maxCheckAttempts": True}}, "hooks", DEFAULT_SETTINGS["hooks"]),
+            ({"hooks": []}, "hooks", DEFAULT_SETTINGS["hooks"]),
+        )
+        for config, key, expected in cases:
+            with self.subTest(config=config):
+                data, warnings = self.resolved(config)
+                self.assertEqual(data[key], expected)
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn(key, warnings[0])
+
+    def test_unknown_keys_are_ignored(self):
+        data, warnings = self.resolved({"rounds": {"cap": {"XL": 9}, "max": 1}, "hooks": {"stopLint": True, "x": 1}})
+        self.assertEqual(data["rounds"], DEFAULT_SETTINGS["rounds"])
+        self.assertEqual(data["hooks"], {"stopLint": True, "maxCheckAttempts": 3})
+        self.assertEqual(sorted(warnings), sorted([
+            ".claude/loom.json: unknown key 'rounds.cap.XL' ignored",
+            ".claude/loom.json: unknown key 'rounds.max' ignored",
+            ".claude/loom.json: unknown key 'hooks.x' ignored"]))
+
+    def test_warning_text(self):
+        _, warnings = self.resolved({"hooks": {"maxCheckAttempts": True}})
+        self.assertEqual(warnings, [".claude/loom.json: invalid 'hooks.maxCheckAttempts' (true); using the default 3 "
+                                    "(an integer of at least 1)"])
+
+    def test_hooks_see_the_validated_values(self):
+        self.write_config({"hooks": {"stopLint": "yes", "maxCheckAttempts": -2}})
+        cfg, warnings = ls.load_config(self.repo)
+        self.assertEqual(cfg["hooks"], {"stopLint": False, "maxCheckAttempts": 3})
+        self.assertEqual(len(warnings), 2)
+
+
+class ArtifactFrontmatterTest(RepoTestCase):
+    def setUp(self):
+        super().setUp()
+        self.dir = self.task_dir("42-auth-flow")
+        self.ticket(self.dir, mode="quick")
+        git(self.repo, "switch", "-q", "-c", "feat/42-auth-flow")
+
+    def research(self) -> None:
+        self.artifact(self.dir, "02-research.md", "research", "approved",
+                      git_commit=git(self.repo, "rev-parse", "--short", "HEAD"))
+
+    def write_plan(self, status_line: str, phase_line: str = "phase: plan\n") -> None:
+        self.research()
+        write(os.path.join(self.dir, "04-plan.md"),
+              "---\n%s%s---\n## Phase Overview\n- [ ] 1. A\n" % (phase_line, status_line))
+
+    def test_status_case_and_whitespace(self):
+        for line, status in (("status: Approved\n", "approved"), ("status: '  IN-REVIEW '\n", "in-review"),
+                             ("status: DRAFT # note\n", "draft")):
+            with self.subTest(line=line):
+                self.write_plan(line)
+                s = self.state()
+                self.assertEqual(s["artifacts"][1]["status"], status)
+                self.assertEqual(s["warnings"], [])
+
+    def test_unknown_status_counts_as_in_review(self):
+        for line, raw in (("status: in review\n", '"in review"'), ("status: blocked\n", '"blocked"'),
+                          ("status: [approved]\n", '["approved"]'), ("status: done\n", '"done"')):
+            with self.subTest(line=line):
+                self.write_plan(line)
+                s = self.state()
+                self.assertEqual(s["artifacts"][1]["status"], "in-review")
+                self.assertEqual(s["warnings"], [
+                    "04-plan.md has an unknown status %s (allowed: draft, in-review, approved); treated as in-review"
+                    % raw])
+                self.assertEqual(s["next"]["command"], "/loom:iterate approve")  # never /loom:plan (overwrite)
+
+    def test_unknown_status_in_event_context(self):
+        self.write_plan("status: in review\n")
+        self.assertEqual(ls.event_context(self.repo)["phase"], "plan")  # in review: the plan gate
+
+    def test_file_name_wins_over_frontmatter_phase(self):
+        self.write_plan("status: in-review\n", "phase: design\n")
+        s = self.state()
+        self.assertEqual(s["artifacts"][1]["phase"], "plan")
+        self.assertEqual(s["warnings"], [
+            '04-plan.md has phase "design" in its frontmatter; the file name says plan, and the file name wins'])
+        self.assertEqual(s["next"]["command"], "/loom:iterate approve")
+        self.assertEqual(ls.event_context(self.repo)["phase"], "plan")
+        self.write_plan("status: in-review\n", "phase: Plan\n")
+        self.assertEqual(self.state()["warnings"], [])
+
+    def test_phase_zero_is_a_phase(self):
+        self.write_plan("status: approved\n")
+        write(os.path.join(self.dir, "log.md"), "## Phase 0 — in-progress\n")
+        s = self.state()
+        self.assertEqual(s["implementation"]["inProgress"], 0)
+        self.assertEqual(s["next"]["command"], "/loom:implement")
+        self.assertIn("phase 0 is in progress", s["next"]["reason"])
+        self.assertEqual(ls.event_context(self.repo)["implementationPhase"], 0)
+        self.assertEqual(run_loom_state(self.repo, "--line").stdout, "#42 · quick · impl 0/2 · in progress\n")
+
+    def test_ticket_pr_forms(self):
+        for line, number, warned in (("pr: #57\n", 57, False), ("pr: '#57'\n", 57, False), ("pr: 57\n", 57, False),
+                                     ("pr: 0\n", None, True), ("pr: '#0'\n", None, True), ("pr: -5\n", None, True),
+                                     ("pr: abc\n", None, True), ("pr: ²\n", None, True), ("pr: 5.7\n", None, True),
+                                     ("pr: # 57\n", None, False), ("pr:\n", None, False)):
+            with self.subTest(line=line):
+                write(os.path.join(self.dir, "00-ticket.md"), "---\nmode: quick\nissue: 42\n%s---\n" % line)
+                s = self.state()
+                self.assertEqual(s["task"]["pr"], number)
+                self.assertEqual(any("invalid pr" in w for w in s["warnings"]), warned, s["warnings"])
+                proc = run_loom_state(self.repo, "--line")
+                self.assertEqual((proc.returncode, proc.stderr), (0, ""))
+
+    def test_line_shows_only_the_mode_phases(self):
+        # A full task changed to quick: the leftover design does not show.
+        self.research()
+        self.artifact(self.dir, "03-design.md", "design", "in-review", "## Open Questions\n**Q1. A?**\n")
+        self.assertEqual(run_loom_state(self.repo, "--line").stdout, "#42 · quick · research:approved\n")
+        self.artifact(self.dir, "04-plan.md", "plan", "in-review", "## Open Questions\n**Q1. A?**\n")
+        self.assertEqual(run_loom_state(self.repo, "--line").stdout, "#42 · quick · plan:in-review · 1 open Q\n")
+        s = self.state()
+        self.assertEqual(s["next"]["reason"], "plan has 1 open question")
+
+
+class LineModeTest(RepoTestCase):
+    def test_line_skips_the_stale_check_and_the_docs_only_status(self):
+        d = self.task_dir("42-x")
+        self.ticket(d, mode="quick")
+        self.artifact(d, "02-research.md", "research", "approved", "src/a.py\n")  # no git_commit
+        git(self.repo, "switch", "-q", "-c", "feat/42-x")
+        write(self.path("docs", "x.md"), "x\n")
+        calls = []
+        original = ls.working_tree_status
+        ls.working_tree_status = lambda *a, **k: (calls.append(k), original(*a, **k))[1]
+        self.addCleanup(setattr, ls, "working_tree_status", original)
+        s = ls.compute_state(self.repo, for_line=True)
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(any("git_commit" in w for w in s["warnings"]))
+        self.assertEqual(ls.format_line(s), "#42 · quick · research:approved")
+        calls.clear()
+        s = ls.compute_state(self.repo)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(any("git_commit" in w for w in s["warnings"]))
+
+
+class TicketModeTest(RepoTestCase):
+    """The ticket mode is normalized; an invalid mode routes to a mode change before everything else."""
+
+    def setUp(self):
+        super().setUp()
+        self.dir = self.task_dir("42-x")
+        git(self.repo, "switch", "-q", "-c", "feat/42-x")
+        self.artifact(self.dir, "02-research.md", "research", "approved",
+                      git_commit=git(self.repo, "rev-parse", "--short", "HEAD"))
+        self.artifact(self.dir, "04-plan.md", "plan", "approved", "## Phase Overview\n- [x] 1. A\n- [ ] 2. B\n")
+
+    def write_ticket(self, mode_line: str, extra: str = "") -> None:
+        write(os.path.join(self.dir, "00-ticket.md"), "---\n%sissue: 42\n%s---\n" % (mode_line, extra))
+
+    def test_mode_is_normalized(self):
+        for line in ("mode: Quick\n", "mode: ' QUICK '\n", "mode: quick # small\n"):
+            with self.subTest(line=line):
+                self.write_ticket(line)
+                s = self.state()
+                self.assertEqual(s["task"]["mode"], "quick")
+                self.assertEqual(s["warnings"], [])
+                self.assertEqual(s["next"]["command"], "/loom:implement")
+                self.assertEqual(ls.event_context(self.repo)["phase"], "implement")
+
+    def test_invalid_mode_with_an_approved_plan(self):
+        cases = {
+            "in progress": lambda: write(os.path.join(self.dir, "log.md"), "## Phase 2 — in-progress\n"),
+            "dirty": lambda: write(self.path("notes.txt"), "x\n"),
+            "ticket pr": lambda: self.write_ticket("mode: fast\n", "pr: 57\n"),
+        }
+        for name, prepare in cases.items():
+            with self.subTest(case=name):
+                self.write_ticket("mode: fast\n")
+                for path in (os.path.join(self.dir, "log.md"), self.path("notes.txt")):
+                    if os.path.exists(path):
+                        os.remove(path)
+                prepare()
+                s = self.state()
+                self.assertEqual(s["task"]["mode"], "fast")
+                self.assertTrue(any("no valid mode" in w for w in s["warnings"]), s["warnings"])
+                self.assertEqual(s["next"], {"command": "/loom:iterate mode <oneshot|quick|full>",
+                                             "reason": "00-ticket.md has no valid mode; set it with a mode change"})
+
+
+class PlanParseErrorTest(RepoTestCase):
+    def setUp(self):
+        super().setUp()
+        self.dir = self.task_dir("42-x")
+        self.ticket(self.dir, mode="quick")
+        git(self.repo, "switch", "-q", "-c", "feat/42-x")
+
+    def flag(self, plan_body, status="approved", phase="plan"):
+        write(os.path.join(self.dir, "04-plan.md"),
+              "---\nphase: %s\nstatus: %s\n---\n%s" % (phase, status, plan_body))
+        s = self.state()
+        return s["implementation"]["planParseError"], s["warnings"]
+
+    def test_flag(self):
+        self.assertEqual(self.flag("## Phase Overview\n- [ ] 1. A\n")[0], False)
+        self.assertEqual(self.flag("## Phase Overview\nnone yet\n")[0], True)
+        self.assertEqual(self.flag("## Phase Overview\n- [ ] 1. A\n```\nopen fence\n")[0], True)
+        self.assertEqual(self.flag("```\n## Phase Overview\n- [ ] 1. A\n")[0], True)
+        # Warnings that name 04-plan.md but are not plan-parse problems.
+        flag, warnings = self.flag("## Phase Overview\n- [ ] 1. A\n", status="in review", phase="design")
+        self.assertEqual(flag, False)
+        self.assertEqual(len([w for w in warnings if "04-plan.md" in w]), 2)
+
+    def test_flag_without_a_plan(self):
+        self.assertIs(self.state()["implementation"]["planParseError"], False)
+        self.assertIs(ls.implementation_progress("oneshot", None, None)[0]["planParseError"], False)
+
+
+class TicketPrWithoutPrStateTest(RepoTestCase):
+    def test_phases_left_goes_to_implement(self):
+        d = self.task_dir("42-x")
+        self.ticket(d, mode="quick", pr=57)
+        self.artifact(d, "02-research.md", "research", "approved")
+        self.artifact(d, "04-plan.md", "plan", "approved", "## Phase Overview\n- [x] 1. A\n- [ ] 2. B\n")
+        git(self.repo, "switch", "-q", "-c", "feat/42-x")
+        s = self.state()
+        self.assertEqual(s["next"], {"command": "/loom:implement", "reason":
+                                     "PR #57 exists (its state was not read) and 1 of 2 implementation phases are done"})
+        self.artifact(d, "04-plan.md", "plan", "approved", "## Phase Overview\n- [x] 1. A\n- [x] 2. B\n")
+        self.assertEqual(self.state()["next"]["command"], "/loom:finish-task")
+
+
+class RebaseInProgressTest(RepoTestCase):
+    """A stopped rebase of the task branch (HEAD detached) keeps the task (LOOM_SPEC.md 8.2)."""
+
+    def setUp(self):
+        super().setUp()
+        self.commit_file("app.txt", "base\n", "base")
+        git(self.repo, "switch", "-q", "-c", "feat/42-x")
+        self.dir = self.task_dir("42-x")
+        self.ticket(self.dir, mode="quick")
+        self.artifact(self.dir, "02-research.md", "research", "approved")
+        self.artifact(self.dir, "04-plan.md", "plan", "approved", "## Phase Overview\n- [x] 1. A\n- [ ] 2. B\n")
+        write(os.path.join(self.dir, "log.md"), "## Phase 1 — done — abc1234\n")
+        self.commit_file("app.txt", "task\n", "task change")
+        git(self.repo, "switch", "-q", "main")
+        self.commit_file("app.txt", "main\n", "main change")
+
+    def conflicted_rebase(self, cwd, *options):
+        proc = subprocess.run(["git", "rebase"] + list(options) + ["main", "feat/42-x"], cwd=cwd,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertNotEqual(proc.returncode, 0, "the rebase should stop on a conflict")
+        self.assertEqual(subprocess.run(["git", "symbolic-ref", "-q", "HEAD"], cwd=cwd).returncode, 1)
+
+    def assert_rebasing(self, cwd):
+        s = ls.compute_state(cwd)
+        self.assertEqual(s["branch"], "feat/42-x")
+        self.assertIs(s["rebaseInProgress"], True)
+        self.assertFalse(s["onMain"])
+        self.assertEqual(s["task"]["number"], 42)
+        self.assertEqual(s["next"], {"command": "/loom:iterate rebase", "reason":
+                                     "a rebase of feat/42-x is in progress and has to be continued or aborted"})
+        self.assertIn("a rebase of feat/42-x is in progress (HEAD is detached); continue it with "
+                      "`git rebase --continue` or abort it with `git rebase --abort`", s["warnings"])
+        context = ls.event_context(cwd)
+        self.assertIsNotNone(context)
+        self.assertEqual((context["phase"], context["implementationPhase"]), ("implement", 2))
+        self.assertEqual(run_loom_state(cwd, "--line").stdout, "#42 · quick · impl 1/2\n")
+        return s
+
+    def test_merge_backend(self):
+        self.conflicted_rebase(self.repo)
+        self.assert_rebasing(self.repo)
+        git(self.repo, "rebase", "--abort")
+        s = self.state()
+        self.assertIs(s["rebaseInProgress"], False)
+        self.assertEqual(s["next"]["command"], "/loom:implement")
+
+    def test_apply_backend(self):
+        self.conflicted_rebase(self.repo, "--apply")
+        self.assertTrue(os.path.isdir(self.path(".git", "rebase-apply")))
+        self.assert_rebasing(self.repo)
+
+    def test_linked_worktree(self):
+        git(self.repo, "switch", "-q", "--detach")
+        worktree = os.path.join(self.tmp, "wt")
+        git(self.repo, "worktree", "add", "-q", worktree, "feat/42-x")
+        self.dir = self.task_dir("42-x")  # the task directory is ignored, so the worktree needs its own copy
+        shutil.copytree(self.dir, os.path.join(worktree, ".loom", "tasks", "42-x"))
+        self.conflicted_rebase(worktree)
+        self.assert_rebasing(worktree)
+        self.assertIs(ls.compute_state(self.repo)["rebaseInProgress"], False)
+
+    def test_plain_detached_head(self):
+        git(self.repo, "switch", "-q", "--detach", "feat/42-x")
+        s = self.state()
+        self.assertIsNone(s["branch"])
+        self.assertIs(s["rebaseInProgress"], False)
+        self.assertIsNone(s["task"])
+        self.assertIn("detached HEAD", s["next"]["reason"])
+        self.assertIsNone(ls.event_context(self.repo))
+
+
+class UnknownWorkingTreeTest(RepoTestCase):
+    def test_git_status_failure_fails_closed(self):
+        d = self.task_dir("42-x")
+        self.ticket(d, mode="oneshot")
+        write(os.path.join(d, "log.md"), "## Phase 1 — done — abc1234\n")
+        git(self.repo, "switch", "-q", "-c", "feat/42-x")
+        self.assertEqual(self.state()["next"]["command"], "/loom:describe-pr")
+        with open(self.path(".git", "index"), "wb") as fh:
+            fh.write(b"not an index")
+        s = self.state()
+        self.assertIsNone(s["workingTree"])
+        self.assertTrue(any(w.startswith("git status failed") for w in s["warnings"]), s["warnings"])
+        self.assertEqual(s["next"]["command"], "/loom:iterate <feedback>")
+        self.assertIn("git status failed", s["next"]["reason"])
+
+
+class OutputEncodingTest(RepoTestCase):
+    def test_ascii_locale(self):
+        git(self.repo, "switch", "-q", "-c", "feat/42-ünïcode")
+        d = self.task_dir("42-ünïcode")
+        write(os.path.join(d, "00-ticket.md"), "---\nmode: full\nurl: https://example.com/Ж\n---\n")
+        for env in ({"PYTHONIOENCODING": "ascii"}, {"PYTHONIOENCODING": "", "LC_ALL": "C", "LANG": "C"}):
+            with self.subTest(env=env):
+                proc = run_loom_state_env(self.repo, env, "--json")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                data = json.loads(proc.stdout.decode("utf-8"))
+                self.assertEqual(data["task"]["url"], "https://example.com/Ж")
+                proc = run_loom_state_env(self.repo, env, "--line")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(proc.stdout.decode("utf-8"), "#42 · full · ticket\n")
+
+
+class PrRequiredCheckTest(RepoTestCase):
+    """`pr.requiredCheck` from statusCheckRollup by the name in ci.requiredCheck."""
+
+    loom_config = {"ci": {"requiredCheck": "build"}}
+
+    def setUp(self):
+        super().setUp()
+        d = self.task_dir("42-x")
+        self.ticket(d, mode="quick")
+        self.artifact(d, "02-research.md", "research", "approved")
+        self.artifact(d, "04-plan.md", "plan", "approved", "## Phase Overview\n- [x] 1. A\n")
+        git(self.repo, "switch", "-q", "-c", "feat/42-x")
+
+    def fake_gh(self, output: str) -> dict:
+        bindir = os.path.join(self.tmp, "fakebin")
+        gh = write(os.path.join(bindir, "gh"), "#!/bin/sh\ncat <<'EOF'\n%s\nEOF\n" % output)
+        os.chmod(gh, 0o755)
+        proc = run_loom_state_env(self.repo, {"PATH": bindir + os.pathsep + os.environ.get("PATH", "")}, "--pr")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout.decode("utf-8"))
+
+    def pr(self, rollup):
+        payload = {"number": 57, "state": "OPEN", "reviewDecision": "", "mergeStateStatus": "CLEAN",
+                   "statusCheckRollup": rollup}
+        return self.fake_gh(json.dumps(payload))
+
+    @staticmethod
+    def run_(name, conclusion="SUCCESS", status="COMPLETED", started=None):
+        item = {"__typename": "CheckRun", "name": name, "status": status, "conclusion": conclusion}
+        if started:
+            item["startedAt"] = started
+        return item
+
+    def test_states_and_routing(self):
+        lint_fails = self.run_("lint", "FAILURE")
+        cases = (
+            ([self.run_("build"), lint_fails], "passing", "failing", "/loom:finish-task"),
+            ([self.run_("build", "FAILURE"), self.run_("lint")], "failing", "failing", "/loom:iterate"),
+            ([self.run_("build", "", "IN_PROGRESS"), lint_fails], "pending", "failing", "/loom:finish-task"),
+            ([self.run_("test"), lint_fails], "missing", "failing", "/loom:iterate"),
+            ([{"__typename": "StatusContext", "context": "build", "state": "SUCCESS"}], "passing", "passing",
+             "/loom:finish-task"),
+        )
+        for rollup, required, overall, command in cases:
+            with self.subTest(required=required, rollup=rollup):
+                s = self.pr(rollup)
+                self.assertEqual((s["pr"]["requiredCheck"], s["pr"]["checks"]), (required, overall))
+                self.assertEqual(s["next"]["command"], command)
+                others = [w for w in s["warnings"] if "besides the required check" in w]
+                if required != "missing" and lint_fails in rollup:
+                    self.assertEqual(others, ["PR #57 has failing checks besides the required check 'build': lint"])
+                else:
+                    self.assertEqual(others, [])
+
+    def test_latest_entry_wins(self):
+        rollup = [self.run_("build", "SUCCESS", started="2026-11-12T10:00:00Z"),
+                  self.run_("build", "FAILURE", started="2026-11-12T09:00:00Z")]
+        self.assertEqual(self.pr(rollup)["pr"]["requiredCheck"], "passing")
+        rollup = [self.run_("build", "FAILURE"), self.run_("build", "SUCCESS")]
+        self.assertEqual(self.pr(rollup)["pr"]["requiredCheck"], "passing")
+
+    def test_gh_output_that_is_not_an_object(self):
+        for output in ("[]", '"x"', "57"):
+            with self.subTest(output=output):
+                s = self.fake_gh(output)
+                self.assertIsNone(s["pr"])
+                self.assertIn("gh pr view returned no JSON object; PR state unknown", s["warnings"])
+
+
+class MetricsRobustnessTest(RepoTestCase):
+    def test_infinite_and_absurd_durations_are_skipped(self):
+        d = self.task_dir("42-x")
+        self.ticket(d, mode="oneshot")
+        git(self.repo, "switch", "-q", "-c", "feat/42-x")
+        lines = []
+        for i, duration in enumerate(("Infinity", "NaN", "-Infinity", "1e400", "99999999999", "10" + "0" * 400, "12.5")):
+            lines.append('{"event":"start","agent_id":"a%d","agent":"implementer","phase":"implement"}' % i)
+            lines.append('{"event":"stop","agent_id":"a%d","agent":"implementer","phase":"implement",'
+                         '"duration_s":%s}' % (i, duration))
+        write(os.path.join(d, "events.jsonl"), "\n".join(lines) + "\n")
+        proc = run_loom_state(self.repo, "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        metrics = json.loads(proc.stdout)["task"]["metrics"]
+        self.assertEqual(metrics["subagentSeconds"], 12.5)
+        self.assertIn("subagent time 12 s", metrics["line"])
 
 if __name__ == "__main__":
     unittest.main()
