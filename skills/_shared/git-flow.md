@@ -86,6 +86,7 @@ For a one-line title on the command line (`gh pr create --title`, `gh pr merge -
 
 - Stage only the files of the change: `git add -- <paths>`. Never use `git add -A` or `git add .`.
 - For implementation work, the paths are the implementer's `Files changed` of every run, checked against `git status --porcelain`.
+- The implementer never edits `.claude/settings.json`. When the plan has a settings change for the implementation phase and `.claude/settings.json` is changed in the working tree, stage the file with the files of the phase, also when an earlier run or the user applied the change. The same holds for the user's change of the file after a `settings:` block (`implementation-loop.md`).
 - After staging, run `git status --porcelain`. Nothing outside `<task dir>` may be left unstaged or untracked. If something is, ask the user whether it belongs to the change.
 - Never stage files of the task directory. It is ignored by git.
 

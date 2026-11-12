@@ -1407,8 +1407,8 @@ class ImplementTest(unittest.TestCase):
     def test_per_phase_steps(self):
         body = self.body()
         phase = body.split("## 4. Run one implementation phase", 1)[1].split("## 5.", 1)[0]
-        order = ["`## Phase N — in-progress`", "implementation-loop.md", "## Phase N — blocked", "git add -- <paths>",
-                 "`- [x] N.`", "`done` entry"]
+        order = ["**Settings change first.**", "`## Phase N — in-progress`", "shared `implementation-loop.md`",
+                 "## Phase N — blocked", "git add -- <paths>", "`- [x] N.`", "`done` entry"]
         positions = [phase.index(n) for n in order]
         self.assertEqual(positions, sorted(positions))
         for needle in ("`implement.maxFixAttempts`", "`hooks.maxCheckAttempts`", "you run `checks.check` once more",
@@ -2282,6 +2282,14 @@ class HardeningTest(unittest.TestCase):
                        "Push once, at the end of [Fix](#fix), with `--force-with-lease`"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section_text)
+        # The order of §6.2 stays: rebase first, then the fix items; a run without fix items pushes its rebase.
+        self.assertLess(section_text.index("run [Rebase](#rebase) first"),
+                        section_text.index("continue with [Collect the fix items]"))
+        collect = skill_md("iterate").split("### Collect the fix items", 1)[1].split("### Fix", 1)[0]
+        self.assertIn("5. If no fix item remains: if this run rebased, push as step 6 of [Rebase](#rebase) describes.",
+                      collect)
+        self.assertIn("A branch behind `main` is rebased first",
+                      spec_section("### 6.2 After the PR is open", "## 7. Sessions and Context Model"))
 
     def test_setup_reuses_a_ci_job_by_its_check_name(self):
         for name in ("python-uv.md", "node.md"):
@@ -2479,17 +2487,50 @@ class OnboardingSetupSkillTest(unittest.TestCase):
         self.assertEqual(json.loads(re.sub(r"(?m)^ {3}", "", block)), {"version": 1, "mainBranch": "<main>"})
         self.assertLess(steps.index("**`.gitignore`**"), steps.index("**Issue**"))
 
-    def test_kickoff_settings_are_permissions_only(self):
+    def test_kickoff_settings_leave_out_only_the_design_settings(self):
+        """§9.13.2 step 8: everything of the template but the check command rules and the `statusLine`."""
         settings = self.onboarding().split("### Kickoff settings", 1)[1].split("\n### ", 1)[0]
-        for needle in ("writes only the `permissions` key", "without the rules for the check commands",
-                       "Leave out `Bash(make *)`", "no `extraKnownMarketplaces`, no `enabledPlugins`, no `statusLine`",
-                       "Implementation phase 1 adds them", "\"Merge settings.json\" in step 7 of the skill",
+        for needle in ("every setting of `templates/settings.json` that does not depend on the design",
+                       "The kickoff runs in the main context, after the user confirmed the plan with the `diff`",
+                       "**The kickoff settings**: `extraKnownMarketplaces`, `enabledPlugins`, and the `permissions.allow` "
+                       "and `permissions.ask` rules of `templates/settings.json`, in template order.",
+                       "leave out `Bash(make *)`", "The `statusLine`.",
+                       "Before implementation phase 1, `/loom:implement` adds them, after one confirmation.",
+                       "The implementer never edits a settings file.",
+                       "\"Merge settings.json\" in step 7 of the skill, for `extraKnownMarketplaces`, `enabledPlugins`, "
+                       "`permissions.allow`, and `permissions.ask` only",
+                       "If it exists with another source, keep it and ask the user in the plan.",
+                       "If it is `false`, ask the user in the plan first.",
                        "keep the stricter rule", "Never replace the file, and never remove a key."):
             with self.subTest(needle=needle):
                 self.assertIn(needle, settings)
-        self.assertIn("### Merge settings.json", self.body())
+        for gone in ("writes only the `permissions` key", "no `extraKnownMarketplaces`", "Implementation phase 1 adds"):
+            with self.subTest(gone=gone):
+                self.assertNotIn(gone, self.onboarding())
+        # The kickoff repeats the merge rules of the fast path for the two keys.
+        merge = self.body().split("### Merge settings.json", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("If it exists with another source, keep it and ask the user.", merge)
+        self.assertIn("If it is `false`, ask first.", merge)
+        spec = spec_section("#### 9.13.2 Kickoff (`setup`)", "#### 9.13.3")
+        self.assertIn("**`.claude/settings.json`, the kickoff settings:** `extraKnownMarketplaces`, `enabledPlugins`, "
+                      "and the `permissions.allow` and `permissions.ask` rules of the template", spec)
+        self.assertIn("the rules for the check commands (`make *`, or one rule per check command for Node) and the "
+                      "`statusLine`", spec)
         spec = spec_section("### 19.3 `.claude/settings.json`", "## 20. Testing the Harness")
-        self.assertIn("without the rules for the check commands", spec)
+        self.assertIn("The kickoff commit holds `extraKnownMarketplaces`, `enabledPlugins`, and the `permissions.allow` "
+                      "and `permissions.ask` rules, without the rules for the check commands", spec)
+
+    def test_kickoff_texts_name_the_kickoff_settings(self):
+        """The issue, the design reference, and the README call the kickoff's part of settings.json the kickoff settings."""
+        for path in (os.path.join(SETUP_TEMPLATES, "setup-issue-onboarding.md"), DESIGN_ONBOARDING,
+                     os.path.join(ROOT, "README.md")):
+            with self.subTest(path=os.path.relpath(path, ROOT)):
+                text = read(path)
+                self.assertIn("the kickoff settings of `.claude/settings.json`", text)
+                self.assertNotIn("the permission rules of `.claude/settings.json`", text)
+        rerun = self.onboarding().split("## Onboarding re-run", 1)[1]
+        self.assertIn("`.claude/settings.json` lacks a kickoff setting (`extraKnownMarketplaces.loom`, "
+                      "`enabledPlugins[\"loom@loom\"]`, or a kickoff rule): kickoff step 8.", rerun)
 
     def test_kickoff_commit(self):
         commit = self.onboarding().split("### Kickoff commit", 1)[1].split("\n### ", 1)[0]
@@ -2704,8 +2745,8 @@ class SetupPathRulesTest(unittest.TestCase):
 
     def test_a_new_settings_file_gets_the_schema(self):
         settings = self.onboarding().split("### Kickoff settings", 1)[1].split("\n### ", 1)[0]
-        self.assertIn("write a new file with the `$schema` line of the template first, then the `permissions` key",
-                      settings)
+        self.assertIn("write a new file with the `$schema` line of the template first, then `extraKnownMarketplaces`, "
+                      "`enabledPlugins`, and the `permissions` key", settings)
         self.assertNotIn("no `$schema`", settings)
 
     def test_rerun_confirmation_order(self):
@@ -3181,6 +3222,314 @@ class OnboardingPlanTest(unittest.TestCase):
                 self.assertIn(needle, large)
         self.assertIn("write `loom-statusline.py` unchanged to `<task dir>/templates/loom-statusline.py`",
                       split_frontmatter(skill_md("plan"))[1])
+
+    def test_settings_change_of_phase_1_is_applied_by_implement(self):
+        """§9.13.5: phase 1 adds only the check command rules and the `statusLine`; `implement` applies them."""
+        ref = self.reference()
+        settings = ref.split("## Settings of implementation phase 1", 1)[1].split("\n## ", 1)[0]
+        for needle in ("The kickoff wrote every other setting of `templates/settings.json`: `extraKnownMarketplaces`, "
+                       "`enabledPlugins`, and the other `permissions.allow` and `permissions.ask` rules.",
+                       "the allow rules for the check commands", "the `statusLine` of the template, when the design "
+                       "chose the status line", "`/loom:implement` applies this change in the main context, not the "
+                       "implementer", "inside the `### Changes` of implementation phase 1: the heading "
+                       "`` #### `.claude/settings.json` ``, then a line that says that `/loom:implement` applies the "
+                       "change before the implementer starts and the implementer does not edit `.claude/settings.json`, "
+                       "then one `diff` block.",
+                       "Never plan a change of `.claude/settings.local.json`"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, settings)
+        self.assertNotIn("under the heading of that file", ref)
+        # The marketplace and the plugin come with the kickoff, no longer with implementation phase 1.
+        self.assertNotIn("- `extraKnownMarketplaces` and `enabledPlugins` of the template", settings)
+        phase_1 = ref.split("## Typical implementation phases", 1)[1].split("\n2. ", 1)[0]
+        self.assertIn("the settings change of implementation phase 1, which `/loom:implement` applies", phase_1)
+        spec = spec_section("#### 9.13.5 Plan, implementation, and PR", "#### 9.13.6")
+        self.assertIn("The phase also carries the settings change: the rules for the check commands and, when the "
+                      "design chose the status line, the `statusLine`", spec)
+        self.assertIn("A plan never changes `.claude/settings.local.json`", spec)
+
+    def test_settings_change_has_one_fixed_form(self):
+        """§9.13.5: the heading `#### `.claude/settings.json``, the line about `implement`, and one `diff` block."""
+        spec = spec_section("#### 9.13.5 Plan, implementation, and PR", "#### 9.13.6")
+        self.assertIn("in one fixed form: the heading `` #### `.claude/settings.json` ``, a line that says that "
+                      "`implement` applies the change and the implementer does not, and one `diff` block", spec)
+        changes = section(split_frontmatter(skill_md("plan"))[1], "## 5. Write the plan")
+        self.assertIn("A change of `.claude/settings.json` has one fixed form inside `### Changes`: the heading "
+                      "`` #### `.claude/settings.json` ``, a line that says that `implement` applies the change and "
+                      "the implementer does not, and one `diff` block. It only adds keys and rules. `implement` finds "
+                      "the change by this heading.", changes)
+        self.assertIn("Never plan a change of `.claude/settings.local.json`.", changes)
+        template_text = template("plan").split("### Changes", 1)[1].split("### Verification", 1)[0]
+        self.assertIn("A change of `.claude/settings.json`: the heading #### `.claude/settings.json`, a line that says "
+                      "`implement` applies the change and the implementer does not, and one `diff` block.",
+                      template_text)
+        # Every reader of the plan finds the change by the same heading.
+        heading = "`` #### `.claude/settings.json` ``"
+        for name, text in (("implementation-loop.md", shared("implementation-loop.md")),
+                           ("implement", skill_md("implement")), ("iterate", skill_md("iterate")),
+                           ("implementer", read(os.path.join(AGENTS_DIR, "implementer.md"))),
+                           ("implementation-reviewer", read(os.path.join(AGENTS_DIR, "implementation-reviewer.md")))):
+            with self.subTest(reader=name):
+                self.assertIn(heading, text)
+
+
+SETTINGS_RESULT = "Result: implementation phase <N> not started: .claude/settings.json is unchanged"
+SETTINGS_NEXT = "Next: apply the change to .claude/settings.json yourself, then /clear, then /loom:implement"
+SETTINGS_STAYS = "Result: implementation phase <N> stays blocked: .claude/settings.json is unchanged"
+SETTINGS_FIX_NEXT = "Next: change .claude/settings.json yourself, then /clear, then /loom:iterate"
+SETTINGS_WARNING = ("Warning: no loom agent can change a settings file: <the item>; change .claude/settings.json "
+                    "yourself and commit it")
+SETTINGS_NO_CHANGE = "Result: nothing fixed: the fix needs a change of a settings file"
+SETTINGS_COMMITTED_NEXT = "Next: change .claude/settings.json yourself and commit it, then /clear, then /loom:next"
+# After the PR the user also pushes the commit (§9.13.5): `finish-task` refuses while changes are requested.
+SETTINGS_WARNING_PR = SETTINGS_WARNING.replace("yourself and commit it", "yourself, commit and push it")
+SETTINGS_COMMITTED_NEXT_PR = SETTINGS_COMMITTED_NEXT.replace("yourself and commit it", "yourself, commit and push it")
+SETTINGS_MANUAL_NEXT = ("Next: run the manual steps, apply the change to .claude/settings.json yourself, then "
+                        "/clear, then /loom:implement")
+
+
+class SettingsChangeTest(unittest.TestCase):
+    """A phase that changes `.claude/settings.json`: `implement` applies it in the main context (§9.9, §9.13.5)."""
+
+    def spec(self) -> str:
+        return spec_section("#### 9.13.5 Plan, implementation, and PR", "#### 9.13.6")
+
+    def rule(self) -> str:
+        return self.spec().split("**A phase that changes `.claude/settings.json`**", 1)[1].split(
+            "**A fix of a settings file**", 1)[0]
+
+    def loop_section(self) -> str:
+        return shared("implementation-loop.md").split("## Settings change", 1)[1].split("\n## ", 1)[0]
+
+    def test_spec_lines(self):
+        quoted = re.findall(r"`((?:Result|Next): [^`]+)`", self.rule())
+        self.assertEqual(quoted, [SETTINGS_RESULT, SETTINGS_NEXT, SETTINGS_STAYS])
+        self.assertIn("the `Next:` line starts with `run the manual steps, ` when there are any", self.rule())
+        self.assertIn("A subagent cannot edit `.claude/settings.json` in auto permission mode",
+                      spec_section("### 24.2", "Resolved (milestone M5):"))
+
+    def test_implementation_loop(self):
+        loop = shared("implementation-loop.md")
+        self.assertLess(loop.index("## Inputs"), loop.index("## Settings change"))
+        self.assertLess(loop.index("## Settings change"), loop.index("## Steps"))
+        change = self.loop_section()
+        order = ["Read `.claude/settings.json` if it exists.", "Find what the `diff` adds and the file lacks",
+                 "If nothing is missing, skip the rest of this section.", "Ask for confirmation once.",
+                 "change the file with the Edit tool (the Write tool for a new file)", "Never write it with a shell command.",
+                 "If the user does not say \"yes\", or the permission system denies the edit, stop."]
+        self.assertEqual([change.index(o) for o in order], sorted(change.index(o) for o in order))
+        for needle in ("the implementer never edits `.claude/settings.json` or `.claude/settings.local.json`",
+                       "in the main context", "The rule holds for every task",
+                       "`implement`, before it starts implementation phase N: before the `in-progress` entry in "
+                       "`log.md` and before the implementer.",
+                       "`iterate`, before it fixes a blocked phase that has no commit yet (in phase mode or in Fix mode).",
+                       "Take the `diff` block under the heading `` #### `.claude/settings.json` ``.",
+                       "Skip this section when the Changes of phase N have no such heading",
+                       "Start nothing of phase N: no `in-progress` entry, no implementer.",
+                       SETTINGS_RESULT, "<the diff block>", SETTINGS_NEXT,
+                       "To change the plan instead, run /loom:iterate <feedback>.",
+                       "the `Result:` line names them first", "Keep their `Manual verification:` steps in the message, "
+                       "also in run mode `all`.", "When there are manual steps, the `Next:` line starts with "
+                       "`run the manual steps, `: `%s`" % SETTINGS_MANUAL_NEXT, SETTINGS_STAYS,
+                       "The `Next:` line names `/loom:iterate` in place of `/loom:implement`",
+                       "When the plan has a settings change for phase N and `.claude/settings.json` is changed in the "
+                       "working tree, stage the file with the files of the phase. Do this also when an earlier run or "
+                       "the user applied the change.",
+                       "A re-run finds the change in the file and skips this section.",
+                       "The implementer skips the settings change of the plan and does not report it as a deviation.",
+                       "The reviewer counts it as done when `.claude/settings.json` holds it, in the working tree or in "
+                       "a commit."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, change)
+        self.assertNotIn("in phase mode:", change)  # iterate case (a) with a dirty tree runs in Fix mode
+        record = loop.split("7. **Record.**", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("and `.claude/settings.json` when the plan has a settings change for phase N and the file is "
+                      "changed in the working tree", record)
+
+    def test_git_flow_staging(self):
+        staging = shared("git-flow.md").split("### Staging", 1)[1].split("\n## ", 1)[0].split("\n### ", 1)[0]
+        self.assertIn("When the plan has a settings change for the implementation phase and `.claude/settings.json` is "
+                      "changed in the working tree, stage the file with the files of the phase, also when an earlier "
+                      "run or the user applied the change.", staging)
+        self.assertIn("the user's change of the file after a `settings:` block", staging)
+        self.assertIn("also when an earlier run or the user applied the change", self.rule())
+
+    def test_implement(self):
+        body = split_frontmatter(skill_md("implement"))[1]
+        phase = body.split("## 4. Run one implementation phase", 1)[1].split("## 5.", 1)[0]
+        first = phase.split("**Settings change first.**", 1)[1].split("1. **Start.**", 1)[0]
+        for needle in ("have the heading `` #### `.claude/settings.json` ``, apply that change yourself",
+                       "before the `in-progress` entry and before the implementer", "ask one confirmation",
+                       "use the Edit tool (Write for a new file), never a shell command",
+                       "If nothing is missing in the file, skip it.", "nothing of phase N starts",
+                       "`%s`" % SETTINGS_RESULT, "`%s`" % SETTINGS_NEXT, "/loom:iterate <feedback>",
+                       "name them first in the `Result:` line",
+                       "Keep their `Manual verification:` steps in the message, also in run mode **all**.",
+                       "When there are manual steps, the `Next:` line starts with `run the manual steps, `: `%s`"
+                       % SETTINGS_MANUAL_NEXT):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, first)
+        commit = phase.split("4. **Commit.**", 1)[1].split("5. **Tick the plan**", 1)[0]
+        self.assertIn("When the plan has a settings change for phase N and `.claude/settings.json` is changed in the "
+                      "working tree, stage it with them, also when an earlier run or the user applied the change.", commit)
+        self.assertIn("A refused settings change ends with the `Result:` message",
+                      body.split("## 6. Final message", 1)[1])
+
+    def test_implement_resume_exception(self):
+        """A dirty tree with only (a part of) the settings change gets no offer (§9.13.5)."""
+        resume = split_frontmatter(skill_md("implement"))[1].split("## 2. Resume flow", 1)[1].split("## 3.", 1)[0]
+        exception = resume.split("Exception", 1)[1].split("\n1. ", 1)[0]
+        for needle in ("(quick and full only; oneshot has no plan)",
+                       "a dirty working tree whose only change is `.claude/settings.json`",
+                       "while `implementation.inProgress` is not set", "`git diff -- .claude/settings.json`",
+                       "holds nothing but the settings change of the first implementation phase that is not `done` "
+                       "(all of it or a part",
+                       "make no offer to resume, stash, or discard", "start the phase",
+                       "\"Settings change first\" in section 4 adds the missing part"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, exception)
+        self.assertIn("with nothing in it but the settings change of the phase (all of it or a part)", self.rule())
+
+    def test_iterate_applies_the_rule_before_it_fixes_a_blocked_phase(self):
+        blocked = skill_md("iterate").split("## Fix a blocked phase", 1)[1].split("\n---\n", 1)[0]
+        step = blocked.split("5. Run [the fix loop]", 1)[1].split("\n6. ", 1)[0]
+        for needle in ("Case (a), before the fix loop", "have the heading `` #### `.claude/settings.json` ``, apply that "
+                       "change yourself", "\"Settings change\" in `implementation-loop.md`", "ask one confirmation",
+                       "Phase N stays blocked: `%s`" % SETTINGS_STAYS,
+                       "`%s`" % SETTINGS_NEXT.replace("/loom:implement", "/loom:iterate"), "/loom:iterate <feedback>"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, step)
+        commit = blocked.split("6. Commit:", 1)[1].split("\n7. ", 1)[0]
+        self.assertIn("Stage `.claude/settings.json` with them when it is changed in the working tree and the plan has a "
+                      "settings change for phase N, or a settings item of step 3 named it: also when an earlier run or "
+                      "the user applied the change.", commit)
+        self.assertIn("`iterate` applies the same rule before it fixes a blocked phase that has no commit yet", self.rule())
+
+
+class SettingsFixTest(unittest.TestCase):
+    """A fix of a settings file never goes to the implementer (§9.13.5)."""
+
+    def spec(self) -> str:
+        return spec_section("#### 9.13.5 Plan, implementation, and PR", "#### 9.13.6").split(
+            "**A fix of a settings file**", 1)[1].split("\n- `describe-pr`", 1)[0]
+
+    def test_spec_rule(self):
+        spec = self.spec()
+        self.assertIn("`%s`" % SETTINGS_FIX_NEXT, spec)
+        for needle in ("a `blocking` item of the reviewer, a fix item of the user's feedback, and a ticket of a oneshot task",
+                       "In the loop of a phase that has no commit yet", "the reason `settings: <the item>`",
+                       "A settings item that comes with other `blocking` items stops the loop too",
+                       "`%s`" % SETTINGS_WARNING, "`%s`" % SETTINGS_NO_CHANGE, "`%s`" % SETTINGS_COMMITTED_NEXT,
+                       "The implementer is the second guard",
+                       "On the next `/loom:iterate` of the blocked phase", "An item that the file now satisfies is dropped",
+                       "The user's change of the file is part of the phase: `iterate` stages it with the fix.",
+                       "`iterate` stages the files of the phase that `git status --porcelain` lists"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, spec)
+
+    def test_implementation_loop(self):
+        loop = shared("implementation-loop.md")
+        rule = loop.split("## A fix of a settings file", 1)[1].split("\n## ", 1)[0]
+        for needle in ("never goes to the implementer", "a `blocking` item of the reviewer (step 6);",
+                       "a fix item of the user's feedback (`iterate` checks them before step 1);",
+                       "the ticket of a oneshot task (the implementer reports it under Open problems, step 2).",
+                       "Never send a settings item to the implementer.",
+                       "**A phase without a commit** (a phase that `implement` builds, or a blocked phase that `iterate` "
+                       "fixes): stop the loop. The result is **blocked**, with the reason `settings: <the item>`.",
+                       "A settings item that comes with other `blocking` items stops the loop too",
+                       SETTINGS_FIX_NEXT, "On the next `/loom:iterate` of the blocked phase",
+                       "**Feedback on a committed phase** (`iterate`, before or after the PR): no blocked phase carries "
+                       "the item. `iterate` leaves a settings item of the feedback out, with a `Warning:` line, and "
+                       "fixes the other items",
+                       "A settings item that the reviewer raises during that fix still blocks the fix",
+                       "The implementer is the second guard", "in the form Expected / Found / Why it matters"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, rule)
+        self.assertLess(rule.index("**A phase without a commit**"), rule.index("**Feedback on a committed phase**"))
+        self.assertLess(loop.index("## A fix of a settings file"), loop.index("## Steps"))
+        steps = loop.split("## Steps", 1)[1].split("\n## ", 1)[0]
+        fix_mode = steps.split("1. **Implementer.**", 1)[1].split("\n2. ", 1)[0]
+        self.assertIn("A settings item is never a fix item here", fix_mode)
+        problems = steps.split("2. **Open problems.**", 1)[1].split("\n3. ", 1)[0]
+        self.assertIn("is a settings item: the reason is `settings: <the item>`", problems)
+        verdict = steps.split("6. **Verdict.**", 1)[1].split("\n7. ", 1)[0]
+        self.assertIn("`changes-needed` with a settings item among the `blocking` items: the result is **blocked**, "
+                      "with the reason `settings: <the item>`. Send no item to the implementer", verdict)
+        # The settings rule comes before the fix attempt that would send the item to the implementer.
+        self.assertLess(verdict.index("with a settings item"), verdict.index("launch `loom:implementer` in Fix mode"))
+        self.assertIn("Never send `nit` items, deviations that are not blocking, settings items, or your own ideas.", loop)
+        results = loop.split("## Results", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("For a `settings:` reason, the final message ends with the `Next:` line", results)
+
+    def test_implement_blocked_message(self):
+        body = split_frontmatter(skill_md("implement"))[1]
+        final = body.split("## 6. Final message", 1)[1]
+        self.assertIn("Blocked with a `settings:` reason: `%s`" % SETTINGS_FIX_NEXT, final)
+        blocked = body.split("3. **Blocked.**", 1)[1].split("4. **Commit.**", 1)[0]
+        self.assertIn("A settings item blocks the phase with the reason `settings: <the item>`", blocked)
+
+    def test_iterate_committed_phase_leaves_the_settings_item_out(self):
+        """Feedback on a committed phase: a warning, the other items are fixed, or no change at all (§9.13.5)."""
+        iterate = skill_md("iterate")
+        implemented = iterate.split("## Fix an implemented phase", 1)[1].split("### The fix loop", 1)[0]
+        items = implemented.split("3. Write the fix items", 1)[1].split("\n4. ", 1)[0]
+        for needle in ("no blocked phase carries a settings item. Leave it out of the fix items.",
+                       "`%s`" % SETTINGS_WARNING, "If no other fix item is left, change nothing",
+                       "`%s`" % SETTINGS_NO_CHANGE, "`%s`" % SETTINGS_COMMITTED_NEXT):
+            with self.subTest(section="Fix an implemented phase", needle=needle):
+                self.assertIn(needle, items)
+        self.assertIn("4. Run the fix loop (below) for the other fix items. A settings item that the reviewer raises in "
+                      "it blocks the fix", implemented)
+        self.assertIn("the `Warning:` lines of step 3", implemented.split("7. Final message", 1)[1])
+        # Post-PR fix: a settings item is not a fix item, as an out-of-scope comment (step 4), and step 5 keeps
+        # the push of a rebase of this run before it stops with no change.
+        collect = iterate.split("### Collect the fix items", 1)[1].split("### Fix", 1)[0]
+        step_4 = collect.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
+        self.assertIn("An item that needs a change of `.claude/settings.json` or `.claude/settings.local.json` is not a "
+                      "fix item either", step_4)
+        self.assertIn("List it in the line `%s`" % SETTINGS_WARNING_PR, step_4)
+        self.assertNotIn(SETTINGS_WARNING, collect)
+        step_5 = collect.split("\n5. ", 1)[1].split("\n6. ", 1)[0]
+        self.assertLess(step_5.index("if this run rebased, push as step 6 of [Rebase](#rebase) describes"),
+                        step_5.index("when step 4 left out a settings item"))
+        self.assertIn("Push a rebase of this run as above. Then, when step 4 left out a settings item, stop with `%s`, "
+                      "its `Warning:` line, and `%s`, in place of the result above."
+                      % (SETTINGS_NO_CHANGE, SETTINGS_COMMITTED_NEXT_PR), step_5)
+        self.assertNotIn("stop instead", step_5)
+        spec = SettingsFixTest.spec(self)
+        self.assertIn("After the PR, the `Warning:` and `Next:` lines say `commit and push it` in place of `commit it`",
+                      spec)
+        self.assertIn("`Warning:` lines", iterate.split("### Fix", 1)[1].split("\n---\n", 1)[0])
+        self.assertIn("the order of §6.2 stays (rebase, then the fix items)", SettingsFixTest.spec(self))
+        # The round-2 stops and the round-3 reorder are gone.
+        for gone in ("Result: the fix needs a change of a settings file: <the item>", "the rebase is not pushed yet",
+                     "Result: no change: the fix needs a change of a settings file",
+                     "no rebase, no commit, no push", "does not rebase", "If this run rebases (see Preconditions)"):
+            with self.subTest(gone=gone):
+                self.assertNotIn(gone, iterate)
+
+    def test_iterate_blocked_phase(self):
+        iterate = skill_md("iterate")
+        loop = iterate.split("### The fix loop", 1)[1].split("\n---\n", 1)[0]
+        self.assertIn("A `blocking` item that needs a change of a settings file never goes back: the result is blocked, "
+                      "with the reason `settings: <the item>`.", loop)
+        self.assertIn("For a `settings:` reason, the `Next:` line is `%s`" % SETTINGS_FIX_NEXT, loop)
+        blocked = iterate.split("## Fix a blocked phase", 1)[1].split("\n---\n", 1)[0]
+        self.assertIn("After a `settings:` reason, the user's change of `.claude/settings.json` belongs to phase N too.",
+                      blocked)
+        check = blocked.split("**Settings items**", 1)[1].split("\n4. ", 1)[0]
+        for needle in ("They never go to the implementer. Read the file, and check each settings item yourself.",
+                       "An item that the file now satisfies: drop it.", "stage it in step 6",
+                       "An item that is still open: change nothing. Stop with `Result: implementation phase N stays "
+                       "blocked: settings: <the item>` and `%s`" % SETTINGS_FIX_NEXT,
+                       "If no fix item is left, launch no implementer in step 5.",
+                       "Then run the fix loop only for its new `blocking` items."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, check)
+        commit = blocked.split("6. Commit:", 1)[1].split("\n7. ", 1)[0]
+        self.assertIn("If no implementer ran in this run (every fix item was a settings item that the file now "
+                      "satisfies), there is no `Files changed` list: stage the files of phase N that `git status "
+                      "--porcelain` lists", commit)
 
 
 class LoomJsonChangeTest(unittest.TestCase):

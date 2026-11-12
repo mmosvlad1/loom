@@ -86,6 +86,14 @@ git log --format='%h %s' --grep='^Phase N:' origin/<mainBranch>..HEAD
   - Planned changes that are already committed are not missing. Do not list them.
   - Use the plan or ticket only to detect regressions: if the fix undoes or changes a planned change, report it under Deviations.
 
+### Settings change of the plan
+
+The heading `` #### `.claude/settings.json` `` in the Changes of phase N gives a settings change. `implement` applies it in the main context, not the implementer: the implementer never edits `.claude/settings.json` or `.claude/settings.local.json`. So:
+
+- The implementer's report does not list it, and does not report it as a deviation. That is correct.
+- Count it as done (As planned) when `.claude/settings.json` holds it: in the working tree, or in a commit (the user may have committed it). Read the file to check.
+- Report a wrong setting as usual: a missing key or rule under Planned but missing, a different value under Deviations.
+
 ### 3. Compare and categorize
 
 Put every planned change (for a committed phase in fix mode: every fix item) and every diff hunk into exactly one category:

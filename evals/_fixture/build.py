@@ -755,10 +755,13 @@ SETUP_ISSUE_URL = "https://github.com/example/shop/issues/%d" % SETUP_ISSUE
 # The kickoff's minimal loom.json (LOOM_SPEC.md 9.13.2 step 7): every other key keeps its default.
 KICKOFF_LOOM_JSON = {"version": 1, "mainBranch": "main"}
 
-# The kickoff's settings.json (9.13.2 step 8): the permission rules of the setup template,
-# without the rule for the check commands (`Bash(make *)`), and the `$schema` line of a new file.
+# The kickoff settings of settings.json (9.13.2 step 8): `extraKnownMarketplaces`, `enabledPlugins`,
+# and the permission rules of the setup template, without the rule for the check commands
+# (`Bash(make *)`) and without the `statusLine`, and the `$schema` line of a new file.
 KICKOFF_SETTINGS = {
     "$schema": "https://json.schemastore.org/claude-code-settings.json",
+    "extraKnownMarketplaces": {"loom": {"source": {"source": "github", "repo": "mmosvlad1/loom"}}},
+    "enabledPlugins": {"loom@loom": True},
     "permissions": {
         "allow": [
             "Bash(git status *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git add *)",
@@ -817,7 +820,7 @@ ONBOARDING_GITIGNORE = "__pycache__/\n"
 SETUP_ISSUE_BODY = """\
 ## Context
 
-The project starts to use the loom plugin for issue-to-PR work. The repository already has code, so this setup runs as a loom task in full mode: research describes the repository, design discusses how loom fits the project, and the plan and its implementation phases write the configuration. `/loom:setup` does only the kickoff: the minimal `.claude/loom.json`, the permission rules of `.claude/settings.json`, and the fixed research questions.
+The project starts to use the loom plugin for issue-to-PR work. The repository already has code, so this setup runs as a loom task in full mode: research describes the repository, design discusses how loom fits the project, and the plan and its implementation phases write the configuration. `/loom:setup` does only the kickoff: the minimal `.claude/loom.json`, the kickoff settings of `.claude/settings.json`, and the fixed research questions.
 
 ## Acceptance Criteria
 
@@ -952,7 +955,7 @@ Rules of `AGENTS.md`:
 - "Push and open pull requests without asking for confirmation." (`AGENTS.md:5`)
 - "Keep commit subjects short and in the imperative mood." (`AGENTS.md:6`)
 
-`.claude/` holds only `loom.json` and `settings.json` of the kickoff commit: no `commands/`, `skills/`, `agents/`, hooks, or enabled plugins (`.claude/settings.json:2-3`).
+`.claude/` holds only `loom.json` and `settings.json` of the kickoff commit: no `commands/`, `skills/`, `agents/`, or hooks. The only enabled plugin is `loom@loom`, from the `loom` marketplace on GitHub (`.claude/settings.json:3-13`).
 
 #### Testing patterns
 
@@ -998,7 +1001,7 @@ Question: loom requirements.
 | `conventions` document | does not exist | — |
 | `tasks` document | does not exist | — |
 | Tests | exists | `tests/`, 7 tests; the latest CI run on `main` passed |
-| `.claude/settings.json` | exists | the kickoff permission rules: `$schema` and `permissions` (`.claude/settings.json:2-3`) |
+| `.claude/settings.json` | exists | the kickoff settings: `$schema`, `extraKnownMarketplaces`, `enabledPlugins`, and `permissions` (`.claude/settings.json:2-14`); the whole file has no `Bash(make *)` rule and no `statusLine` (`.claude/settings.json:1-56`) |
 | An ignore rule for `.claude/`, `CLAUDE.md`, or a document of a docs role | does not exist | `git check-ignore -v` matched none |
 
 #### Testing patterns

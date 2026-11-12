@@ -1,6 +1,6 @@
 # Onboarding Design
 
-`/loom:design` reads this file only on the onboarding task: `task.setup` is `true` and `task.mode` is `full`. The onboarding task is the setup of a repository with code. `/loom:setup` did only the kickoff: the issue, the branch, the ticket, a minimal `.claude/loom.json`, the permission rules of `.claude/settings.json`, and the fixed research questions. The design holds the onboarding discussion. The plan and the implementation phases then write the rest of the setup.
+`/loom:design` reads this file only on the onboarding task: `task.setup` is `true` and `task.mode` is `full`. The onboarding task is the setup of a repository with code. `/loom:setup` did only the kickoff: the issue, the branch, the ticket, a minimal `.claude/loom.json`, the kickoff settings of `.claude/settings.json`, and the fixed research questions. The design holds the onboarding discussion. The plan and the implementation phases then write the rest of the setup.
 
 The rules of the design skill apply unchanged: the inputs, the `03-design.md` layout, the question rounds of `question-rounds.md`, every question open, and an empty Resolved Decisions table. This file adds the content of each section and the topics of the discussion.
 

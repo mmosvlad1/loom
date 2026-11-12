@@ -134,6 +134,7 @@ Use the template you read at the start (`${CLAUDE_SKILL_DIR}/references/template
 5. One `## Phase <N>: <name>` section per implementation phase, with:
    - `### Goal`: what works at the end of the implementation phase that did not work before.
    - `### Changes`: a file tree of the created, changed, and deleted files, then key signatures and `diff` blocks for changed shapes. Name the tests to add or change, following the testing patterns from the research. Be exact enough that `loom:implementer` needs no design decision.
+     - A change of `.claude/settings.json` has one fixed form inside `### Changes`: the heading `` #### `.claude/settings.json` ``, a line that says that `implement` applies the change and the implementer does not, and one `diff` block. It only adds keys and rules. `implement` finds the change by this heading. Never plan a change of `.claude/settings.local.json`.
    - `### Verification`: checkbox lines (see below).
 6. Remove every guidance comment from the template.
 

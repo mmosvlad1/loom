@@ -25,7 +25,7 @@ The implementer reads only the plan and the project, never plugin files. So the 
 
 - **Small templates**: copy their content into the Changes, with the placeholders filled:
   - `templates/loom.json`: the full `.claude/loom.json` (above);
-  - `templates/settings.json`: the settings that implementation phase 1 adds to `.claude/settings.json` (below);
+  - `templates/settings.json`: the settings change of implementation phase 1 in `.claude/settings.json` (below);
   - the CI job: the job of `templates/ci.python-uv.yml` or `templates/ci.node.yml` for the stack, when the design adds a job named `check`;
   - `templates/CLAUDE.md`: the `CLAUDE.md` loom section, or the new `CLAUDE.md` with its import line;
   - the docs skeleton of each docs role that the design creates without a draft: `templates/docs/product/vision.md`, `templates/docs/architecture/overview.md`, `templates/docs/conventions.md`;
@@ -37,17 +37,19 @@ The implementer reads only the plan and the project, never plugin files. So the 
 
 ## Settings of implementation phase 1
 
-The kickoff wrote the `permissions.allow` and `permissions.ask` rules of `templates/settings.json`, without the rules for the check commands. Implementation phase 1 merges the other settings into `.claude/settings.json`, by the merge rules of setup: add missing keys and rules; never remove or replace one.
+The kickoff wrote every other setting of `templates/settings.json`: `extraKnownMarketplaces`, `enabledPlugins`, and the other `permissions.allow` and `permissions.ask` rules. The settings change of implementation phase 1 adds only what the design decided, by the merge rules of setup: add missing keys and rules; never remove or replace one.
 
-- `extraKnownMarketplaces` and `enabledPlugins` of the template;
 - the allow rules for the check commands: `Bash(make *)` for a `Makefile` entry point, else one rule per check command (for example `Bash(npm run check)`);
 - the `statusLine` of the template, when the design chose the status line.
 
-Show the change as a `diff` block of `.claude/settings.json`.
+`/loom:implement` applies this change in the main context, not the implementer: in auto permission mode Claude Code denies a subagent's edit of a settings file.
+
+- Give the change in the fixed form of the plan skill, inside the `### Changes` of implementation phase 1: the heading `` #### `.claude/settings.json` ``, then a line that says that `/loom:implement` applies the change before the implementer starts and the implementer does not edit `.claude/settings.json`, then one `diff` block.
+- Never plan a change of `.claude/settings.local.json`: it is each user's own file.
 
 ## Typical implementation phases
 
-1. **Config and checks**: the full `.claude/loom.json` (first), the missing parts of the check entry point, the settings of implementation phase 1, and the optional status line.
+1. **Config and checks**: the full `.claude/loom.json` (first), the missing parts of the check entry point, and the script of the optional status line (`.claude/loom-statusline.py`). The phase also carries the settings change of implementation phase 1, which `/loom:implement` applies.
 2. **CI**: the required check runs `checks.check`, as topic 6 of the design decided. Never rename an existing job.
 3. **Docs**: map, migrate, or create each docs role; the vision and the overview from the approved drafts; the `conventions` document with the CI-only checks and the table of project rules.
 4. **Agent instructions**: `CLAUDE.md` and the agreed changes to other instruction files, each as a `diff` (a new file in full).

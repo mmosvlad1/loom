@@ -2,7 +2,7 @@
 
 `/loom:setup` reads this file when `loom-state --setup-path <main>` names the path `onboarding` or `onboarding-rerun`. The Values and the rules of the setup skill apply here too: `<main>`, `<current>`, `<workDir>`, `<n>`, `<branch>`, `<task dir>`, `<drafts>`, `<path>`, `<reason>`, `<found>`, the Bash call rules, and "Read it first, then Write it" for existing files.
 
-An *onboarding task* is a setup task in `full` mode: the setup of a repository with code. On this path, setup does only the kickoff. loom's own phases (research, design, plan, implement) do the rest; then `/loom:describe-pr` and `/loom:finish-task` open and merge the setup PR. Setup never writes the files of the implementation phases: the full `.claude/loom.json`, the checks entry point, CI, the docs, `CLAUDE.md`, and the other settings.
+An *onboarding task* is a setup task in `full` mode: the setup of a repository with code. On this path, setup does only the kickoff. loom's own phases (research, design, plan, implement) do the rest; then `/loom:describe-pr` and `/loom:finish-task` open and merge the setup PR. Setup never writes the files of the implementation phases: the full `.claude/loom.json`, the checks entry point, CI, the docs, and `CLAUDE.md`. It also never writes the two settings that the design decides: the rules for the check commands and the `statusLine`.
 
 Files you read with this one:
 
@@ -71,7 +71,7 @@ Run these in order, without a question in between:
    ```
 
    Every other key takes its default until implementation phase 1 writes the full file. If the file exists, keep it as it is. Then run `loom-state --json`: `task.setup` is `true` and `task.mode` is `full`. After the plan confirmation this call may ask for permission: the allow rules come only with kickoff step 8. That prompt is expected and harmless. The spec fixes this order of steps 7 and 8.
-8. **`.claude/settings.json`, permissions only**: write the result of [Kickoff settings](#kickoff-settings).
+8. **`.claude/settings.json`, the kickoff settings**: write the result of [Kickoff settings](#kickoff-settings).
 9. **Kickoff commit**: see [Kickoff commit](#kickoff-commit).
 10. **Research questions**: see [Research questions file](#research-questions-file).
 11. **Final message**: see [Final message](#final-message).
@@ -80,13 +80,25 @@ Size `M` caps the design rounds at 3. Most questions of the onboarding design ar
 
 ### Kickoff settings
 
-The kickoff writes only the `permissions` key of `.claude/settings.json` (and `$schema` in a new file). The phases of the onboarding task run `loom-state`, `git`, and read-only `gh` commands many times; without the allow rules, each call asks the user. The `ask` rules (`git push`, `gh pr create`, …) hold from the first phase, also when a loaded project rule says "push without confirmation".
+The kickoff writes every setting of `templates/settings.json` that does not depend on the design. The kickoff runs in the main context, after the user confirmed the plan with the `diff` of this file. A subagent cannot write a settings file later: in auto permission mode Claude Code denies it.
 
-- **The kickoff rules**: the `permissions.allow` and `permissions.ask` rules of `templates/settings.json`, in template order, without the rules for the check commands. Leave out `Bash(make *)`, and every other rule that runs a check command (for Node, one rule per check command). The design chooses the checks later.
+- The phases of the onboarding task run `loom-state`, `git`, and read-only `gh` commands many times. Without the allow rules, each call asks the user.
+- The `ask` rules (`git push`, `gh pr create`, …) hold from the first phase, also when a loaded project rule says "push without confirmation".
+
+What to write:
+
+- **The kickoff settings**: `extraKnownMarketplaces`, `enabledPlugins`, and the `permissions.allow` and `permissions.ask` rules of `templates/settings.json`, in template order.
+- **Left out**: the two things that the design decides later.
+  - The rules for the check commands: leave out `Bash(make *)`, and every other rule that runs a check command (for Node, one rule per check command).
+  - The `statusLine`.
+  - Before implementation phase 1, `/loom:implement` adds them, after one confirmation. The implementer never edits a settings file.
 - Replace the template's default work directory in the `mkdir` and `mv` rules with `<workDir>` when `workDir` differs.
-- No other key: no `extraKnownMarketplaces`, no `enabledPlugins`, no `statusLine`. Implementation phase 1 adds them, and the rules for the check commands.
-- **No file yet**: write a new file with the `$schema` line of the template first, then the `permissions` key: `allow` and `ask` with the kickoff rules.
-- **The file exists**: merge the kickoff rules by the rules of "Merge settings.json" in step 7 of the skill, for `permissions.allow` and `permissions.ask` only. Append the missing rules. Keep the existing rules and their order. If a kickoff `allow` rule is also in the file's `deny` or `ask`, keep the stricter rule and say so in a `Warning:` line. Keep every other key as it is. Never replace the file, and never remove a key.
+- **No file yet**: write a new file with the `$schema` line of the template first, then `extraKnownMarketplaces`, `enabledPlugins`, and the `permissions` key: `allow` and `ask` with the kickoff rules.
+- **The file exists**: merge the kickoff settings by the rules of "Merge settings.json" in step 7 of the skill, for `extraKnownMarketplaces`, `enabledPlugins`, `permissions.allow`, and `permissions.ask` only. Never replace the file, and never remove a key.
+  - `extraKnownMarketplaces.loom`: add it if missing. If it exists with another source, keep it and ask the user in the plan.
+  - `enabledPlugins["loom@loom"]`: set it to `true`. If it is `false`, ask the user in the plan first.
+  - Append the missing rules. Keep the existing rules and their order. If a kickoff `allow` rule is also in the file's `deny` or `ask`, keep the stricter rule and say so in a `Warning:` line.
+  - Keep every other key as it is.
 
 ### Kickoff commit
 
@@ -137,7 +149,7 @@ The path `onboarding-rerun`: you are on `<branch>`, and the ticket has mode `ful
    - Its `mode` is not `full` (another mode, or none): change only the `mode:` line of its frontmatter to `mode: full`. Setup owns the mode of the setup task.
 3. **Missing kickoff items.** If `git log --format=%s origin/<main>..HEAD` lists `chore(loom): start loom setup (#<n>)`, the kickoff files and the kickoff commit are done. Otherwise complete only what is missing, in kickoff order:
    - `.claude/loom.json` is missing: kickoff step 7.
-   - `.claude/settings.json` lacks a kickoff rule: kickoff step 8.
+   - `.claude/settings.json` lacks a kickoff setting (`extraKnownMarketplaces.loom`, `enabledPlugins["loom@loom"]`, or a kickoff rule): kickoff step 8.
    - The kickoff commit: kickoff step 9, with the files of kickoff steps 2, 7, and 8 that differ from `origin/<main>`.
 4. **Research questions file.** `<task dir>/01-research-questions.md` is missing or its `status` is not `approved`: show the question list again, and write the file after the confirmation, as `approved` (kickoff step 10).
    - The file is missing: the list is the 7 fixed questions of `onboarding-questions.md`.

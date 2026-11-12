@@ -224,6 +224,45 @@ class AgentPromptTest(unittest.TestCase):
         settings = json.loads(read(os.path.join(ROOT, "skills", "setup", "references", "templates", "settings.json")))
         self.assertIn("Bash(loom-state --json)", settings["permissions"]["allow"])
 
+    def test_implementer_never_edits_settings_files(self):
+        """`implement` applies a settings change of the plan in the main context (LOOM_SPEC.md 9.13.5, 10)."""
+        body = self.body("implementer")
+        rule = body.split("**Settings files.**", 1)[1].split("\n## ", 1)[0]
+        for needle in ("Never edit `.claude/settings.json` or `.claude/settings.local.json`, in any task.",
+                       "In auto permission mode Claude Code denies a subagent's edit of a settings file.",
+                       "`implement` applies a settings change of the plan itself, in the main context",
+                       "Skip the settings change of the plan (the heading `` #### `.claude/settings.json` `` in its "
+                       "Changes), and do not report it as a deviation.",
+                       # The second guard of "A fix of a settings file" (LOOM_SPEC.md 9.13.5).
+                       "An item that needs a change of a settings file (a fix item, or the ticket of a oneshot task) "
+                       "is not yours. Do not change the file.",
+                       "Report it under Open problems in the form Expected / Found / Why it matters"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, rule)
+        self.assertLess(body.index("**Settings files.**"), body.index("## Before you edit"))
+        self.assertIn("| `.claude/settings.json` and `.claude/settings.local.json` | implement / iterate, in the main "
+                      "context | Do not edit |", body)
+        fm = split_frontmatter(read(os.path.join(AGENTS_DIR, "implementer.md")))[0]
+        self.assertIn("never edits the task directory or the Claude Code settings files", fm["description"])
+        self.assertIn("The implementer never edits `.claude/settings.json` or `.claude/settings.local.json`.",
+                      spec_section("### 10.1", "### 10.2 Reviewer verdict format"))
+
+    def test_reviewer_counts_the_settings_change_of_the_plan(self):
+        """`implement` applies the settings change; the reviewer counts it when the file holds it (LOOM_SPEC.md 9.13.5)."""
+        body = self.body("implementation-reviewer")
+        rule = body.split("### Settings change of the plan", 1)[1].split("\n### ", 1)[0]
+        for needle in ("The heading `` #### `.claude/settings.json` `` in the Changes of phase N gives a settings change.",
+                       "`implement` applies it in the main context, not the implementer",
+                       "The implementer's report does not list it, and does not report it as a deviation.",
+                       "Count it as done (As planned) when `.claude/settings.json` holds it: in the working tree, or in "
+                       "a commit (the user may have committed it).",
+                       "Report a wrong setting as usual"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, rule)
+        self.assertLess(body.index("### Settings change of the plan"), body.index("### 3. Compare and categorize"))
+        self.assertIn("the reviewer counts it as done when the file holds it",
+                      spec_section("### 10.1", "### 10.2 Reviewer verdict format"))
+
     def test_implementer_never_reads_loom_json(self):
         body = read(os.path.join(AGENTS_DIR, "implementer.md"))
         self.assertEqual(re.findall(r"(?<!not )[Rr]ead `?\.claude/loom\.json", body), [])

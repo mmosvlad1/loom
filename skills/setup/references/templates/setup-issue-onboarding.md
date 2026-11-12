@@ -1,6 +1,6 @@
 ## Context
 
-The project starts to use the loom plugin for issue-to-PR work. The repository already has code, so this setup runs as a loom task in full mode: research describes the repository, design discusses how loom fits the project, and the plan and its implementation phases write the configuration. `/loom:setup` does only the kickoff: the minimal `.claude/loom.json`, the permission rules of `.claude/settings.json`, and the fixed research questions.
+The project starts to use the loom plugin for issue-to-PR work. The repository already has code, so this setup runs as a loom task in full mode: research describes the repository, design discusses how loom fits the project, and the plan and its implementation phases write the configuration. `/loom:setup` does only the kickoff: the minimal `.claude/loom.json`, the kickoff settings of `.claude/settings.json`, and the fixed research questions.
 
 ## Acceptance Criteria
 

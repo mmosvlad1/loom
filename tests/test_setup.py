@@ -581,25 +581,41 @@ def kickoff_settings_text() -> str:
 
 
 def kickoff_left_out() -> List[str]:
-    """The template rules that the kickoff leaves out, as the reference names them ("Leave out `<rule>`")."""
-    return re.findall(r"Leave out `(Bash\([^`]+\))`", kickoff_settings_text())
+    """The template rules that the kickoff leaves out, as the reference names them ("leave out `<rule>`")."""
+    return re.findall(r"[Ll]eave out `(Bash\([^`]+\))`", kickoff_settings_text())
 
 
-def kickoff_no_keys() -> List[str]:
-    """The keys the kickoff never writes, as the reference names them ("no `<key>`")."""
-    line = next(l for l in kickoff_settings_text().splitlines() if l.startswith("- No other key"))
-    return re.findall(r"no `([^`]+)`", line)
+def kickoff_keys() -> List[str]:
+    """The top-level template keys that the kickoff writes, as the "**The kickoff settings**" line names them."""
+    tpl = json.loads(template("settings.json"))
+    line = next(l for l in kickoff_settings_text().splitlines() if l.startswith("- **The kickoff settings**"))
+    keys = []
+    for name in re.findall(r"`([^`]+)`", line):
+        key = name.split(".", 1)[0]
+        if key in tpl and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def kickoff_left_out_keys() -> List[str]:
+    """The template keys that the kickoff leaves out, as the "**Left out**" list names them ("The `<key>`.")."""
+    part = kickoff_settings_text().split("- **Left out**", 1)[1].split("\n- ", 1)[0]
+    return re.findall(r"(?m)^  - The `(\w+)`\.$", part)
 
 
 def kickoff_settings() -> Dict:
     """A new .claude/settings.json of the kickoff, built by the reference's rules from the template."""
     tpl = json.loads(template("settings.json"))
     skipped = set(kickoff_left_out())
+    keys = kickoff_keys()
     data: Dict = {}
     if "the `$schema` line of the template" in kickoff_settings_text():
         data["$schema"] = tpl["$schema"]
-    data["permissions"] = {"allow": [r for r in tpl["permissions"]["allow"] if r not in skipped],
-                           "ask": list(tpl["permissions"]["ask"])}
+    for key in tpl:  # template order
+        if key == "permissions" and key in keys:
+            data[key] = {"allow": [r for r in tpl[key]["allow"] if r not in skipped], "ask": list(tpl[key]["ask"])}
+        elif key in keys:
+            data[key] = tpl[key]
     return data
 
 
@@ -793,13 +809,16 @@ class OnboardingKickoffTest(RepoTestCase):
         self.assertEqual([r for r in tpl["permissions"]["allow"] if r.startswith("Bash(make ")], ["Bash(make *)"])
         self.assertIn("every other rule that runs a check command (for Node, one rule per check command)",
                       kickoff_settings_text())
-        # It names every other key of the template as one it never writes; a new file gets $schema.
-        self.assertEqual(set(kickoff_no_keys()), set(tpl) - {"$schema", "permissions"})
+        # It writes every key of the template but the `statusLine`; a new file gets $schema (§9.13.2 step 8).
+        self.assertEqual(kickoff_keys(), ["extraKnownMarketplaces", "enabledPlugins", "permissions"])
+        self.assertEqual(kickoff_left_out_keys(), ["statusLine"])
+        self.assertEqual(set(kickoff_keys()) | set(kickoff_left_out_keys()) | {"$schema"}, set(tpl))
         self.assertIn("the `$schema` line of the template", kickoff_settings_text())
-        self.assertIn("writes only the `permissions` key of `.claude/settings.json` (and `$schema` in a new file)",
-                      kickoff_settings_text())
         data = kickoff_settings()
-        self.assertEqual(list(data), ["$schema", "permissions"])
+        self.assertEqual(list(data), ["$schema", "extraKnownMarketplaces", "enabledPlugins", "permissions"])
+        self.assertEqual(data["extraKnownMarketplaces"], tpl["extraKnownMarketplaces"])
+        self.assertEqual(data["enabledPlugins"], {"loom@loom": True})
+        self.assertNotIn("statusLine", data)
         allow, ask = data["permissions"]["allow"], data["permissions"]["ask"]
         self.assertEqual(ask, tpl["permissions"]["ask"])
         # The phases of the onboarding task run these without a prompt (§9.13.2 step 8, §9.13.3 GitHub

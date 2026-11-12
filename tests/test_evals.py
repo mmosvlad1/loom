@@ -953,7 +953,7 @@ class ScaffoldTest(unittest.TestCase):
         ci = fx.read(".github/workflows/ci.yml")
         self.assertEqual(re.findall(r"(?m)^  (\w[\w-]*):$", ci.split("\njobs:\n", 1)[1]), ["test"])
         self.assertNotIn("make check", ci)
-        # The kickoff commit: only the minimal loom.json, the permission rules, and the .gitignore line.
+        # The kickoff commit: only the minimal loom.json, the kickoff settings, and the .gitignore line.
         # The kickoff needs `origin`; the fixture names one but never fetches it (no remote-tracking ref).
         self.assertEqual(fx.git("remote", "get-url", "origin"), "https://github.com/example/shop.git")
         self.assertEqual(fx.git("branch", "-r"), "")
@@ -965,11 +965,25 @@ class ScaffoldTest(unittest.TestCase):
         self.assertIn(".loom/", fx.read(".gitignore").splitlines())
         settings = json.loads(fx.read(".claude/settings.json"))
         template = json.loads(read(os.path.join(ROOT, "skills", "setup", "references", "templates", "settings.json")))
-        self.assertEqual(set(settings), {"$schema", "permissions"})
-        self.assertEqual(settings["$schema"], template["$schema"])
+        # The kickoff settings (9.13.2 step 8): every key of the template but the `statusLine`, in template
+        # order, and every rule but the one for the check commands.
+        self.assertEqual(list(settings), [k for k in template if k != "statusLine"])
+        for key in ("$schema", "extraKnownMarketplaces", "enabledPlugins"):
+            with self.subTest(key=key):
+                self.assertEqual(settings[key], template[key])
         self.assertEqual(settings["permissions"]["allow"],
                          [r for r in template["permissions"]["allow"] if r != "Bash(make *)"])
         self.assertEqual(settings["permissions"]["ask"], template["permissions"]["ask"])
+        # The research cites these lines: the marketplace and the plugin at 3-13, the permissions from 14.
+        # An absence holds over the whole file, so the research cites all of it (1-56) for "no make rule".
+        settings_lines = fx.read(".claude/settings.json").splitlines()
+        self.assertIn('"extraKnownMarketplaces"', settings_lines[2])
+        self.assertIn('"loom@loom": true', settings_lines[11])
+        self.assertIn('"permissions"', settings_lines[13])
+        self.assertIn("(`.claude/settings.json:1-%d`)" % len(settings_lines),
+                      fx.read(SETUP_TASK_DIR + "/02-research.md"))
+        self.assertNotIn("Bash(make", fx.read(".claude/settings.json"))
+        self.assertNotIn("statusLine", fx.read(".claude/settings.json"))
         # The ticket and the questions file come from setup's templates; --setup-path finds the pointers.
         ticket = fx.read(SETUP_TASK_DIR + "/00-ticket.md")
         self.assertRegex(ticket, r"(?m)^mode: full$")
