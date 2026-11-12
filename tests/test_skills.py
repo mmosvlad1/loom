@@ -241,7 +241,7 @@ class SpecParsingTest(unittest.TestCase):
         self.assertLessEqual(M3_SKILLS, set(table))
         self.assertEqual(table["design"], ("inherit", "high"))
         self.assertEqual(table["next"], ("inherit", "default"))
-        self.assertEqual(table["finish-task"], ("haiku", "low"))
+        self.assertEqual(table["finish-task"], ("inherit", "default"))
 
     def test_no_fork_list(self):
         self.assertEqual(set(spec_no_fork_skills()), {"research", "design", "plan", "implement"})
@@ -746,7 +746,8 @@ class IterateTest(unittest.TestCase):
         def index(fragment: str) -> int:
             return next(i for i, s in enumerate(order) if fragment in s)
         finish = index("Finish a plan change")
-        self.assertEqual(finish, index("Answer a round") + 1)
+        self.assertGreater(finish, index("Answer a round"))
+        self.assertGreater(finish, index("Stop: `Result: git status failed"))
         self.assertLess(finish, index("Fix a blocked phase"))
         self.assertLess(finish, index("Post-PR fix"))
         self.assertIn("`04-plan.md` is `draft`", rows[finish][1])
@@ -797,9 +798,14 @@ class IterateTest(unittest.TestCase):
         self.assertIn("### The `Next:` line (all sections)", body)
         # Only stop tables and the refusal example may name a fixed command after "Next:".
         # Dirty-tree refusals name the handling skill on purpose (a computed `next.command` could loop).
+        # The merged-PR stop names /loom:finish-task for the same reason: with an unfinished
+        # plan change, `next.command` is /loom:iterate again.
         computed = "\n".join(l for l in body.splitlines() if "uncommitted" not in l)
         fixed = re.findall(r"`Next: (/loom:[a-z-]+)", computed)
-        self.assertLessEqual(set(fixed), {"/loom:setup", "/loom:start-task"}, fixed)
+        self.assertLessEqual(set(fixed), {"/loom:setup", "/loom:start-task", "/loom:finish-task"}, fixed)
+        merged = [l for l in body.splitlines() if "`Next: /loom:finish-task`" in l]
+        self.assertEqual(len(merged), 1, merged)
+        self.assertIn("`pr.state` is `MERGED`", merged[0])
 
     def test_plan_change_log_heading_is_not_a_phase_entry(self):
         log = "## Phase 1 — done — abc1234\nChecks: ok\n\n## Plan change — 2026-11-08\nDeviations: x\n"
@@ -1477,7 +1483,8 @@ class FinishTaskTest(unittest.TestCase):
 
     def test_frontmatter(self):
         fm = split_frontmatter(skill_md("finish-task"))[0]
-        self.assertEqual((fm.get("model"), fm.get("effort")), ("haiku", "low"))
+        self.assertEqual(fm.get("model"), "inherit")
+        self.assertNotIn("effort", fm)
         self.assertIn(STATE_INJECTION_PR, skill_md("finish-task"))
 
     def test_commands(self):
@@ -1735,7 +1742,13 @@ class SetupSkillTest(unittest.TestCase):
         body = self.body()
         self.assertEqual(body.count("gh pr list --head <that branch> --state merged --json number")
                          + body.count("gh pr list --head <branch> --state merged --json number"), 2)
-        self.assertIn("`Next: /loom:finish-task #<n>`", body)
+        # The pull comes first: before it, the local main branch has no loom.json, and finish-task would stop (loop).
+        self.assertEqual(body.count("`Next: git switch <main>, then git pull --ff-only, then /loom:finish-task #<n>`"), 2)
+        self.assertNotIn("`Next: /loom:finish-task #<n>`", body)
+        finish = split_frontmatter(skill_md("finish-task"))[1].split("## 2.", 1)[0]
+        resume_row = finish.index("| The state is empty, and the argument names an issue `#<k>` |")
+        self.assertLess(resume_row, finish.index("| The state is empty | Stop"))
+        self.assertIn("take the rows of this table again with that state", finish)
         resume = body.split("## Resume on the setup branch", 1)[1]
         self.assertIn("If `<task dir>/00-ticket.md` is missing, write it from the issue", resume)
 
@@ -1859,10 +1872,12 @@ class StartTaskSkillTest(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 # M9a: the docs map, the resolved check commands, ci, and pullRequest (§8.2, §15, §19.1)
+# Hardening after M9a: also mainBranch, workDir, rounds, implement, and hooks (§19.1)
 # ---------------------------------------------------------------------------
 
 # Keys that skills and agents take from the loom-state output, never from loom.json.
-STATE_CONFIG_KEYS = ("docs", "docsDir", "checks", "ci", "pullRequest")
+STATE_CONFIG_KEYS = ("docs", "docsDir", "checks", "ci", "pullRequest", "mainBranch", "workDir", "rounds", "implement",
+                     "hooks")
 _KEY = r"`<?(?:%s)>?(?:\.[\w.<>]+)?`" % "|".join(STATE_CONFIG_KEYS)
 CONFIG_READ_PATTERNS = [
     # "Read `.claude/loom.json` → `checks`", "Read `.claude/loom.json` and note the `checks` commands"
@@ -1871,6 +1886,8 @@ CONFIG_READ_PATTERNS = [
     re.compile(_KEY + r"[^.\n]{0,40}? (?:from|in) `?\.claude/loom\.json"),
     # "`docsDir` (from `.claude/loom.json`, default `docs`)"
     re.compile(_KEY + r"\s*\(from `?\.claude/loom\.json"),
+    # "Cap: `.claude/loom.json` → `rounds.cap.<size>`"
+    re.compile(r"`\.claude/loom\.json`(?: \([^)\n]*\))?\s*→\s*" + _KEY),
 ]
 # Role paths that a skill would build itself (the defaults of the docs map, §15).
 ROLE_PATH_PATTERNS = [
@@ -1909,7 +1926,7 @@ def prompt_texts() -> Dict[str, str]:
     """Every skill, its .md references, the shared snippets, and the implementer and reviewer agents."""
     paths = glob.glob(os.path.join(SKILLS_DIR, "*", "SKILL.md")) + reference_files("*.md")
     paths += glob.glob(os.path.join(SKILLS_DIR, "_shared", "*.md"))
-    paths += [os.path.join(AGENTS_DIR, n + ".md") for n in ("implementer", "implementation-reviewer")]
+    paths += glob.glob(os.path.join(AGENTS_DIR, "*.md"))
     return {os.path.relpath(p, ROOT): read(p) for p in sorted(set(paths))}
 
 
@@ -1927,6 +1944,15 @@ class ConfigFromStateTest(unittest.TestCase):
             "| Key | Default |\n|---|---|\n| `docsDir` | `docs` |\n| `checks.check` | `make check` |",
             "Read `.claude/loom.json` → `ci.requiredCheck`.",
             "`pullRequest.requiredSections` from `.claude/loom.json`",
+            "Cap: `.claude/loom.json` → `rounds.cap.<size>` (defaults `S` = 2, `M` = 3, `L` = 5).",
+            "- Read the round cap from `.claude/loom.json` (at the git top level) → `rounds.cap.<size>`.",
+            "`<workDir>` is `workDir` from `.claude/loom.json` (read the file; it has the default when the key is missing)",
+            "`<workDir>` is the parent directory of `task.dir` (`workDir` in `.claude/loom.json`).",
+            "1. Read `workDir` from `.claude/loom.json` (if it is missing: the `tasks` directory inside `.loom`).",
+            "`<mainBranch>` comes from `.claude/loom.json` (default `main`).",
+            "- **Limit**: `implement.maxFixAttempts` from `.claude/loom.json` (default `2`).",
+            "Read `.claude/loom.json` at the git top level for the other keys. If a key is missing, use the default:\n\n"
+            "| Key | Default |\n|---|---|\n| `implement.autoAdvance` | `true` |\n| `hooks.maxCheckAttempts` | `3` |",
         ]
         for text in old:
             with self.subTest(text=text[:50]):
@@ -1935,8 +1961,9 @@ class ConfigFromStateTest(unittest.TestCase):
                      "Read `<docsDir>/conventions.md`.", "`docs/conventions.md`"):
             with self.subTest(text=text):
                 self.assertTrue(any(rx.search(text) for rx in ROLE_PATH_PATTERNS), text)
-        for text in ("Cap: `.claude/loom.json` → `rounds.cap.<size>`.", "`workDir` from `.claude/loom.json`",
-                     "Take them from there, never from `.claude/loom.json`.", "`visual-conventions.md`",
+        for text in ("Take them from there, never from `.claude/loom.json`.", "`visual-conventions.md`",
+                     "Cap: `rounds.cap.<size>` from the state.", "`<workDir>` is `workDir` from the state",
+                     "`<mainBranch>` is the `Main branch:` line of the prompt.",
                      "| **checks** | The commands in `loom.json` → `checks` |"):
             with self.subTest(text=text):
                 self.assertEqual(config_reads(text), [])
@@ -1951,6 +1978,8 @@ class ConfigFromStateTest(unittest.TestCase):
 
     def test_no_skill_builds_a_role_path(self):
         for name, text in prompt_texts().items():
+            if name.startswith("agents") and not name.endswith(("implementer.md", "implementation-reviewer.md")):
+                continue  # the research agents name example paths; they get no docs map
             text = re.sub(r"templates/docs/[\w./-]*", "", text)  # setup's skeleton templates
             for rx in ROLE_PATH_PATTERNS:
                 with self.subTest(file=name, pattern=rx.pattern):
@@ -1963,8 +1992,8 @@ class ConfigFromStateTest(unittest.TestCase):
             "plan": ["`docs.conventions`", "`docs.overview`", "from `checks` in the state"],
             "describe-pr": ["`docs.tasks`", "`docs.decisions.dir`", "`docs.decisions.pattern`", "`docs.overview`",
                             "`pullRequest.requiredSections`"],
-            "implement": ["`checks` and `docs.conventions` to the agents"],
-            "iterate": ["`checks` and `docs.conventions` to the agents"],
+            "implement": ["`checks`, `docs.conventions`, and `mainBranch` to the agents"],
+            "iterate": ["`checks`, `docs.conventions`, and `mainBranch` to the agents"],
             "setup": ["`docs.vision`", "`docs.overview`", "`docs.conventions`", "`<docs.decisions.dir>/.gitkeep`",
                       "`<docs.tasks>/.gitkeep`"],
             "finish-task": ["`ci.requiredCheck` from the state"],
@@ -1986,16 +2015,20 @@ class ConfigFromStateTest(unittest.TestCase):
         loop = shared("implementation-loop.md")
         for needle in ("Checks: check = `<checks.check>`; lint = `<checks.lint>`; typecheck = `<checks.typecheck>`; "
                        "test = `<checks.test>`", "Conventions: <docs.conventions>", "`null` without backticks",
-                       "The implementer gets both lines. The reviewer gets the `Conventions:` line.",
+                       "Main branch: <mainBranch>",
+                       "The implementer gets the `Checks:` and `Conventions:` lines. The reviewer gets the "
+                       "`Conventions:` and `Main branch:` lines.",
                        "with a short prompt and the configuration lines above",
-                       "the `Conventions:` line, the implementer's report"):
+                       "the `Conventions:` and `Main branch:` lines, the implementer's report"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, loop)
         iterate = skill_md("iterate").split("### The fix loop", 1)[1]
         self.assertIn("the fix items, and the `Checks:` and `Conventions:` lines of `implementation-loop.md`", iterate)
-        self.assertIn("the fix items, the `Conventions:` line, and the implementer's report", iterate)
-        self.assertIn("the `Conventions:` line, and the diff", skill_md("iterate"))
+        self.assertIn("the fix items, the `Conventions:` and `Main branch:` lines, and the implementer's report", iterate)
+        self.assertIn("the `Conventions:` and `Main branch:` lines, and the diff", skill_md("iterate"))
         self.assertIn("Configuration: the `Checks:` line (`checks` from the state) and the `Conventions:` line",
+                      skill_md("implement"))
+        self.assertIn("the `Conventions:` and `Main branch:` (`mainBranch`) lines in the reviewer prompt",
                       skill_md("implement"))
 
     def test_plan_skips_null_checks(self):
@@ -2108,6 +2141,170 @@ class MilestoneMarkersTest(unittest.TestCase):
                         "may be `null`", "docs roles and the docs map", "new optional keys", "workingTreeDocsOnly"):
                 with self.subTest(marker=marker[:60], m9a=m9a):
                     self.assertNotIn(m9a, marker)
+
+
+class HardeningTest(unittest.TestCase):
+    """The hardening after M9a: new routes and state keys in the skills (§8.2, §9.11, §9.12)."""
+
+    def iterate_rows(self) -> List[Tuple[int, str, str]]:
+        table = skill_md("iterate").split("## 2. Detect the situation", 1)[1].split("\n---\n", 1)[0]
+        return [(int(m.group(1)), m.group(2), m.group(3))
+                for m in re.finditer(r"(?m)^\| (\d+) \| (.+?) \| (.+?) \|$", table)]
+
+    def test_iterate_routes_a_stopped_rebase_first(self):
+        rows = self.iterate_rows()
+        rebase = next(r for r in rows if "`rebaseInProgress` is `true`" in r[1])
+        self.assertIn("whatever the argument is", rebase[1])
+        self.assertEqual(rebase[2], "[Rebase](#rebase)")
+        # Only the rows that change files of the task directory, and the unknown-tree stop, come before it.
+        before = [r[2] for r in rows if r[0] < rebase[0]]
+        self.assertEqual(len(before), 4)
+        for section_name in ("Mode change", "Approve", "Answer a round", "git status failed"):
+            self.assertTrue(any(section_name in b for b in before), section_name)
+        rebase = skill_md("iterate").split("## Rebase", 1)[1].split("\n---\n", 1)[0]
+        stopped = rebase.split("### A stopped rebase", 1)[1].split("### A new rebase", 1)[0]
+        for needle in ("Do not start a new rebase", "do not require a clean working tree",
+                       "`git diff --name-only --diff-filter=U`", "conflict rules of `git-flow.md`",
+                       "`git rebase --continue`", "`git rebase --abort`", "continue with step 5 below"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, stopped)
+
+    def test_other_skills_stop_during_a_stopped_rebase(self):
+        for name in ("implement", "describe-pr", "finish-task"):
+            body = split_frontmatter(skill_md(name))[1].split("## 1. Check preconditions", 1)[1].split("\n## ", 1)[0]
+            with self.subTest(skill=name):
+                self.assertRegex(body, r"\| `rebaseInProgress` is `true` \|[^\n]*/loom:iterate rebase")
+        self.assertIn("is handled only by `/loom:iterate rebase`", shared("git-flow.md"))
+
+    def test_invalid_mode_is_repaired_at_any_time(self):
+        rows = self.iterate_rows()
+        mode = next(r for r in rows if "Mode change" in r[2])
+        self.assertIn("`task.mode` is not `oneshot`, `quick`, or `full`", mode[1])
+        self.assertLess(mode[0], next(r[0] for r in rows if "Answer a round" in r[2]))
+        section_text = skill_md("iterate").split("## Mode change", 1)[1]
+        self.assertIn("Repairing it is allowed at any time, also after implementation started", section_text)
+        self.assertIn("A mode change is allowed only before implementation started", section_text)
+        self.assertIn("`/loom:iterate mode <oneshot|quick|full>`", section_text)
+        self.assertIn('"/loom:iterate mode <oneshot|quick|full>"', read(os.path.join(ROOT, "bin", "loom-state")))
+
+    def test_plan_parse_problems_use_the_state_key(self):
+        for name in ("implement", "iterate", "plan"):
+            with self.subTest(skill=name):
+                self.assertIn("`implementation.planParseError`", skill_md(name))
+                self.assertNotIn("a warning names `04-plan.md`", skill_md(name))
+                self.assertNotIn("`warnings` must not mention `04-plan.md`", skill_md(name))
+
+    def test_unknown_working_tree_stops(self):
+        for name in ("describe-pr", "finish-task"):
+            body = split_frontmatter(skill_md(name))[1].split("## 1. Check preconditions", 1)[1].split("\n## ", 1)[0]
+            with self.subTest(skill=name):
+                self.assertRegex(body, r"\| `workingTree` is `null` \|[^\n]*git status failed[^\n]*"
+                                       r"fix the git error, then /loom:next")
+        rows = self.iterate_rows()
+        row = next(r for r in rows if "`workingTree` is `null`" in r[1])
+        self.assertIn("whatever the argument is", row[1])
+        self.assertIn("fix the git error, then /loom:next", row[2])
+        # Every row whose section reads or changes the working tree, or commits, comes after the stop.
+        for name in ("Rebase", "Finish a plan change", "Fix a blocked phase", "Change an approved plan",
+                     "Uncommitted changes after implementation", "Post-PR fix", "Fix an implemented phase",
+                     "PR #<number> is merged", "nothing to iterate"):
+            with self.subTest(section=name):
+                self.assertLess(row[0], min(r[0] for r in rows if name in r[2]))
+        for name in ("Mode change", "Approve", "Answer a round"):
+            with self.subTest(section=name):
+                self.assertGreater(row[0], next(r[0] for r in rows if name in r[2]))
+        implement = split_frontmatter(skill_md("implement"))[1].split("## 1. Check preconditions", 1)[1]
+        self.assertRegex(implement.split("\n## ", 1)[0],
+                         r"\| `workingTree` is `null` \|[^\n]*git status failed[^\n]*fix the git error, then /loom:next")
+
+    def test_singular_open_question(self):
+        for name in ("iterate", "plan"):
+            with self.subTest(skill=name):
+                self.assertIn("`1 open question`", skill_md(name))
+
+    def test_next_shows_the_required_check(self):
+        body = skill_md("next")
+        self.assertIn("`pr.requiredCheck` is not `missing`", body)
+        self.assertIn("required check 'check': pending", body)
+
+    def test_finish_task_enforces_the_required_check_by_name(self):
+        body = split_frontmatter(skill_md("finish-task"))[1]
+        step = body.split("## 3. Required checks", 1)[1].split("## 4. Merge", 1)[0]
+        without = step.split("### Without required checks", 1)[1]
+        for needle in ("Without required checks on GitHub (no ruleset or branch protection)",
+                       "`gh pr checks --watch`", "`loom-state --json --pr`", "`pr.requiredCheck`",
+                       "| `passing` | Continue with step 4.", "loom checked <required check> by name",
+                       "| `failing` | Do not merge.", "`Next: /loom:iterate`", "| `pending` | The watch ended early.",
+                       "no required checks, and no check named <required check>",
+                       '"yes, merge without required checks"'):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, step if needle.startswith("Without") else without)
+        self.assertIn("A non-zero exit because a check failed is not an error here", without)
+        self.assertIn("at most 3 times in all", without)
+        self.assertIn("`Result: check <required check> is still pending on PR #<number>`, `Next: /loom:finish-task`", without)
+        self.assertIn("Every other failing check is a `Warning:` line, in every case.", step)
+        self.assertIn("Bash(loom-state --json --pr)", skill_rules("finish-task"))
+
+    def test_main_branch_pulls_fast_forward_only(self):
+        for name in ("start-task", "finish-task"):
+            body = skill_md(name)
+            with self.subTest(skill=name):
+                self.assertIn("git pull --ff-only", body)
+                self.assertNotRegex(body, r"`git pull`(?! failed)")
+        lifecycle = spec_section("### 6.1 Main path", "### 6.2 After the PR is open")
+        self.assertNotRegex(lifecycle, r"git pull(?! --ff-only)")
+
+    def test_final_answer_writes_setup_backlog_and_start_task_as_they_are(self):
+        text = shared("final-answer.md")
+        self.assertIn("`/loom:start-task …`, `/loom:backlog`, or `/loom:setup`: write the command as it is", text)
+        self.assertIn("Any other command (a phase that `/loom:next` runs): write `/clear, then /loom:next`.", text)
+        final = split_frontmatter(skill_md("finish-task"))[1].split("## 8. Final message", 1)[1]
+        self.assertIn("Next: /clear, then /loom:start-task #<n> (pick the issue with /loom:backlog)", final)
+        self.assertIn("Do not choose an issue.", final)
+        named = next(l for l in skill_md("next").splitlines() if l.startswith("| `/loom:start-task"))
+        self.assertIn("**Name** it.", named)
+
+    def test_git_flow_names_the_phase_commit_readers(self):
+        text = shared("git-flow.md")
+        self.assertIn("The resume flow of `implement`, `iterate`, and the reviewer find phase commits by it", text)
+        self.assertIn("`loom-state` does not read commits", text)
+
+    def test_post_pr_fix_after_a_rebase_pushes_once(self):
+        section_text = skill_md("iterate").split("## Post-PR fix", 1)[1].split("### Collect the fix items", 1)[0]
+        for needle in ("without its push step", "continue with [Collect the fix items](#collect-the-fix-items)",
+                       "Push once, at the end of [Fix](#fix), with `--force-with-lease`"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section_text)
+
+    def test_setup_reuses_a_ci_job_by_its_check_name(self):
+        for name in ("python-uv.md", "node.md"):
+            text = read(os.path.join(SKILLS_DIR, "setup", "references", "stacks", name))
+            with self.subTest(recipe=name):
+                self.assertNotIn("needs a job named `check` in it", text)
+                self.assertNotIn("(it needs a job named `check`)", text)
+                self.assertIn("`ci.requiredCheck`", text)
+                self.assertIn("Never rename a job", text)
+        body = skill_md("setup")
+        self.assertIn('`"ci": { "requiredCheck": "<check name>" }`', body)
+        self.assertIn("A check the project does not have is `null` in `loom.json`; never invent a command for it.", body)
+        self.assertIn("Leave out the line of a `null` check.", body)
+        self.assertNotIn("named `check`", template_text("setup-issue.md"))
+
+    def test_codebase_agents_get_the_work_directory(self):
+        line = "carries the line `Work directory: <workDir>` (`workDir` from the state)"
+        for name in ("research-questions", "research", "design", "plan", "iterate"):
+            with self.subTest(skill=name):
+                self.assertIn("loom:codebase-", skill_md(name))
+                self.assertIn(line, skill_md(name))
+        for name in ("codebase-locator", "codebase-analyzer", "codebase-pattern-finder"):
+            with self.subTest(agent=name):
+                text = read(os.path.join(AGENTS_DIR, name + ".md"))
+                self.assertIn("the directory of the `Work directory: <path>` line of your prompt", text)
+                self.assertIn("or `.loom/` when the prompt has no such line", text)
+
+
+def template_text(name: str) -> str:
+    return read(os.path.join(SKILLS_DIR, "setup", "references", "templates", name))
 
 
 if __name__ == "__main__":

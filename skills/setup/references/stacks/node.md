@@ -56,7 +56,7 @@ For pnpm and bun, change the steps between `actions/checkout` and the `Check` st
 
 ### Reuse an existing workflow
 
-The same rule as for python-uv: show an existing workflow, ask whether to keep it (it needs a job named `check`) or to add `ci.yml`. Never delete or rewrite it without confirmation.
+The same rule as for python-uv: show an existing workflow, ask whether to keep it or to add `ci.yml`. A kept workflow needs no job named `check`: the check name of the job that runs the checks, as GitHub reports it, goes into `ci.requiredCheck` of `.claude/loom.json`. Never rename a job. Never delete or rewrite a workflow without confirmation.
 
 ## `.gitignore`
 

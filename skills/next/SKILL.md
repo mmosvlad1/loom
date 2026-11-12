@@ -41,14 +41,14 @@ Print a state summary of 3-5 lines, nothing more:
 Task #42 (full) · feat/42-auth-flow · working tree clean
 Artifacts: research-questions approved · research in-review · design approved · plan in-review (2 open questions)
 Implementation: 1 of 3 phases done
-PR: #57 OPEN · checks pending
+PR: #57 OPEN · checks pending · required check 'check': pending
 Next: /loom:iterate <answers> (plan has 2 open questions)
 ```
 
 - Line 1: `task.number`, `task.mode`, `branch`, `workingTree`. On the main branch or without a task: one line with `next.reason`.
 - Artifacts: the phase and `status` of each entry in `artifacts`, with open questions and `stale`. Omit the line when there are none.
 - Implementation: `implementation.done` of `implementation.total`, plus `in progress` or `blocked: <reason>`. Omit it before implementation started.
-- PR: `pr.number`, `pr.state`, `pr.checks`, `pr.reviewDecision`. Omit it when there is no PR.
+- PR: `pr.number`, `pr.state`, `pr.checks`, `pr.reviewDecision`, and `required check '<name>': <state>` when `pr.requiredCheck` is not `missing` (`<name>` is `ci.requiredCheck`, `<state>` is `pr.requiredCheck`). Omit the line when there is no PR.
 - Next: `next.command` and `next.reason`.
 
 Then print the warnings, one `Warning:` line each:

@@ -1,4 +1,4 @@
-# loom's own CI (LOOM_SPEC.md 20.1, 21): unit tests and `claude plugin validate --strict`.
+# loom's own CI (LOOM_SPEC.md 20.1, 21): unit tests and `claude plugin validate --strict`, then the unit tests on Python 3.9.
 # `plugin validate` runs without credentials. The evals cost tokens and run in eval.yml.
 name: CI
 
@@ -28,3 +28,10 @@ jobs:
           claude --version
       - name: Check
         run: make check
+      # The hooks and loom-state promise Python 3.9+ (LOOM_SPEC.md 4.1): run the unit tests on 3.9 too.
+      - uses: actions/setup-python@v7.1.0
+        id: python39
+        with:
+          python-version: "3.9"
+      - name: Unit tests on Python 3.9
+        run: make test PYTHON="${{ steps.python39.outputs.python-path }}"

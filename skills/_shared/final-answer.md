@@ -26,7 +26,8 @@ Optional lines, in this order, between `Open questions` and `Next`:
 - **Next**: compute it, do not remember it. Run `loom-state --json` (the plugin's `bin/` is on the Bash `PATH`) after your last write and read `next.command`:
   - `/loom:iterate …` (open round, approval, fix): write the command; it continues in this session.
   - `/loom:describe-pr` or `/loom:finish-task`: write `/clear, then /loom:describe-pr` (or `/loom:finish-task`).
-  - Any other command: write `/clear, then /loom:next`.
+  - `/loom:start-task …`, `/loom:backlog`, or `/loom:setup`: write the command as it is; `/loom:next` would only name it. Write `/clear, then` before it only when this session did real work (wrote an artifact, committed, created an issue, or merged).
+  - Any other command (a phase that `/loom:next` runs): write `/clear, then /loom:next`.
 
 ## Rules
 

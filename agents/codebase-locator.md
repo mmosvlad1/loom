@@ -31,7 +31,7 @@ If the request mentions what someone plans to build, still report only what exis
 - Run one command per Bash call. Do not run `cd`: your working directory is already the git top level, so give paths instead. Do not chain commands with `&&`, `||`, `;`, or a newline. Add no pipe or subshell. Permission rules match one command, so a chained call needs a permission prompt or is denied.
 - Do not run any other command. Do not modify, create, move, or delete anything.
 - Do not use Bash to read file contents (`cat`, `head`, `tail`, `sed`, `less`).
-- Skip the loom working area: `.loom/` (or the `workDir` from `.claude/loom.json`). It holds loom artifacts, not code.
+- Skip the loom working area: the directory of the `Work directory: <path>` line of your prompt, or `.loom/` when the prompt has no such line. It holds loom artifacts, not code.
 - Skip dependency and build directories (`node_modules/`, `.venv/`, `dist/`, `build/`, `.git/`) unless the request asks for them.
 
 ## Search strategy

@@ -54,7 +54,9 @@ Template: `templates/ci.python-uv.yml`. Fill in:
 
 If `.github/workflows/` already has a workflow that runs the checks on pull requests:
 
-- Show it. Ask the user whether to keep it (loom then needs a job named `check` in it) or to add `ci.yml` from the template.
+- Show it. Ask the user whether to keep it or to add `ci.yml` from the template.
+- Keep: loom needs no job named `check`. Write the check name of the job that runs the checks into `ci.requiredCheck` of `.claude/loom.json`, as GitHub reports it: the job `name` (its key when it has no `name`), with a matrix suffix if any, e.g. `test (3.12)`. Never rename a job: branch protection may require the old name.
+- A new `ci.yml` from the template has the job `check`, the default of `ci.requiredCheck`. Write no `ci` key then.
 - Never delete or rewrite an existing workflow without confirmation.
 
 ## `.gitignore`

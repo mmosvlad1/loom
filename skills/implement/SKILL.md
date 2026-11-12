@@ -39,15 +39,7 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 ### Configuration
 
-The state holds the resolved check commands (`checks`) and doc paths (`docs`). Take them from there, never from `.claude/loom.json`. Pass `checks` and `docs.conventions` to the agents as the configuration lines of `implementation-loop.md`.
-
-Read `.claude/loom.json` at the git top level for the other keys. If a key is missing, use the default:
-
-| Key | Default |
-|---|---|
-| `implement.maxFixAttempts` | `2` |
-| `implement.autoAdvance` | `true` |
-| `hooks.maxCheckAttempts` | `3` |
+The state holds the resolved configuration: `mainBranch`, the check commands (`checks`), the doc paths (`docs`), `implement.maxFixAttempts`, `implement.autoAdvance`, and `hooks.maxCheckAttempts`. Take every value from there, never from `.claude/loom.json`. Pass `checks`, `docs.conventions`, and `mainBranch` to the agents as the configuration lines of `implementation-loop.md`.
 
 Below, `<n>` is `task.number` and `<task dir>` is `task.dir`.
 
@@ -65,10 +57,12 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 | `onMain` is `true` | `on the main branch; no task` | `/loom:start-task #<n>` |
 | `task` is `null` | `branch <branch> matches no task` | `/loom:start-task #<n>` |
 | `task.archived` is `true` | `task #<n> is archived` | `/loom:start-task #<n>` (offers a restore) |
+| `rebaseInProgress` is `true` | `a rebase of <branch> is in progress` | `/loom:iterate rebase` |
+| `workingTree` is `null` | `git status failed: <the error from its warning>` | `fix the git error, then /loom:next` |
 | `task.mode` is not `oneshot`, `quick`, or `full` | `00-ticket.md has no valid mode` | from `next.command` |
 | `implementation.blocked` is set | `implementation phase <k> is blocked: <reason>` | `/loom:iterate <fix>` |
 | Not oneshot, and `04-plan.md` is missing or not `approved` | `implement needs an approved 04-plan.md (status: <status or missing>)` | from `next.command` |
-| Not oneshot, and `implementation.total` is `0`, or a warning names `04-plan.md` | `04-plan.md has no parseable Phase Overview` | `/loom:iterate <feedback>` |
+| Not oneshot, and `implementation.planParseError` is `true` or `implementation.total` is `0` | `04-plan.md has no parseable Phase Overview` | `/loom:iterate <feedback>` |
 | `implementation.total` > 0 and `implementation.done` equals `implementation.total` (clean or dirty working tree) | `all implementation phases are done` | from `next.command` (for example `/clear, then /loom:describe-pr`; `/loom:finish-task` with an open PR; `/loom:iterate <feedback>` when code changes are uncommitted) |
 
 - The plan is the gate: implement starts only when `04-plan.md` is `approved`. In oneshot mode there is no plan; the ticket is the reference.
@@ -130,7 +124,7 @@ For implementation phase N:
 1. **Start.** Append `## Phase N — in-progress` to `<task dir>/log.md` (create the file if it is missing), in the form of `log-format.md`. Skip this when the last entry of phase N is already `in-progress` (a resumed phase).
 2. **Loop.** Run the shared `implementation-loop.md` in phase mode:
    - Reference: the plan path `<task dir>/04-plan.md` and phase N. oneshot: the ticket path `<task dir>/00-ticket.md`; the reviewer compares the diff with the ticket.
-   - Configuration: the `Checks:` line (`checks` from the state) and the `Conventions:` line (`docs.conventions`) in the implementer prompt; the `Conventions:` line in the reviewer prompt.
+   - Configuration: the `Checks:` line (`checks` from the state) and the `Conventions:` line (`docs.conventions`) in the implementer prompt; the `Conventions:` and `Main branch:` (`mainBranch`) lines in the reviewer prompt.
    - Checks: the `SubagentStop` hook enforces `checks.check` on the implementer, and you run `checks.check` once more after it returns. Failing checks mean the hook gave up after `hooks.maxCheckAttempts` attempts: the phase is blocked.
    - Fix attempts: only `blocking` reviewer items go back, at most `implement.maxFixAttempts` times.
 3. **Blocked.** If the result is blocked:

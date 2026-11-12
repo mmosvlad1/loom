@@ -35,7 +35,7 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 The writing style applies to issues, commits, and the final message. It does not apply to the discussion with the user or to the vision document: talk naturally there.
 
-Below, `<main>` is `mainBranch`, and `<drafts>` is `<workDir>/_drafts` (`workDir` from `.claude/loom.json`, default under `.loom/`). With an active task, `<n>` is `task.number` and `<task dir>` is `task.dir`. Issue bodies always go to `<drafts>`, also with an active task. If a file in `<drafts>` or `<task dir>/commit-msg.txt` already exists, Read it before you Write it (`git-flow.md`).
+Below, `<main>` is `mainBranch`, and `<drafts>` is `<workDir>/_drafts` (`workDir` from the state). With an active task, `<n>` is `task.number` and `<task dir>` is `task.dir`. Issue bodies always go to `<drafts>`, also with an active task. If a file in `<drafts>` or `<task dir>/commit-msg.txt` already exists, Read it before you Write it (`git-flow.md`).
 
 Doc paths come from `docs` in the state (the docs map): `<vision>` is `docs.vision`, `<overview>` is `docs.overview`, and `<tasks>` is `docs.tasks`. Never build a doc path yourself.
 

@@ -106,6 +106,7 @@ Spawn agents by their namespaced name. Use only these agents. Do not use `genera
 
 - Run agents in parallel when they search different areas.
 - Tell each agent what to find. Do not tell it how to search; each agent knows its job.
+- Every prompt to `loom:codebase-locator`, `loom:codebase-analyzer`, or `loom:codebase-pattern-finder` carries the line `Work directory: <workDir>` (`workDir` from the state). The agent skips that directory: it holds the loom artifacts, the ticket too. This includes the claim check.
 - Ask every codebase agent for `file:line` references.
 - Wait for **all** agents to finish before you synthesize.
 - If an answer is still missing, run one more targeted pass with at most 3 agents. After that pass, put what is still missing under **Not Found / Unclear**.

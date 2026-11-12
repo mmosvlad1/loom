@@ -3,9 +3,8 @@ name: finish-task
 description: Merges the task's PR and cleans up - checks that the branch is up to date and the required checks pass, squash-merges after confirmation, syncs the main branch, deletes the task branch, and archives the task directory. Every step is safe to re-run. After the setup task it offers the main branch ruleset.
 disable-model-invocation: true
 argument-hint: "[#issue, only to resume on the main branch]"
-model: haiku
-effort: low
-allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json --pr) Bash(loom-state --json) Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)
+model: inherit
+allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json --pr) Bash(loom-state --json) Bash(loom-state --json --pr) Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)
 ---
 
 # Finish Task
@@ -34,7 +33,7 @@ Read these files in full before you start:
 
 Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission.
 
-Below, `<main>` is `mainBranch`, `<branch>` is `branch`, `<n>` is `task.number`, and `<task dir>` is `task.dir`. `<workDir>` is the parent directory of `task.dir` (`workDir` in `.claude/loom.json`). `<required check>` is `ci.requiredCheck` from the state: the CI check that runs `checks.check` (default `check`). Note these values now: after the merge you are on `<main>`, where `loom-state` reports no task.
+Below, `<main>` is `mainBranch`, `<branch>` is `branch`, `<n>` is `task.number`, and `<task dir>` is `task.dir`. `<workDir>` is `workDir` from the state (the parent directory of `task.dir`). `<required check>` is `ci.requiredCheck` from the state: the CI check that runs `checks.check` (default `check`). Note these values now: after the merge you are on `<main>`, where `loom-state` reports no task.
 
 ## 1. Check preconditions
 
@@ -42,10 +41,13 @@ Read the state above. Take the first matching row.
 
 | Check | Action |
 |---|---|
+| The state is empty, and the argument names an issue `#<k>` | A merge may have stopped before the pull: the main branch of a setup task gets `.claude/loom.json` only from the merge. Run `git pull --ff-only` (if it fails, stop: `Result: git pull failed: <the error>`, `Next: /loom:finish-task #<k>` after the user fixes it). Then run `loom-state --json` and take the rows of this table again with that state. If it is still empty, stop as in the next row. |
 | The state is empty | Stop: `Result: not a loom project (no .claude/loom.json)`, `Next: /loom:setup` |
 | `onMain` is `true`, and the argument names an issue `#<k>` | Go to [Resume on the main branch](#resume-on-the-main-branch) |
 | `onMain` is `true` | Stop: `Result: on the main branch; finish-task runs from the task branch`, `Warning: a merge that stopped before the cleanup resumes with /loom:finish-task #<n>`, `Next:` from `next.command` |
 | `task` is `null`, or `task.archived` is `true` | Stop: `Result: no active task for <branch>`, `Next:` from `next.command` |
+| `rebaseInProgress` is `true` | Stop: `Result: a rebase of <branch> is in progress`, `Next: /loom:iterate rebase` |
+| `workingTree` is `null` | Stop: `Result: git status failed: <the error from its warning>`, `Next: fix the git error, then /loom:next` |
 | `pr` is `null`, `task.pr` is set, and `warnings` has a `gh` warning | Stop: `Result: cannot read the state of PR #<task.pr>`, `Warning: <the gh warning>; check gh auth status`, `Next: /loom:finish-task` |
 | `pr` is `null` | Stop: `Result: the branch has no PR`, `Next:` from `next.command` (normally `/loom:describe-pr`) |
 | `pr.state` is `MERGED` | The merge already happened. If `workingTree` is `dirty`, the changes are not in the merge: offer the stash of `git-flow.md` (confirmation) first. Docs-only changes are usually leftovers of this task: say so, and offer discard after the user looks at them as the other choice; without "yes", stop with `Result: PR #<number> is merged, but the working tree has uncommitted changes` and `Next: commit or stash the changes, then /loom:finish-task`. Go to step 5. |
@@ -63,6 +65,8 @@ Read the state above. Take the first matching row.
 
 ## 3. Required checks
 
+Without required checks on GitHub (no ruleset or branch protection), you still wait for `<required check>` and enforce it by name.
+
 First note the PR head and title: `gh pr view --json headRefOid,title`. `<head sha>` is `headRefOid`; it must equal `git rev-parse HEAD` (step 2 pushed every local commit). `<title>` is the PR title. The merge in step 4 uses both, so it merges exactly the head whose checks you watch.
 
 Run `gh pr checks --required --watch`. It waits until every required check finishes, which can take many minutes:
@@ -76,13 +80,27 @@ Read the result:
 |---|---|
 | Every required check passes | Continue with step 4. |
 | A required check fails | Do not merge. Stop: `Result: required checks fail on PR #<number>: <names>`, `Next: /loom:iterate`. |
-| The output says there are no required checks | Run `gh pr checks` (all checks) and show the result. Report `no required checks` on its own line. Merging then needs an explicit "yes, merge without required checks" in step 4. A failing optional check is a `Warning:` line. |
+| The output says there are no required checks | Continue with [Without required checks](#without-required-checks). |
 | Any other error | Stop: `Result: <the error>`. |
+
+Every other failing check is a `Warning:` line, in every case.
+
+### Without required checks
+
+1. Run `gh pr checks --watch`. It waits for all checks. The timeout rules above apply. A non-zero exit because a check failed is not an error here: continue with item 2.
+2. Run `loom-state --json --pr`. Read `pr.requiredCheck`: the state of the check named `<required check>`.
+
+| `pr.requiredCheck` | Action |
+|---|---|
+| `passing` | Continue with step 4. Add to the merge summary: `GitHub requires no check; loom checked <required check> by name.` |
+| `failing` | Do not merge. Stop: `Result: check <required check> fails on PR #<number>`, `Next: /loom:iterate`. |
+| `pending` | The watch ended early. Run item 1 again, at most 3 times in all. Then stop: `Result: check <required check> is still pending on PR #<number>`, `Next: /loom:finish-task`. |
+| `missing` | No check with that name ran. Report `no required checks, and no check named <required check>` on its own line. Merging then needs an explicit "yes, merge without required checks" in step 4. |
 
 ## 4. Merge
 
 1. Show what happens: `PR #<number> "<title>" is squash-merged into <main> as one commit with the subject "<title>"; the local and remote branch <branch> are deleted.` Add the checks result.
-2. Ask for confirmation. Without required checks, ask for the explicit confirmation of step 3.
+2. Ask for confirmation. When step 3 found no check at all (`missing`), ask for its explicit confirmation.
 3. After "yes", run:
    `gh pr merge --squash --delete-branch --subject '<title>' --match-head-commit <head sha>`
    - Give no PR number: it selects the PR of the current branch.
@@ -97,7 +115,7 @@ Read the result:
 Run each command; each one is safe when its work is already done:
 
 1. `git switch <main>` (`gh pr merge` may already have switched).
-2. `git pull`.
+2. `git pull --ff-only`.
 3. `git fetch --prune`.
 4. If `git rev-parse --verify --quiet refs/heads/<branch>` succeeds, the local branch still exists: run `git branch -D <branch>`. Otherwise skip it.
 
@@ -159,12 +177,12 @@ Run `loom-state --json`. Use the `final-answer.md` format:
 ```text
 Result: PR #<number> merged into <main> (<squash commit short hash>); task directory archived to <workDir>/_archive/<task dir name>
 Warning: <one line per warning, if any>
-Next: /clear, then /loom:next
+Next: /clear, then /loom:start-task #<n> (pick the issue with /loom:backlog)
 ```
 
 - Take the squash commit from `git log -1 --format=%h <main>`.
-- `Next:` comes from `loom-state` and is mapped as `final-answer.md` describes.
-- A stop in steps 5-7 (a failed `git pull`, archive, or ruleset call) does not use this message: it ends with `Result: <the error>` and `Next: /loom:finish-task #<n>`.
+- `Next:` comes from `loom-state` and is mapped as `final-answer.md` describes. On the main branch `next.command` is `/loom:start-task #<n>`: write it as `loom-state` prints it, with the literal `#<n>`. Do not choose an issue.
+- A stop in steps 5-7 (a failed `git pull --ff-only`, archive, or ruleset call) does not use this message: it ends with `Result: <the error>` and `Next: /loom:finish-task #<n>`.
 
 ---
 
@@ -172,6 +190,6 @@ Next: /clear, then /loom:next
 
 An earlier run merged the PR and switched to `<main>`, but did not finish. The argument names the issue `#<k>`.
 
-1. Read `workDir` from `.claude/loom.json` (if it is missing: the `tasks` directory inside `.loom`). Find the task directory: `<workDir>/<k>-*`, or else `<workDir>/_archive/<k>-*` (archived already; only step 7 may be left). If neither exists, stop: `Result: no task directory for #<k>`.
-2. Check the merge: `git log --format='%h %s' <main>` must have a commit whose subject contains `(#<k>)`. Run `git pull` first. If no such commit exists, stop: `Result: no merge of #<k> found on <main>; run /loom:finish-task from the task branch`.
+1. `<workDir>` is `workDir` from the state (the fresh state of section 1 when the injected state was empty). Find the task directory: `<workDir>/<k>-*`, or else `<workDir>/_archive/<k>-*` (archived already; only step 7 may be left). If neither exists, stop: `Result: no task directory for #<k>`.
+2. Check the merge: `git log --format='%h %s' <main>` must have a commit whose subject contains `(#<k>)`. Run `git pull --ff-only` first; if it fails, stop with `Result: git pull failed on <main>: <the error>` and `Next: /loom:finish-task #<k>` after the user fixes it. If no such commit exists, stop: `Result: no merge of #<k> found on <main>; run /loom:finish-task from the task branch`.
 3. Run steps 5 to 8 with `<n>` = `<k>` and `<task dir>` = the directory of step 1. Each step skips what is already done. The branch is `<type>/<k>-<slug>`: `<slug>` is the task directory name after `<k>-`, and `<type>` is the type of the merge commit subject. If it is unclear, skip the branch deletion and add a `Warning:` line.

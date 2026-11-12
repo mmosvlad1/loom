@@ -35,7 +35,7 @@ Read these files in full before you start:
 
 Read these files before you ask the user anything. The skill's tool permissions (`allowed-tools`) last only until the user's next message; after that, reads of plugin files may ask for permission.
 
-Below, `<main>` is `mainBranch`, `<workDir>` is `workDir` from `.claude/loom.json` (read the file; it has the default when the key is missing), and `<drafts>` is `<workDir>/_drafts`.
+Below, `<main>` is `mainBranch` and `<workDir>` is `workDir`, both from the state; `<drafts>` is `<workDir>/_drafts`.
 
 ### Arguments
 
@@ -107,7 +107,7 @@ Ask the confirmations of steps 5 and 6 together, in one message.
 
 1. **Working tree.** If `workingTree` is `dirty`, refuse. Show `git status --short`. Offer the stash of `git-flow.md` (confirmation), with `<workDir>` in place of `<task dir>` when no task is active. Without "yes", stop: `Result: working tree has uncommitted changes`, `Next: stash or commit them (on a task branch, /loom:next continues that task), then /loom:start-task #<n>`.
 2. **Existing branch.** If `git rev-parse --verify --quiet refs/heads/<branch>` succeeds, or `git branch --list '*/<n>-*'` lists another branch for the issue, ask: switch to it (it keeps its commits), or stop. Never delete or reset a branch.
-3. **Update the main branch.** Run `git switch <main>`. If `git remote get-url origin` succeeds, run `git pull`. If the pull fails, stop with `Result: git pull failed on <main>: <the error>` and `Next: /loom:start-task #<n>` after the user fixes it.
+3. **Update the main branch.** Run `git switch <main>`. If `git remote get-url origin` succeeds, run `git pull --ff-only`. If the pull fails (also when `<main>` cannot fast-forward), stop with `Result: git pull failed on <main>: <the error>` and `Next: /loom:start-task #<n>` after the user fixes it.
 4. **Create the branch.** Run `git switch -c <branch>`.
 
 ## 8. Write the ticket
