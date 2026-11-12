@@ -520,12 +520,14 @@ class SetupHandoverTest(RepoTestCase):
     def test_interrupted_states_route_to_a_recovery(self):
         # loom.json written, no task directory yet: start-task, which sends the setup issue back to /loom:setup.
         self.assertEqual(self.state()["next"]["command"], "/loom:start-task #3")
-        # Ticket and in-progress entry, commit done, no done entry: implement's resume flow finds the commit.
+        # Ticket and in-progress entry, commit done, no done entry: the setup task goes back to
+        # /loom:setup (§9.12 row 2c), whose fast-path resume finds the commit.
         self.write_ticket()
         self.log("## Phase 1 — in-progress\nStarted: 2026-11-09\n")
         self.commit()
         state = self.state()
-        self.assertEqual(state["next"]["command"], "/loom:implement")
+        self.assertTrue(state["task"]["setup"])
+        self.assertEqual(state["next"]["command"], "/loom:setup")
         self.assertEqual(state["implementation"]["inProgress"], 1)
 
     def test_loom_json_must_exist_for_loom_state(self):
@@ -558,7 +560,19 @@ class SlugTest(unittest.TestCase):
         "Straße für Æsir": "strasse-fur-aesir",
         "Søren's œuvre in Łódź": "soren-s-oeuvre-in-lodz",
         "a " + "y" * 50 + " word": "a",  # accepted quirk (§8.2)
+        # The slug loom-setup is reserved for the setup task (§8.2, §9.13.1).
+        "Loom setup": "loom-setup-task",
+        "  LOOM: Setup! ": "loom-setup-task",
+        "Loom-setup": "loom-setup-task",
+        "Loom setup notes": "loom-setup-notes",
+        "Loom setup task": "loom-setup-task",
     }
+
+    def test_reserved_setup_slug_on_the_cli(self):
+        proc = subprocess.run([sys.executable, LOOM_STATE, "--slug", "Loom setup"],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "loom-setup-task\n", ""))
+        self.assertFalse(ls.SETUP_BRANCH_RE.match("chore/1-%s" % ls.slugify("Loom setup")))
 
     def test_cases(self):
         for title, slug in self.CASES.items():

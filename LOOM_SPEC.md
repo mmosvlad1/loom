@@ -235,7 +235,7 @@ Exception: an invalid mode (`00-ticket.md` has a `mode` that is not `oneshot`, `
 | full → quick | Remaining phases skip design; existing artifacts stay valid |
 | any → oneshot | Allowed only if no plan exists |
 
-**Planned (M9, §9.13.1):** `setup` fixes the mode of the setup task (`oneshot` on an empty repository, `full` on a repository with code). `iterate` refuses a mode change on it, also the repair of an invalid mode, with `Next: /loom:setup`: `setup` owns that ticket. For a setup task with an invalid mode, `loom-state` names `/loom:setup` (§9.12 row 2b). The re-run of `setup` then writes the mode of its path again: `full` on the onboarding path, `oneshot` on the fast path.
+**Planned (M9, §9.13.1):** `setup` fixes the mode of the setup task (`oneshot` on an empty repository, `full` on a repository with code). `iterate` refuses a mode change on it, also the repair of an invalid mode, with `Next: /loom:setup`: `setup` owns that ticket. For a setup task with an invalid mode, `loom-state` names `/loom:setup` (§9.12 row 2b); on a setup task `quick` counts as an invalid mode, because no setup path uses it, and `loom-state` adds a warning for it like for every invalid mode. The re-run of `setup` then writes the mode of its path again: `full` on the onboarding path, `oneshot` on the fast path.
 
 ### 5.4 Mode differences
 
@@ -421,7 +421,7 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 - `--pr`: adds PR state from `gh pr view --json number,state,reviewDecision,statusCheckRollup,mergeStateStatus` as `{ number, state, reviewDecision, checks: passing|failing|pending|none, requiredCheck: passing|failing|pending|missing, mergeStateStatus, behindMain }`; `behindMain` is computed with git after `git fetch origin <mainBranch>`. `requiredCheck` is the state of the `statusCheckRollup` entry named `ci.requiredCheck` (the `name` of a check run, the `context` of a status). For a repeated name, the latest `startedAt` wins, then the later entry. `missing` means no entry has that name. This calls `gh` and the network, so it is not used by the `SessionStart` hook. If `gh` is missing or unauthenticated, the branch has no PR, or `gh` returns no JSON object, `pr` is `null` and a warning is added.
 - `--docs`: reserved for the docs freshness check (§23.1, planned for v1.2). Until then it prints "not implemented yet (planned for v1.2)" to stderr and exits 2.
 - **Planned (M9, §9.13):** `task.setup`: `true` when the task is the setup task (branch `chore/<n>-loom-setup`), else `false`.
-- **Planned (M9, §9.13.1):** `loom-state --setup-path <main>` prints the setup path as one JSON object and exits 0. Like `--slug`, it works without `.claude/loom.json`; outside a git repository it exits 2. `<main>` is the main branch that `setup` found (§9.1).
+- **Planned (M9, §9.13.1):** `loom-state --setup-path <main>` prints the setup path as one JSON object and exits 0. Like `--slug`, it works without `.claude/loom.json`. `<main>` is the main branch that `setup` found (§9.1). It exits 2 outside a git repository and for a `<main>` that is not a valid branch name. It exits 1, with a message, when a git command fails, and when the repository has commits but `<main>` exists neither locally nor on `origin`.
   ```json
   { "path": "onboarding", "reason": "origin/main tracks 41 files that count as code (first: src/app.py)",
     "setupBranches": [], "codeFiles": 41,
@@ -430,8 +430,8 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
   ```
   - `path` is `switch`, `rerun`, `fast`, `onboarding`, `onboarding-rerun`, or `fast-resume`, by the table of §9.13.1. `reason` is one line for the setup plan.
   - `setupBranches` lists the branches `chore/<n>-loom-setup`, local and on `origin`. `codeFiles` counts the tracked files that count as code (§9.13.1).
-  - `found` lists tracked paths for the Key Context Pointers of the onboarding research questions (§9.13.2): the instruction files of §9.13.3 question 4 at any depth, the workflow files, the PR templates, and the directories `docs`, `doc`, `adr`, and `decisions`.
-  - It reads the ticket below `workDir` of `.claude/loom.json`, or below the default `workDir` when the file is missing.
+  - `found` lists paths for the Key Context Pointers of the onboarding research questions (§9.13.2), from the files that the main ref of §9.13.1 tracks: the instruction files of §9.13.3 question 4 at any depth (a rules or instructions directory is listed once, as the directory), the workflow files, the PR templates, and the directories `docs`, `doc`, `adr`, and `decisions` (any letter case) at any depth. Each list holds at most 20 paths: those with the fewest path segments first, then in alphabetical order. Research finds the rest.
+  - It reads the ticket of the active task directory below `workDir` of `.claude/loom.json`, or below the default `workDir` when the file is missing. An archived task directory does not count.
   - The decision is a pure function, `setup_path(facts)`, tested with plain dicts like `decide_next` (§8.4). The script makes no network call.
 - `--slug '<issue title>'`: prints the branch slug of §9.3 step 5 and exits 0. It is a pure string function, so it also works outside a loom project. A title that starts with `-` is taken as the title, not as an option. Before the ASCII step it transliterates the letters that Unicode NFKD keeps (`ß` → `ss`, `æ` → `ae`, `œ` → `oe`, `ø` → `o`, `đ` → `d`, `ł` → `l`, `þ` → `th`). One quirk is accepted: a first word that fits and a second word that would pass 40 characters leave only the first word (`a <50-character word>` → `a`). `start-task` uses it, so the slug never depends on the model. **Planned (M9, §9.13.1):** the slug `loom-setup` is reserved for the setup task; a title that would give it gets `loom-setup-task`.
 
@@ -488,7 +488,8 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
 - `loom-state --setup-path <main>` computes the path, by the table of §9.13.1 (§8.2). `setup` adds `Bash(loom-state --setup-path *)` to its `allowed-tools`. It runs it right after the checks for git, `origin`, and `gh`, before any question to the user.
 - The plan names the path, and the user can switch between the fast path and onboarding; `/loom:setup --oneshot` forces the fast path.
 - A `CLAUDE.md` that the fast path writes gets the line `@AGENTS.md` when the repository has an `AGENTS.md` (§9.13.7).
-- A re-run on a fresh clone restores the ticket and the `done` entry of `log.md`, and repairs a ticket without a valid mode, before it stops on an open setup PR. Without them `loom-state` finds no task, and its `Next:` leads back to `setup`.
+- A local main branch that is ahead of `origin/<main>` stops setup, except for the bootstrap commit on an empty repository: the user pushes or resets it first. Otherwise the path is chosen from `origin/<main>`, and the setup PR would carry the unpushed commits.
+- A re-run on a fresh clone restores the ticket and the `done` entry of `log.md`, and writes the mode of its path into a ticket that has another mode or none (§9.13.1), before it stops on an open setup PR. Without them `loom-state` finds no task, and its `Next:` leads back to `setup`.
 
 **Does:**
 1. Detects the stack (§18) and existing commands.
@@ -728,10 +729,11 @@ Row 5 and a dirty tree: `implement` resumes only while implementation phases are
 An unknown working tree (`workingTree: null`, `git status` failed or timed out) never routes to `/loom:describe-pr` or `/loom:finish-task`. Instead, `next` is `/loom:iterate <feedback>` with the reason `git status failed, so uncommitted changes are unknown; fix the git error in the warnings, then run /loom:next again (<command> needs a known working tree)`. Other routes are unchanged. `implement`, `describe-pr`, and `finish-task` stop on it with `Next: fix the git error, then /loom:next`. `iterate` stops on it too, whatever the argument is, before every section that reads or changes the working tree or commits; only answers, approval, a mode change, and feedback on an artifact before implementation started still run (they change only the task directory).
 
 **Planned (M9, §9.13.1): setup tasks.** `setup` owns the ticket and the first steps of a setup task (`task.setup`), so two routes change:
-- **Row 2b on a setup task** names `/loom:setup`, not a mode change. The re-run of `setup` writes the mode of its path into the ticket again (§5.3).
+- **Row 2b on a setup task** names `/loom:setup`, not a mode change. There `quick` counts as an invalid mode too. The re-run of `setup` writes the mode of its path into the ticket again (§5.3).
 - **Row 2c**, after row 2b and before row 3: a setup task whose `setup` run did not finish → `/loom:setup`. The condition is one of:
-  - mode `full` and no artifact of 01–04 exists: the kickoff stopped before it wrote `01-research-questions.md`. Without this row, row 11 names `/loom:research-questions`, which does not run on a setup task (§9.13.3).
+  - mode `full`, no artifact of 02–04 exists, and `01-research-questions.md` is missing or not `approved`: the kickoff did not finish its questions file. Without this row, row 11 names `/loom:research-questions`, which does not run on a setup task (§9.13.3).
   - mode `oneshot` and implementation phase 1 is `pending` or `in-progress`: the fast path stopped before or during its commit. Without this row, rows 5 and 10 name `/loom:implement`, which would build the setup from the ticket. A `blocked` phase 1 stays with row 3: `iterate` writes it when a fix on the setup PR fails.
+- While row 2c applies, `loom-state` adds no warning about uncommitted changes or a phase in progress (row 5): the uncommitted files are the stopped `setup` run.
 
 Rows 2a and 2b in the skills: `iterate` handles a stopped rebase in its Rebase section (after an explicit mode, `approve`, answers, and the unknown-tree stop, §9.8), and repairs an invalid mode in its Mode change section, also after implementation started. `implement`, `describe-pr`, and `finish-task` stop while `rebaseInProgress` is `true`, with `Next: /loom:iterate rebase`.
 
@@ -757,26 +759,29 @@ Terms (M9a added the docs terms and M9b adds the task terms to §3 and to the gl
 | Empty or new: no commits, or only files that are not code (list below) | Fast setup of §9.1, unchanged | `oneshot` |
 | With code: any other tracked file | Onboarding (this section) | `full` |
 
-Files that are not code: `README*`, `LICENSE*`, `.gitignore`, `.gitattributes`, `.editorconfig`, `CODEOWNERS`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, and files below `.github/` except `.github/workflows/`. A workflow file counts as code.
+Files that are not code, at the git top level and in any letter case: `README*`, `LICENSE*`, `.gitignore`, `.gitattributes`, `.editorconfig`, `CODEOWNERS`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, and files below `.github/` except `.github/workflows/`. A workflow file counts as code.
 
 **Path selection.** `loom-state --setup-path <main>` computes the path (§8.2), so the choice does not depend on the model. The two setup paths are `fast` and `onboarding`; the other `path` values say how an earlier run continues. The first matching row wins:
 
 | Where `setup` runs | Condition | `path` | What `setup` does |
 |---|---|---|---|
-| Not on a setup branch | A branch `chore/<n>-loom-setup` exists, local or on `origin` | `switch` | Switches to it (§9.1), then runs `--setup-path` again |
-| Not on a setup branch | `origin/<main>` has `.claude/loom.json` | `rerun` | The re-run rules of §9.1 (loom is set up) |
+| Not on a setup branch | A branch `chore/<n>-loom-setup` exists locally, or only on `origin` while the main ref has no `.claude/loom.json` | `switch` | Switches to it (§9.1), then runs `--setup-path` again |
+| Not on a setup branch | The main ref has `.claude/loom.json` | `rerun` | The re-run rules of §9.1 (loom is set up) |
 | Not on a setup branch | Otherwise | `fast` or `onboarding` | By the first table |
-| A setup branch `chore/<n>-loom-setup` | `<task dir>/00-ticket.md` has `mode: full` | `onboarding-rerun` | Onboarding re-run (§9.13.2) |
-| A setup branch | The ticket is missing (a fresh clone) or has no valid mode, and `git log origin/<main>..HEAD` has the subject `chore(loom): start loom setup (#<n>)` | `onboarding-rerun` | Onboarding re-run (§9.13.2) |
-| A setup branch | `origin/<main>..HEAD` is empty, and the working tree has no `.claude/loom.json` (setup stopped after `git switch -c`, before it wrote a file) | `fast` or `onboarding` | By the first table. `setup` keeps the branch and reuses the open issue |
+| A setup branch `chore/<n>-loom-setup` | `<task dir>/00-ticket.md` has `mode: full`, and `git log <main ref>..HEAD` has no fast setup subject `chore(loom): set up loom (#<n>)` | `onboarding-rerun` | Onboarding re-run (§9.13.2) |
+| A setup branch | The ticket is missing (a fresh clone) or its mode is not `full`, and `git log <main ref>..HEAD` has the subject `chore(loom): start loom setup (#<n>)` | `onboarding-rerun` | Onboarding re-run (§9.13.2) |
+| A setup branch | `HEAD` has no commit of its own: it is an ancestor of `origin/<main>` or of the local `<main>` (or the repository has no commits). And the working tree has no `.claude/loom.json` (setup stopped after `git switch -c`, before it wrote a file) | `fast` or `onboarding` | By the first table. `setup` keeps the branch and reuses the open issue |
 | A setup branch | Otherwise | `fast-resume` | The fast-path resume of §9.1 |
 
 - **Order in `setup`.** `setup` runs `--setup-path` right after the checks for git, `origin`, and `gh`. The other preconditions of §9.1 (an active task, a dirty working tree, the update of the main branch) run for `rerun`, and for `fast` and `onboarding` outside a setup branch; then `setup` runs `--setup-path` once more, on the updated main branch. On a setup branch `setup` never stops on "a task is active" and never offers a stash: the uncommitted files are the stopped run.
 - The `.claude/loom.json` condition of the sixth row keeps a stopped fast path on the fast path. The fast path writes `.claude/loom.json` first, and the ticket only with its commit (§9.1 step 2). A run that stopped on failing checks has no ticket and no commit, but it has the file.
-- The first table reads the files that `origin/<main>` tracks (the local `<main>` when `origin` has none; no commits: empty).
+- **The main ref.** Every row reads the same ref: `origin/<main>`, or the local `<main>` when `origin` has none. The first table reads the files that it tracks. A repository without any commit has no main ref: its file list is empty, so the path is `fast`. A repository with commits but without `<main>`, locally and on `origin`, is an error (§8.2).
+- A setup branch that exists only on `origin` does not count once the main ref has `.claude/loom.json`. `--setup-path` makes no network call, so a clone that did not prune keeps `origin/chore/<n>-loom-setup` after the setup PR is merged; that repository is set up (`rerun`).
+- The sixth row compares `HEAD` with both main tips (`git merge-base --is-ancestor`). The main branch can move on after the branch was cut, and a local `<main>` can be ahead of `origin/<main>`: in both cases the branch still has no setup commit.
+- The fast setup subject in the fourth row covers a ticket edited by hand: a branch that holds the fast setup commit stays on the fast path (`fast-resume`), and the re-run writes `oneshot` into its ticket again.
 - The setup plan names the chosen path and why (the `reason` of `--setup-path`). The user can switch between `fast` and `onboarding` in the answer. `/loom:setup --oneshot` also forces `fast`. An empty repository has nothing to research, so it never takes the onboarding path.
 - Once the ticket of an onboarding task exists, the path is fixed. `/loom:setup --oneshot` on an onboarding task stops: `Result: setup task #<n> is an onboarding task`. To start over on the fast path, the user deletes the branch `chore/<n>-loom-setup` (local and on `origin`) and the task directory, then runs `/loom:setup --oneshot`.
-- A re-run repairs a ticket of the setup task that has no valid mode: `full` for `onboarding-rerun`, `oneshot` for `fast-resume`.
+- A re-run writes the mode of its path into a ticket of the setup task that has another mode or none: `full` for `onboarding-rerun`, `oneshot` for `fast-resume`.
 - The bootstrap rules of §9.1 apply only to the fast path on an empty repository: the first commit on the main branch, its first push, and the guard exceptions of §11.2. An onboarding repository has commits, so the existing precondition applies: its main branch must be on `origin`. Onboarding never uses a guard exception.
 - `loom-state` recognizes the setup task by its branch `chore/<n>-loom-setup` and reports `task.setup: true` (§8.2). An onboarding task is a setup task with `task.mode` `full`. The ticket gets no new field.
 - The slug `loom-setup` is reserved for the setup task. `loom-state --slug` returns `loom-setup-task` for an issue title that would give it (§8.2), so `start-task` never creates a branch `chore/<n>-loom-setup`.
@@ -810,7 +815,7 @@ On the onboarding path, `setup` does only the kickoff. It shows one plan and act
 
 Size `M` caps the design rounds at 3 (§12.5). Most onboarding questions are independent, so round 1 carries most of them.
 
-**Onboarding re-run.** The check of §9.1 for a merged setup PR comes first. Then `setup` restores a missing ticket, repairs a ticket without a valid mode, and completes only the other missing kickoff items: the minimal `.claude/loom.json`, the settings rules, the kickoff commit, and the research questions file. If the research questions file is missing, it shows the question list again and writes the file after the confirmation: the file is `approved`. The check for an open setup PR comes last: `setup` stops with `Next: /loom:next`, which reads the PR state. Otherwise it stops with `Next:` from `next.command`. It never writes the files of the implementation phases. On a fresh clone the ignored task directory is missing: setup writes the ticket and the research questions again. Research, design, and plan are lost, as for every task (§4.3).
+**Onboarding re-run.** The check of §9.1 for a merged setup PR comes first. Then `setup` restores a missing ticket, repairs a ticket whose mode is not `full`, and completes only the other missing kickoff items: the minimal `.claude/loom.json`, the settings rules, the kickoff commit, and the research questions file. If the research questions file is missing or not `approved`, it shows the question list again and writes the file after the confirmation: the file is `approved`. The check for an open setup PR comes last: `setup` stops with `Next: /loom:next`, which reads the PR state. Otherwise it stops with `Next:` from `next.command`. It never writes the files of the implementation phases. On a fresh clone the ignored task directory is missing: setup writes the ticket and the research questions again. Research, design, and plan are lost, as for every task (§4.3).
 
 #### 9.13.3 Research: the fixed question list
 
@@ -820,7 +825,7 @@ The list is `skills/setup/references/onboarding-questions.md`, in the §13.2 lay
 2. **CI.** Which workflows exist in `.github/workflows/` (and other CI configuration)? For each: the triggers, the check names as GitHub reports them (job `name`, with matrix suffixes), the commands each job runs, how actions and tools are pinned, and how long the jobs ran in the latest run on the main branch (`gh run list`, `gh run view`).
 3. **Documentation.** Where do the docs live (README, `docs/`, `doc/`, ADR directories, wiki links)? What are the structure, the file formats, and the file naming? Which documents describe the product and its users, the architecture and its components, past decisions (with their file name pattern and layout), code conventions, and past work (changelogs, task notes)?
 4. **Agent instruction files and Claude Code configuration.**
-   - Which of `AGENTS.md`, `.claude/AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/`, `.cursorrules`, `.cursor/rules/`, `.github/copilot-instructions.md`, `GEMINI.md`, and similar files exist, at the git top level and in subdirectories?
+   - Which of `AGENTS.md`, `.claude/AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/`, `.cursorrules`, `.cursor/rules/`, `.github/copilot-instructions.md`, `.github/instructions/`, `GEMINI.md`, and similar files exist, at the git top level and in subdirectories?
    - Which of them does Claude Code load (the instruction files rule below), and which does `CLAUDE.md` import with `@`?
    - What do they state about branches, commits, push, pull requests, confirmations, the planning workflow, checks, and code? Quote each rule with `file:line`.
    - What else does `.claude/` hold: `commands/`, `skills/`, `agents/`, the hooks and the enabled plugins of `.claude/settings.json`?

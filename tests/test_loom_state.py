@@ -334,6 +334,20 @@ class TaskLookupTest(RepoTestCase):
         s = self.state()
         self.assertEqual(s["task"]["dir"], "work/tasks/5-x")
 
+    def test_task_setup(self):
+        """task.setup: true only on the branch chore/<n>-loom-setup (LOOM_SPEC.md 8.2, 9.13.1)."""
+        cases = (("chore/3-loom-setup", "3-loom-setup", True), ("chore/4-loom-setup", "4-renamed", True),
+                 ("feat/5-loom-setup", "5-loom-setup", False), ("chore/6-loom-setup-task", "6-loom-setup-task", False),
+                 ("chore/7-x", "7-x", False))
+        for branch, dirname, expected in cases:
+            with self.subTest(branch=branch):
+                issue = int(dirname.split("-")[0])
+                self.ticket(self.task_dir(dirname), mode="full", issue=issue)
+                git(self.repo, "switch", "-q", "-c", branch)
+                s = self.state()
+                self.assertIs(s["task"]["setup"], expected)
+                git(self.repo, "switch", "-q", "main")
+
     def test_ticket_pr_and_invalid_mode(self):
         d = self.task_dir("42-x")
         self.ticket(d, mode="huge", pr=57)

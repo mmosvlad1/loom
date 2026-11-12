@@ -7,10 +7,12 @@ next" (LOOM_SPEC.md section 8). It is used by the SessionStart hook,
 
 Usage: loom-state [--json | --line] [--pr] [--docs]
        loom-state --slug '<issue title>'
+       loom-state --setup-path <main>
 
 The script is a silent no-op (exit 0, no output) outside a git repository and
-in a repository without .claude/loom.json. Standard library only; it runs on
-Python 3.9.
+in a repository without .claude/loom.json. `--slug` works anywhere;
+`--setup-path` works in any git repository (exit 2 outside one). Standard
+library only; it runs on Python 3.9.
 """
 from __future__ import annotations
 
@@ -26,7 +28,7 @@ import shlex
 import subprocess
 import sys
 import unicodedata
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -88,7 +90,14 @@ SETTING_RULES = {
 OUTPUT_FILTERS = ("head", "tail", "grep", "egrep", "fgrep", "sed", "awk", "gawk", "nawk", "cut",
                   "less", "more", "rg", "wc")
 
-BRANCH_RE = re.compile(r"^(feat|fix|chore|docs|refactor)/(\d+)-(.+)$")
+BRANCH_RE = re.compile(r"^(feat|fix|chore|docs|refactor)/([0-9]+)-(.+)$")
+
+# The setup task (LOOM_SPEC.md 9.13.1): its branch, and the slug only it may use.
+SETUP_SLUG = "loom-setup"
+SETUP_SLUG_REPLACEMENT = "loom-setup-task"
+SETUP_BRANCH_RE = re.compile(r"^chore/([0-9]+)-%s$" % SETUP_SLUG)
+# .claude/loom.json as git names it (CONFIG_PATH uses the OS separator).
+CONFIG_FILE = ".claude/loom.json"
 
 TICKET_FILE = "00-ticket.md"
 LOG_FILE = "log.md"
@@ -1712,9 +1721,13 @@ def compute_state(cwd: str, with_pr: bool = False, for_line: bool = False) -> Op
                     warnings.append("%s has an invalid size (got %r)" % (TICKET_FILE, ticket.get("size")))
                     size = None
             mode = normalize_mode(ticket.get("mode"))
+            setup = bool(SETUP_BRANCH_RE.match(branch or ""))
             if mode not in MODES:
                 warnings.append("%s has no valid mode (got %r)" % (TICKET_FILE, mode))
                 mode = mode or None
+            elif setup and mode not in SETUP_MODES:
+                warnings.append("%s has no valid mode for the setup task (got %r); no setup path uses %s"
+                                % (TICKET_FILE, mode, mode))
             pr_number = _to_int(ticket.get("pr"))
             if pr_number is not None and pr_number < 1:
                 pr_number = None  # PR numbers start at 1
@@ -1728,6 +1741,8 @@ def compute_state(cwd: str, with_pr: bool = False, for_line: bool = False) -> Op
                 "mode": mode,
                 "size": size,
                 "archived": archived,
+                # The setup task (LOOM_SPEC.md 9.13.1): known by its branch, not by a ticket field.
+                "setup": setup,
                 "url": ticket.get("url"),
                 "pr": pr_number,
                 "metrics": task_metrics(task_dir),
@@ -1853,6 +1868,61 @@ def _plan_reopened(task: Dict[str, Any], artifacts: List[Dict[str, Any]], impl: 
     )
 
 
+def _phase_status(impl: Dict[str, Any], number: int) -> str:
+    """Status of one implementation phase: its entry in `phases`, else from the summary fields.
+
+    Without an entry: blocked or in progress as `blocked` and `inProgress`
+    say, done when all phases are done, else pending.
+    """
+    for phase in impl.get("phases") or []:
+        if phase.get("number") == number:
+            return phase.get("status") or "pending"
+    blocked = impl.get("blocked")
+    if blocked and blocked.get("phase") == number:
+        return "blocked"
+    if impl.get("inProgress") == number:
+        return "in-progress"
+    return "done" if _all_done(impl) else "pending"
+
+
+# Modes that a setup path writes (LOOM_SPEC.md 5.3): on a setup task `quick` is invalid.
+SETUP_MODES = ("oneshot", "full")
+
+
+def mode_is_valid(task: Dict[str, Any]) -> bool:
+    """The ticket has a valid mode: oneshot, quick, or full; on a setup task only oneshot or full."""
+    return task.get("mode") in (SETUP_MODES if task.get("setup") else MODES)
+
+
+def setup_unfinished(task: Dict[str, Any], artifacts: List[Dict[str, Any]], impl: Dict[str, Any]) -> Optional[str]:
+    """Why the setup run of a setup task did not finish (LOOM_SPEC.md 9.12 row 2c), or None.
+
+    full: no artifact of 02-04 exists, and 01-research-questions.md is missing
+    or not approved (the kickoff did not finish its questions file). oneshot:
+    implementation phase 1 is pending or in progress (the fast path stopped
+    before or during its commit); a blocked phase 1 stays with row 3.
+    """
+    if not task.get("setup"):
+        return None
+    mode = task.get("mode")
+    if mode == "full":
+        arts = {a.get("phase"): a for a in artifacts}
+        questions_file, questions_phase = ARTIFACT_FILES[0]
+        if any(phase in arts for _, phase in ARTIFACT_FILES[1:]):
+            return None
+        questions = arts.get(questions_phase)
+        if questions is None:
+            return "the kickoff did not finish its questions file (%s is missing)" % questions_file
+        if questions.get("status") != "approved":
+            return "the kickoff did not finish its questions file (%s is %s, not approved)" % (
+                questions_file, questions.get("status") or "without status")
+    if mode == "oneshot":
+        status = _phase_status(impl, 1)
+        if status in ("pending", "in-progress"):
+            return "implementation phase 1 is %s: the fast setup stopped before or during its commit" % status
+    return None
+
+
 UNCOMMITTED_BEFORE_PLAN_WARNING = (
     "working tree has uncommitted changes; they are not part of research, design, or plan "
     "(commit, stash, or discard them before /loom:implement)"
@@ -1868,11 +1938,14 @@ def routing_warnings(state: Dict[str, Any]) -> List[str]:
     task = state.get("task")
     if state.get("onMain") or not task or task.get("archived"):
         return []
-    if task.get("mode") not in MODES:
-        # An invalid mode routes to the mode change; the plan is not the reason.
+    if not mode_is_valid(task):
+        # An invalid mode routes to the mode change (or /loom:setup); the plan is not the reason.
         return []
     impl = state.get("implementation") or {}
     artifacts = state.get("artifacts") or []
+    if setup_unfinished(task, artifacts, impl):
+        # Row 2c routes to /loom:setup: the uncommitted files are the stopped setup run.
+        return []
     if plan_gate_holds(task, artifacts) or _plan_reopened(task, artifacts, impl):
         return []
     warnings: List[str] = []
@@ -1943,14 +2016,27 @@ def _decide(state: Dict[str, Any]) -> Dict[str, str]:
             "a rebase of %s is in progress and has to be continued or aborted" % (branch or "the task branch"),
         )
 
-    # An invalid mode: every later row depends on the mode (gates, phases,
-    # the plan gate), so nothing else runs until the mode is set again.
-    if task.get("mode") not in MODES:
+    # Row 2b: an invalid mode. Every later row depends on the mode (gates,
+    # phases, the plan gate), so nothing else runs until the mode is set
+    # again. setup owns the ticket of the setup task: its re-run writes the
+    # mode of its path (LOOM_SPEC.md 5.3); no setup path uses `quick`.
+    if not mode_is_valid(task):
+        if task.get("setup"):
+            problem = "has mode quick, which no setup path uses" if task.get("mode") == "quick" else \
+                "has no valid mode"
+            return _next("/loom:setup", "%s of setup task #%s %s; /loom:setup writes the mode of its path again"
+                         % (TICKET_FILE, number, problem))
         return _next("/loom:iterate mode <oneshot|quick|full>",
                      "%s has no valid mode; set it with a mode change" % TICKET_FILE)
 
     impl = state.get("implementation") or {}
     artifacts = state.get("artifacts") or []
+
+    # Row 2c: a setup task whose setup run did not finish goes back to
+    # /loom:setup: research-questions and implement do not run its first steps.
+    unfinished = setup_unfinished(task, artifacts, impl)
+    if unfinished:
+        return _next("/loom:setup", "setup task #%s: %s; /loom:setup continues it" % (number, unfinished))
 
     # The plan gate after implementation started: a plan changed by
     # /loom:iterate (draft while the edit runs, then in-review) must be
@@ -2187,8 +2273,312 @@ def slugify(title: str) -> str:
     words = [w for w in re.split(r"[^a-z0-9]+", ascii_text.lower()) if w][:SLUG_MAX_WORDS]
     while len(words) > 1 and len("-".join(words)) > SLUG_MAX_CHARS:
         words.pop()
-    slug = "-".join(words)[:SLUG_MAX_CHARS].strip("-")
-    return slug or SLUG_FALLBACK
+    slug = "-".join(words)[:SLUG_MAX_CHARS].strip("-") or SLUG_FALLBACK
+    # The setup task owns `loom-setup` (LOOM_SPEC.md 9.13.1): start-task never
+    # creates a branch chore/<n>-loom-setup.
+    return SETUP_SLUG_REPLACEMENT if slug == SETUP_SLUG else slug
+
+
+# ---------------------------------------------------------------------------
+# Setup path (LOOM_SPEC.md section 9.13.1)
+# ---------------------------------------------------------------------------
+
+# Files that are not code (LOOM_SPEC.md 9.13.1): names at the git top level, in
+# any letter case (compared in lower case); files below .github/ count too,
+# except .github/workflows/.
+NON_CODE_PATTERNS = ("readme*", "license*", ".gitignore", ".gitattributes", ".editorconfig", "codeowners",
+                     "security.md", "code_of_conduct.md", "contributing.md")
+GITHUB_DIR = ".github"
+WORKFLOWS_DIR = ".github/workflows"
+
+# Agent instruction files of the onboarding research question 4 (LOOM_SPEC.md
+# 9.13.3), at any depth: file names, and directories listed once as the directory.
+INSTRUCTION_FILE_NAMES = ("AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", ".cursorrules", "GEMINI.md")
+INSTRUCTION_FILE_PATHS = (".github/copilot-instructions.md",)
+INSTRUCTION_DIRS = (".claude/rules", ".cursor/rules", ".github/instructions")
+# PR template locations that GitHub reads: the top level, .github/, and docs/.
+PR_TEMPLATE_DIRS = ("", ".github", "docs")
+PR_TEMPLATE_NAME = "pull_request_template"
+# Documentation directories, at any depth and in any letter case.
+DOCS_DIR_NAMES = ("docs", "doc", "adr", "decisions")
+# At most this many paths per list of `found`; research finds the rest.
+FOUND_LIMIT = 20
+
+KICKOFF_SUBJECT = "chore(loom): start loom setup (#%d)"
+FAST_SETUP_SUBJECT = "chore(loom): set up loom (#%d)"
+
+
+class SetupPathError(Exception):
+    """--setup-path cannot decide: a git command failed, or the main branch is missing."""
+
+
+def is_code_file(path: str) -> bool:
+    """True if a tracked path counts as code for the setup path (LOOM_SPEC.md 9.13.1).
+
+    Not code, at the git top level and in any letter case: README*,
+    LICENSE*, .gitignore, .gitattributes, .editorconfig, CODEOWNERS,
+    SECURITY.md, CODE_OF_CONDUCT.md, CONTRIBUTING.md, and files below
+    .github/ except .github/workflows/.
+    """
+    lower = path.lower()
+    if _is_under(lower, WORKFLOWS_DIR):
+        return True
+    if lower.startswith(GITHUB_DIR + "/"):
+        return False
+    if "/" in lower:
+        return True
+    return not any(fnmatch.fnmatchcase(lower, pattern) for pattern in NON_CODE_PATTERNS)
+
+
+def _dir_paths(path: str) -> List[str]:
+    """The directories that contain a path: `a/b/c.md` -> [`a`, `a/b`]."""
+    parts = path.split("/")[:-1]
+    return ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+
+
+def _shortest_first(paths: Set[str]) -> List[str]:
+    """At most FOUND_LIMIT paths: the fewest path segments first, then alphabetical."""
+    return sorted(paths, key=lambda p: (p.count("/"), p))[:FOUND_LIMIT]
+
+
+def found_paths(files: List[str]) -> Dict[str, List[str]]:
+    """Paths for the Key Context Pointers of the onboarding questions (LOOM_SPEC.md 8.2, 9.13.2).
+
+    Pure function over tracked paths: instruction files of research question 4
+    at any depth (a rules or instructions directory is listed once, as the
+    directory), the workflow files, the PR templates, and the directories
+    docs, doc, adr, and decisions at any depth and in any letter case. Each
+    list holds at most FOUND_LIMIT paths, the fewest path segments first, then
+    alphabetical.
+    """
+    instruction: Set[str] = set()
+    workflows: Set[str] = set()
+    templates: Set[str] = set()
+    docs_dirs: Set[str] = set()
+    for path in files:
+        name = path.rsplit("/", 1)[-1]
+        dirs = _dir_paths(path)
+        rules = next((d for d in dirs if any(d == r or d.endswith("/" + r) for r in INSTRUCTION_DIRS)), None)
+        if rules is not None:
+            instruction.add(rules)
+        elif name in INSTRUCTION_FILE_NAMES or any(path == p or path.endswith("/" + p) for p in INSTRUCTION_FILE_PATHS):
+            instruction.add(path)
+        parent = posixpath.dirname(path)
+        if parent == WORKFLOWS_DIR and name.lower().endswith((".yml", ".yaml")):
+            workflows.add(path)
+        if parent in PR_TEMPLATE_DIRS and name.lower().startswith(PR_TEMPLATE_NAME + "."):
+            templates.add(path)
+        elif posixpath.basename(parent).lower() == PR_TEMPLATE_NAME and posixpath.dirname(parent) in PR_TEMPLATE_DIRS:
+            templates.add(path)
+        for directory in dirs:
+            if directory.rsplit("/", 1)[-1].lower() in DOCS_DIR_NAMES:
+                docs_dirs.add(directory)
+    return {"instructionFiles": _shortest_first(instruction), "workflows": _shortest_first(workflows),
+            "prTemplates": _shortest_first(templates), "docsDirs": _shortest_first(docs_dirs)}
+
+
+def _first_table(facts: Dict[str, Any], code: List[str]) -> Tuple[str, str]:
+    """The first table of LOOM_SPEC.md 9.13.1: (fast | onboarding, reason)."""
+    ref = facts.get("mainRef")
+    files = facts.get("mainFiles") or []
+    if not ref:
+        return "fast", "the repository has no commits"
+    if code:
+        return "onboarding", "%s tracks %s that count%s as code (first: %s)" % (
+            ref, _plural(len(code), "file", "files"), "s" if len(code) == 1 else "", code[0])
+    if not files:
+        return "fast", "%s tracks no files" % ref
+    return "fast", "%s tracks only files that are not code (%s)" % (ref, _plural(len(files), "file", "files"))
+
+
+def setup_path(facts: Dict[str, Any]) -> Dict[str, Any]:
+    """The setup path from git facts (LOOM_SPEC.md 8.2, 9.13.1). Pure function.
+
+    facts (every key optional):
+      branch: the current branch, or None;
+      localSetupBranches: the local branches chore/<n>-loom-setup;
+      originSetupBranches: the branches chore/<n>-loom-setup on origin
+        (remote-tracking refs, no network call);
+      mainRef: the main ref (`origin/<main>`, else `<main>`), or None when
+        the repository has no commits;
+      mainFiles: the files that mainRef tracks;
+      ticketFound: the active <task dir>/00-ticket.md exists;
+      ticketMode: the ticket's mode (oneshot, quick, full), or None when the
+        ticket is missing or has no valid mode;
+      branchSubjects: the commit subjects of `<mainRef>..HEAD`;
+      noOwnCommits: HEAD has no commit of its own (it is an ancestor of
+        origin/<main> or of the local <main>), or the repository has no commits;
+      configInWorkingTree: .claude/loom.json exists in the working tree.
+    Returns {path, reason, setupBranches, codeFiles, found}. The first
+    matching row of the path table wins.
+    """
+    branch = facts.get("branch") or ""
+    local = list(facts.get("localSetupBranches") or [])
+    origin_only = [b for b in facts.get("originSetupBranches") or [] if b not in local]
+    setup_branches = sorted(local + origin_only, key=_setup_branch_key)
+    ref = facts.get("mainRef")
+    files = list(facts.get("mainFiles") or []) if ref else []
+    code = [path for path in files if is_code_file(path)]
+    has_config = CONFIG_FILE in files
+    m = SETUP_BRANCH_RE.match(branch)
+    if not m:
+        # Rows 1-3: not on a setup branch. A setup branch only on origin is a
+        # stale remote-tracking ref once the main ref has loom.json.
+        switch = sorted(local + ([] if has_config else origin_only), key=_setup_branch_key)
+        if switch:
+            path = "switch"
+            reason = "the setup branch %s exists" % switch[0] if len(switch) == 1 else \
+                "the setup branches %s exist" % ", ".join(switch)
+        elif has_config:
+            path = "rerun"
+            reason = "%s has %s: loom is set up" % (ref, CONFIG_FILE)
+        else:
+            path, reason = _first_table(facts, code)
+    else:
+        # Rows 4-7: on a setup branch.
+        number = int(m.group(1))
+        kickoff = KICKOFF_SUBJECT % number
+        subjects = facts.get("branchSubjects") or []
+        mode = facts.get("ticketMode")
+        if mode == "full" and FAST_SETUP_SUBJECT % number not in subjects:
+            path = "onboarding-rerun"
+            reason = "%s: the ticket has mode full" % branch
+        elif kickoff in subjects:
+            path = "onboarding-rerun"
+            if not facts.get("ticketFound"):
+                state = "is missing"
+            elif mode:
+                state = "has mode %s" % mode
+            else:
+                state = "has no valid mode"
+            reason = "%s: the ticket %s, and the branch has the kickoff commit '%s'" % (branch, state, kickoff)
+        elif facts.get("noOwnCommits") and not facts.get("configInWorkingTree"):
+            path, first = _first_table(facts, code)
+            reason = "%s has no commit of its own and no %s (setup stopped after git switch -c); %s" % (
+                branch, CONFIG_FILE, first)
+        else:
+            parts = []
+            if not facts.get("noOwnCommits"):
+                parts.append("commits of its own")
+            if facts.get("configInWorkingTree"):
+                parts.append("%s in the working tree" % CONFIG_FILE)
+            reason = "%s: a stopped fast setup (%s)" % (branch, ", ".join(parts))
+            path = "fast-resume"
+    return {"path": path, "reason": reason, "setupBranches": setup_branches, "codeFiles": len(code),
+            "found": found_paths(files)}
+
+
+def _setup_branch_key(name: str) -> Tuple[int, str]:
+    m = SETUP_BRANCH_RE.match(name)
+    return (int(m.group(1)) if m else 0, name)
+
+
+def _git_list(args: List[str], top: str, sep: str = "\n") -> List[str]:
+    """Output items of a git command; `-z` output keeps empty items (an empty commit subject)."""
+    rc, out, err = git(args, top)
+    if rc != 0:
+        raise SetupPathError("git %s failed: %s" % (args[0], (err.strip().splitlines() or ["?"])[0]))
+    if sep == "\0":
+        items = out.split("\0")
+        return items[:-1] if items and items[-1] == "" else items
+    return [line for line in out.splitlines() if line]
+
+
+def _commit_of(top: str, ref: str) -> Optional[str]:
+    return git_out(["rev-parse", "--verify", "--quiet", ref + "^{commit}"], top) or None
+
+
+def _is_ancestor(top: str, commit: str, tip: str) -> bool:
+    """`git merge-base --is-ancestor commit tip` (a commit is its own ancestor)."""
+    rc, _, err = git(["merge-base", "--is-ancestor", commit, tip], top)
+    if rc not in (0, 1):
+        raise SetupPathError("git merge-base failed: %s" % (err.strip().splitlines() or ["?"])[0])
+    return rc == 0
+
+
+def setup_facts(top: str, main_branch: str) -> Dict[str, Any]:
+    """Collect the git facts of setup_path() for the repository at top. No network call.
+
+    Raises SetupPathError when a git command fails, and when the repository
+    has commits but main_branch exists neither locally nor on origin.
+    """
+    branch, _ = task_branch(top)
+    local: List[str] = []
+    origin: List[str] = []
+    refs = _git_list(["for-each-ref", "--format=%(refname)", "refs/heads/chore/", "refs/remotes/origin/chore/"],
+                     top)
+    for full in refs:
+        for prefix, names in (("refs/heads/", local), ("refs/remotes/origin/", origin)):
+            name = full[len(prefix):] if full.startswith(prefix) else ""
+            if SETUP_BRANCH_RE.match(name) and name not in names:
+                names.append(name)
+    origin_tip = _commit_of(top, "refs/remotes/origin/%s" % main_branch)
+    local_tip = _commit_of(top, "refs/heads/%s" % main_branch)
+    head = _commit_of(top, "HEAD")
+    files: List[str] = []
+    ref = None
+    if origin_tip or local_tip:
+        ref = "origin/%s" % main_branch if origin_tip else main_branch
+        files = _git_list(["ls-tree", "-r", "-z", "--name-only", origin_tip or local_tip or ""], top, sep="\0")
+    elif head or _git_list(["rev-list", "-n", "1", "--all"], top):
+        raise SetupPathError("the main branch '%s' exists neither locally nor on origin" % main_branch)
+    facts: Dict[str, Any] = {
+        "branch": branch,
+        "localSetupBranches": local,
+        "originSetupBranches": origin,
+        "mainRef": ref,
+        "mainFiles": files,
+        "ticketFound": False,
+        "ticketMode": None,
+        "branchSubjects": [],
+        "noOwnCommits": head is None or any(_is_ancestor(top, head, tip)
+                                            for tip in (origin_tip, local_tip) if tip),
+        "configInWorkingTree": os.path.isfile(config_path(top)),
+    }
+    m = SETUP_BRANCH_RE.match(branch or "")
+    if not m:
+        return facts
+    # Only the active task directory: an archived setup task does not count.
+    cfg, _ = load_config(top)
+    work_dir = os.path.normpath(os.path.join(top, (cfg or DEFAULT_CONFIG)["workDir"]))
+    number = int(m.group(1))
+    names = _task_dirs(work_dir, number)
+    exact = "%d-%s" % (number, SETUP_SLUG)
+    chosen = exact if exact in names else (names[0] if names else None)
+    text = read_text(os.path.join(work_dir, chosen, TICKET_FILE)) if chosen else None
+    if text is not None:
+        facts["ticketFound"] = True
+        mode = normalize_mode(parse_frontmatter(text).get("mode"))
+        facts["ticketMode"] = mode if mode in MODES else None
+    if head and ref:
+        facts["branchSubjects"] = _git_list(["log", "-z", "--format=%s", "%s..HEAD" % (origin_tip or local_tip)],
+                                            top, sep="\0")
+    return facts
+
+
+def print_setup_path(cwd: str, main_branch: str) -> int:
+    """`--setup-path <main>`: print the setup path as one JSON object (LOOM_SPEC.md 8.2).
+
+    Works without .claude/loom.json. Exits 2 outside a git repository and for
+    a main branch name that git does not accept; 1 when a git command fails or
+    the main branch is missing in a repository with commits.
+    """
+    top = find_toplevel(cwd)
+    if not top:
+        sys.stderr.write("loom-state: --setup-path needs a git repository\n")
+        return 2
+    name = main_branch.strip()
+    if not name or _has_control(name) or git(["check-ref-format", "refs/heads/" + name], top)[0] != 0:
+        sys.stderr.write("loom-state: --setup-path: invalid main branch name %s\n"
+                         % json.dumps(main_branch, ensure_ascii=False))
+        return 2
+    try:
+        facts = setup_facts(top, name)
+    except SetupPathError as exc:
+        sys.stderr.write("loom-state: --setup-path: %s\n" % exc)
+        return 1
+    sys.stdout.write(json.dumps(setup_path(facts), indent=2, ensure_ascii=False) + "\n")
+    return 0
 
 
 def _utf8_output() -> None:
@@ -2216,9 +2606,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     fmt.add_argument("--json", action="store_true", help="JSON output (default)")
     fmt.add_argument("--line", action="store_true", help="one line for the statusline")
     fmt.add_argument("--slug", metavar="TITLE", help="print the branch slug for an issue title and exit")
+    fmt.add_argument("--setup-path", metavar="MAIN",
+                     help="print the setup path for /loom:setup as JSON and exit (no .claude/loom.json needed)")
     parser.add_argument("--pr", action="store_true", help="add pull request state (calls gh and the network)")
     parser.add_argument("--docs", action="store_true", help="docs freshness check (reserved)")
     args = parser.parse_args(args_in)
+    if args.setup_path is not None and (args.pr or args.docs):
+        # --setup-path makes no network call and has no docs check (exit 2, like the group above).
+        parser.error("argument --setup-path: not allowed with argument %s" % ("--pr" if args.pr else "--docs"))
 
     if args.slug is not None:
         # Pure string function: works anywhere, also outside a loom project.
@@ -2226,6 +2621,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     cwd = os.getcwd()
+    if args.setup_path is not None:
+        return print_setup_path(cwd, args.setup_path)
     top = find_toplevel(cwd)
     if not top or not os.path.isfile(config_path(top)):
         return 0  # not a loom project: silent no-op
