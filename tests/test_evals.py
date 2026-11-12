@@ -931,6 +931,8 @@ class WorkflowTest(unittest.TestCase):
         setup = text.index("uses: actions/setup-python@")
         self.assertLess(check, setup)
         self.assertIn('python-version: "3.9"', text[setup:])
+        # `actions/setup-python` has no Python 3.9 build for Ubuntu 26.04, so the runner is pinned.
+        self.assertEqual(re.findall(r"(?m)^\s*runs-on:\s*(\S+)\s*$", text), ["ubuntu-24.04"])
         self.assertRegex(text[setup:], r'run: make test PYTHON="\$\{\{ steps\.(\w+)\.outputs\.python-path \}\}"')
 
     def test_actions_are_pinned_as_in_the_spec(self):

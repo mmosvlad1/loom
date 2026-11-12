@@ -12,7 +12,8 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Pinned: `actions/setup-python` has no Python 3.9 build for Ubuntu 26.04 (`ubuntu-latest`).
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.1

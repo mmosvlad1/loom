@@ -23,7 +23,7 @@ This file lists the notable changes of every loom version. The format follows [K
 - `finish-task` without required checks on GitHub (no ruleset or branch protection): it waits for all checks, then enforces `ci.requiredCheck` by name through `pr.requiredCheck`, and refuses the merge while that check fails. Only when no check of that name ran does it still ask for "yes, merge without required checks".
 - `next` shows the state of the required check in its PR line.
 - The setup allowlist adds the read-only `gh run list`, `gh pr list`, `gh label list`, and `gh repo view`.
-- loom's CI runs `make test` on Python 3.9 too (`actions/setup-python@v7.1.0`), in the one job `check`.
+- loom's CI runs `make test` on Python 3.9 too (`actions/setup-python@v7.1.0`), in the one job `check`, on a pinned `ubuntu-24.04` runner (no Python 3.9 build exists for Ubuntu 26.04).
 - The SessionStart hook also runs for forked sessions (`fork` matcher). On the main branch and on a branch without a task, it also prints the `loom-state` warnings.
 
 ### Changed
