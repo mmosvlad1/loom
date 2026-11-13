@@ -1,6 +1,6 @@
 # Git Flow
 
-Rules for commits, checks, rebases, and pushes. `implement`, `iterate`, `describe-pr`, and `finish-task` follow them, so the git history of every task has one form.
+Rules for commits, checks, rebases, and pushes. `implement`, `iterate`, `describe-pr`, `finish-task`, and `screens` follow them, so the git history of every task has one form.
 
 Below, `<main>` is `mainBranch` from the `loom-state` output, `<n>` is `task.number`, and `<task dir>` is `task.dir`. Never hard-code the main branch name or the work directory.
 
@@ -54,6 +54,9 @@ The first body line names the implementation phase. The resume flow of `implemen
 | Product vision update | `backlog` on a task branch | `docs(#<n>): update product vision` | none |
 | Setup commit | `setup` (fast path) | `chore(loom): set up loom (#<n>)` | `Phase 1: oneshot` |
 | Kickoff commit | `setup` (onboarding path, before research) | `chore(loom): start loom setup (#<n>)` | none: no `Phase` line |
+| Landing commit | `screens` (the first landing of a screens task) | `docs(design): <summary> (#<n>)` | `Phase 1: oneshot` |
+| Landing fix commit | `screens` (a later landing) | `docs(design): <summary of the change> (#<n>)` | `Phase 1: oneshot`, a blank line, then one `Fix: <item>` line per change |
+| Canvas commit | `screens` (when it creates the canvas) | `docs(design): record the canvas (#<n>)` | none: no `Phase` line |
 
 - `<name>` is the name of `## Phase N: <name>` in `04-plan.md`, exactly.
 - Never commit with `--no-verify`, and never amend a pushed commit.
@@ -114,7 +117,7 @@ Both change the working tree. Confirm them first: show the exact commands and th
 
 Rebase the task branch on the main branch before the PR is opened (`describe-pr`), when the branch is behind (`iterate rebase`), and never during `implement`.
 
-A stopped rebase (`rebaseInProgress` is `true` in the `loom-state` output: HEAD is detached, and `branch` is the branch being rebased) is handled only by `/loom:iterate rebase`. It continues or aborts that rebase and never starts a new one. `implement`, `describe-pr`, and `finish-task` stop with `Next: /loom:iterate rebase`.
+A stopped rebase (`rebaseInProgress` is `true` in the `loom-state` output: HEAD is detached, and `branch` is the branch being rebased) is handled only by `/loom:iterate rebase`. It continues or aborts that rebase and never starts a new one. `implement`, `describe-pr`, `finish-task`, and `screens` stop with `Next: /loom:iterate rebase`.
 
 1. The working tree must be clean (`workingTree` is `clean`).
 2. Choose the base. Run `git remote get-url origin`.

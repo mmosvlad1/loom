@@ -54,7 +54,7 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 |---|---|---|
 | The state is empty | `not a loom project (no .claude/loom.json)` | `/loom:setup` |
 | `onMain` is `true` | `on the main branch; no task` | `/loom:start-task #<n>` |
-| `task` is `null` | `branch <branch> matches no task` | `/loom:start-task #<n>` |
+| `task` is `null` | `branch <branch> matches no task` | from `next.command` (`/loom:start-task #<k>`; `/loom:screens` on a branch `docs/<k>-loom-screens`) |
 | `task.archived` is `true` | `task #<n> is archived` | `/loom:start-task #<n>` (offers a restore) |
 | `task.setup` is `true` (the setup task), and `task.mode` is not `full` | `plan runs on the setup task only in full mode (mode: <mode>); /loom:setup owns the fast path` | from `next.command` |
 | `task.mode` is `oneshot` | `oneshot mode has no plan; implement works from 00-ticket.md` | `/loom:implement` |

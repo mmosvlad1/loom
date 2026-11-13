@@ -66,7 +66,7 @@ Take the first word of `next.command`:
 | `/loom:research-questions`, `/loom:research`, `/loom:design`, `/loom:plan`, `/loom:implement` | **Run** the phase in this session (below). |
 | `/loom:iterate …` | **Name** it. It needs the user's answers, feedback, or approval. |
 | `/loom:describe-pr`, `/loom:finish-task` | **Name** it. It needs the user's confirmation to push or merge. |
-| `/loom:start-task …`, `/loom:backlog`, `/loom:setup` | **Name** it. |
+| `/loom:start-task …`, `/loom:backlog`, `/loom:setup`, `/loom:screens` | **Name** it. `setup` and `screens` need the user. |
 
 ### Name a command
 

@@ -74,7 +74,7 @@ Define a term the first time you use it. Then use it with that meaning only.
 | **task** | One GitHub issue being worked on, with one branch and one task directory | "ticket" (the ticket is `00-ticket.md`), "job", "story" |
 | **task directory** | `.loom/tasks/<n>-<slug>/` | "task folder", "workspace" |
 | **mode** | `oneshot`, `quick`, or `full` | "workflow", "track" |
-| **phase** | One workflow step that produces one artifact: research-questions, research, design, plan, implement | "stage", "step" |
+| **phase** | One workflow step that produces one artifact: research-questions, research, design, plan, implement | "step", "stage" (it means a step of a screens task) |
 | **implementation phase** | One vertical slice inside the plan | "phase" alone when it is ambiguous, "milestone", "slice" alone |
 | **artifact** | A markdown file a phase writes into the task directory | "document", "doc" |
 | **round** | One batch of open questions in design or plan | "iteration" |
@@ -88,5 +88,9 @@ Define a term the first time you use it. Then use it with that meaning only.
 | **style guide** | The document of the docs role `style`: the visual direction, the tokens, and the UI rules | "design" (it means the design phase), "design system", "theme" |
 | **screen** | One mockup file in the directory of the docs role `screens`; one screen in one state | "design" (it means the design phase), "mockup" alone, "wireframe" |
 | **screen ID** | The file name of a screen without its extension, e.g. `sign-in` or `reading-list--empty` | "screen name", "screen key" |
+| **screens task** | The task of an issue that `screens` created, on the branch `docs/<n>-loom-screens` | "design task" ("design" means the design phase), "screens issue" (the issue is only its GitHub issue) |
+| **canvas** | The Claude Design artifact that `screens` draws on | "board", "design file", "project" |
+| **local mode** | `screens` without a canvas: it writes each screen as a plain HTML file | "offline mode", "fallback" |
+| **stage** | One step of a screens task in `screens`: brief, direction, style guide, screens | "phase" (it means a workflow step that produces an artifact), "step" alone |
 
 The word "design" alone keeps one meaning: the design phase and its artifact `03-design.md`.

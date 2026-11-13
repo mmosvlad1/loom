@@ -2,7 +2,7 @@
 
 > A Claude Code plugin for structured, agent-driven development: **Research → Plan → Implement**, with GitHub Issues as the backlog, artifacts as the hand-off between phases, and a full git flow from issue to squash merge.
 
-Status: **Draft, revision 2** · Last updated: 2026-11-13 · Describes plugin release **1.1.0**, the unreleased milestones M9a, M9b, and M10a, and the unreleased hardening after M9a (`CHANGELOG.md`)
+Status: **Draft, revision 2** · Last updated: 2026-11-13 · Describes plugin release **1.1.0**, the unreleased milestones M9a, M9b, M10a, and M10b, and the unreleased hardening after M9a (`CHANGELOG.md`)
 
 Changes in revision 2: fixes from the spec review (finish-task commands, agent `tools`, namespacing, versioning, config use, hook exit codes, oneshot conditions), decisions on the post-PR flow, setup bootstrap, approval gates, mode changes and resume, and new features: `loom-state`, `/loom:next`, enforced checks, harness evals, shared snippets, writing style.
 
@@ -104,6 +104,10 @@ Prompts and artifacts use these terms with exactly one meaning each (see §14).
 | **style guide** | The document of the docs role `style`: the visual direction, the tokens, and the UI rules (§9.14.2) |
 | **screen** | One mockup file in the directory of the docs role `screens`; one screen in one state (§9.14.3) |
 | **screen ID** | The file name of a screen without its extension, e.g. `sign-in` or `reading-list--empty` |
+| **screens task** | The task of an issue that `screens` created, on the branch `docs/<n>-loom-screens` (§9.14.6) |
+| **canvas** | The Claude Design artifact that `screens` draws on (§9.14.7) |
+| **local mode** | `screens` without a canvas: it writes each screen as a plain HTML file (§9.14.7) |
+| **stage** | One step of a screens task in `screens`: brief, direction, style guide, screens (§9.14.6) |
 
 The word "design" alone keeps one meaning: the design phase and its artifact `03-design.md`.
 
@@ -126,7 +130,7 @@ loom/
 │   │   ├── writing-style.md        # §14
 │   │   ├── git-flow.md             # §16: commit format, checks, rebase, push, confirmations
 │   │   ├── implementation-loop.md  # implementer → checks → reviewer → fix attempts (implement, iterate)
-│   │   ├── pr-update.md            # docs refresh, PR body, push after commits on an open PR (iterate, implement)
+│   │   ├── pr-update.md            # docs refresh, PR body, push after commits on an open PR (iterate, implement, screens)
 │   │   ├── bash-calls.md           # one command per Bash call: no cd, no chaining (every skill)
 │   │   └── final-answer.md         # format of every skill's last message
 │   ├── setup/
@@ -138,14 +142,15 @@ loom/
 │   │       ├── onboarding-questions.md  # the fixed research questions (§9.13.3)
 │   │       └── templates/          # loom.json, Makefile, ci.*.yml, settings.json, loom-statusline.py,
 │   │                               # CLAUDE.md, docs/*, setup-issue.md, setup-issue-onboarding.md
-│   ├── backlog/      (SKILL.md, references/issue-format.md — also read by describe-pr)
-│   ├── start-task/   (SKILL.md, references/ticket-template.md)
+│   ├── backlog/      (SKILL.md, references/issue-format.md — also read by describe-pr and screens)
+│   ├── screens/      (SKILL.md, references/brief-template.md, style-guide-template.md)
+│   ├── start-task/   (SKILL.md, references/ticket-template.md — also read by screens)
 │   ├── research-questions/  (SKILL.md, references/template.md)
 │   ├── research/     (SKILL.md, references/template.md, onboarding.md)
 │   ├── design/       (SKILL.md, references/template.md, onboarding.md — also read by iterate)
 │   ├── plan/         (SKILL.md, references/template.md, onboarding.md — also read by iterate)
 │   ├── iterate/      (SKILL.md)
-│   ├── implement/    (SKILL.md, references/log-format.md — also read by iterate and describe-pr)
+│   ├── implement/    (SKILL.md, references/log-format.md — also read by iterate, describe-pr, and screens)
 │   ├── describe-pr/  (SKILL.md, references/summary-template.md, adr-template.md, pr-template.md)
 │   ├── finish-task/  (SKILL.md)
 │   └── next/         (SKILL.md)
@@ -246,6 +251,8 @@ Exception: an invalid mode (`00-ticket.md` has a `mode` that is not `oneshot`, `
 
 **Setup task (§9.13.1):** `setup` fixes the mode of the setup task (`oneshot` on an empty repository, `full` on a repository with code). `iterate` refuses a mode change on it, also the repair of an invalid mode, with `Next: /loom:setup` (while a rebase is stopped: `Next:` from `next.command`, which is `/loom:iterate rebase`): `setup` owns that ticket. For a setup task with an invalid mode, `loom-state` names `/loom:setup` (§9.12 row 2b); on a setup task `quick` counts as an invalid mode, because no setup path uses it, and `loom-state` adds a warning for it like for every invalid mode. The re-run of `setup` then writes the mode of its path again: `full` on the onboarding path, `oneshot` on the fast path.
 
+**Screens task (§9.14.6):** a screens task is always `oneshot`, and `screens` owns its ticket. `iterate` refuses every mode change on it, also the repair of an invalid mode, with `Next: /loom:screens` (while a rebase is stopped: `/loom:iterate rebase`). On a screens task `quick` and `full` count as invalid modes; `loom-state` adds a warning and names `/loom:screens` (§9.12 row 2b), whose next run writes `mode: oneshot` into the ticket again.
+
 ### 5.4 Mode differences
 
 | | oneshot | quick | full |
@@ -269,6 +276,10 @@ Exception: an invalid mode (`00-ticket.md` has a `mode` that is not `oneshot`, `
 
 ```
 /loom:backlog          discuss ideas → create GitHub issues (labels: type, size, mode)
+        │
+/loom:screens          optional: style guide and screens for the next features → a screens task
+        │              (docs/<n>-loom-screens, one docs PR, §9.14.6); after its merge, backlog
+        │              attaches the screens to issues
         │
 /loom:start-task #42   git switch main && git pull --ff-only
         │              git switch -c feat/42-auth-flow
@@ -348,7 +359,7 @@ Claude Code cannot clear its own context, so the user runs `/clear`.
 
 - `/loom:iterate …` is written as it is. It continues in the same session.
 - A phase command (`/loom:research-questions`, `/loom:research`, `/loom:design`, `/loom:plan`, `/loom:implement`), `/loom:describe-pr`, or `/loom:finish-task` is written as `/clear, then <command>`. A phase that the user invokes by its own command runs with the `model` and `effort` of its skill. Through `/loom:next` it runs with the session's model and effort (§9.12).
-- `/loom:start-task …`, `/loom:backlog`, and `/loom:setup` are written as they are. `/clear, then` comes before them only when the session did real work.
+- `/loom:start-task …`, `/loom:backlog`, `/loom:setup`, and `/loom:screens` are written as they are. `/clear, then` comes before them only when the session did real work. The stops of `screens` before a landing write their own literal lines, such as `Next: give feedback, or /loom:screens approve` (§9.14.6). `iterate` sends review comments that change the screens of a screens task with `Next: /loom:screens <the items>` (§9.14.6).
 - With manual verification steps, `run the manual steps, then ` comes before the mapped command. The manual steps do not change the state. Normally the line is `run the manual steps, then /clear, then /loom:implement`. After the last implementation phase the command is `/loom:describe-pr`, or `/loom:finish-task` with an open PR.
 - A `Next:` line names `/loom:next` only where a step of the user comes first and changes the state. The next command is not known there. The cases:
   - a git error to fix (`workingTree: null`);
@@ -448,6 +459,7 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 - `--pr`: adds PR state from `gh pr view --json number,state,reviewDecision,statusCheckRollup,mergeStateStatus,body` as `{ number, state, reviewDecision, checks: passing|failing|pending|none, requiredCheck: passing|failing|pending|missing, mergeStateStatus, behindMain, bodyInSync }`; `behindMain` is computed with git after `git fetch origin <mainBranch>`. `requiredCheck` is the state of the `statusCheckRollup` entry named `ci.requiredCheck` (the `name` of a check run, the `context` of a status). For a repeated name, the latest `startedAt` wins, then the later entry. `missing` means no entry has that name. `bodyInSync` is `true` when the PR body on GitHub equals `<task dir>/pr-body.md`, `false` when they differ, and `null` without that file; the comparison ignores the line ending style and the whitespace at the start and the end. The body itself is not part of the output. This calls `gh` and the network, so it is not used by the `SessionStart` hook. If `gh` is missing or unauthenticated, the branch has no PR, or `gh` returns no JSON object, `pr` is `null` and a warning is added. One case adds no warning: `gh` reports `no pull requests found` and the ticket has no valid `pr:` (`task.pr` is `null`). That is the normal state before `describe-pr`, for example at the end of `implement`.
 - `--docs`: reserved for the docs freshness check (§23.1, planned for v1.2). Until then it prints "not implemented yet (planned for v1.2)" to stderr and exits 2.
 - `task.setup` (§9.13): `true` when the task is the setup task (branch `chore/<n>-loom-setup`), else `false`.
+- `task.screens` (§9.14.6): `true` when the task is a screens task (branch `docs/<n>-loom-screens`), else `false`. A task is never both. On a screens task, `quick` and `full` add the warning `00-ticket.md has no valid mode for the screens task (got '<mode>'); a screens task is oneshot`.
 - `--setup-path <main>` (§9.13.1): `loom-state --setup-path <main>` prints the setup path as one JSON object and exits 0. Like `--slug`, it works without `.claude/loom.json`. `<main>` is the main branch that `setup` found (§9.1). It exits 2 outside a git repository and for a `<main>` that is not a valid branch name. It exits 1, with a message, when a git command fails, and when the repository has commits but `<main>` exists neither locally nor on `origin`.
   ```json
   { "path": "onboarding", "reason": "origin/main tracks 41 files that count as code (first: src/app.py)",
@@ -460,7 +472,7 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
   - `found` lists paths for the Key Context Pointers of the onboarding research questions (§9.13.2), from the files that the main ref of §9.13.1 tracks: the instruction files of §9.13.3 question 4 at any depth (a rules or instructions directory is listed once, as the directory), the workflow files, the PR templates, and the directories `docs`, `doc`, `adr`, and `decisions` (any letter case) at any depth. Each list holds at most 20 paths: those with the fewest path segments first, then in alphabetical order. Research finds the rest.
   - It reads the ticket of the active task directory below `workDir` of `.claude/loom.json`, or below the default `workDir` when the file is missing. An archived task directory does not count.
   - The decision is a pure function, `setup_path(facts)`, tested with plain dicts like `decide_next` (§8.4). The script makes no network call.
-- `--slug '<issue title>'`: prints the branch slug of §9.3 step 5 and exits 0. It is a pure string function, so it also works outside a loom project. A title that starts with `-` is taken as the title, not as an option. Before the ASCII step it transliterates the letters that Unicode NFKD keeps (`ß` → `ss`, `æ` → `ae`, `œ` → `oe`, `ø` → `o`, `đ` → `d`, `ł` → `l`, `þ` → `th`). One quirk is accepted: a first word that fits and a second word that would pass 40 characters leave only the first word (`a <50-character word>` → `a`). `start-task` uses it, so the slug never depends on the model. The slug `loom-setup` is reserved for the setup task (§9.13.1); a title that would give it gets `loom-setup-task`.
+- `--slug '<issue title>'`: prints the branch slug of §9.3 step 5 and exits 0. It is a pure string function, so it also works outside a loom project. A title that starts with `-` is taken as the title, not as an option. Before the ASCII step it transliterates the letters that Unicode NFKD keeps (`ß` → `ss`, `æ` → `ae`, `œ` → `oe`, `ø` → `o`, `đ` → `d`, `ł` → `l`, `þ` → `th`). One quirk is accepted: a first word that fits and a second word that would pass 40 characters leave only the first word (`a <50-character word>` → `a`). `start-task` uses it, so the slug never depends on the model. The slug `loom-setup` is reserved for the setup task (§9.13.1); a title that would give it gets `loom-setup-task`. The slug `loom-screens` is reserved for the screens task (§9.14.6); a title that would give it gets `loom-screens-task`.
 
 ### 8.3 Rules
 
@@ -469,7 +481,7 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 - **Statuses:** read from artifact frontmatter (a minimal parser for the §13.1 fields: scalars and inline lists; a value that starts with `#` and a digit, such as `pr: #57`, is a value, not a comment). Case and surrounding whitespace do not matter; an unknown status counts as `in-review` with a warning. An artifact's phase is its file name.
 - **Open questions:** numbered `**Q<n>.` items under the latest `## Open Questions` heading; items marked "accepted by default" are counted separately (`acceptedByDefault`).
 - **Code fences:** lines inside fenced code blocks are ignored. Fences follow CommonMark (3+ backticks or tildes; closed only by the same character, at least as long, with nothing after it), except that any indentation is accepted. An unclosed fence adds a warning.
-- **Implementation progress:** read from plan Phase Overview checkboxes and `log.md` headings (§13.2); a `log.md` entry wins over the checkbox of the same phase. oneshot has one implicit phase, tracked only through `log.md`.
+- **Implementation progress:** read from plan Phase Overview checkboxes and `log.md` headings (§13.2); a `log.md` entry wins over the checkbox of the same phase. The last `log.md` heading of a phase wins: a `done` entry followed by an `in-progress` entry is `in-progress` (feedback on a landed screens task, §9.14.6). oneshot has one implicit phase, tracked only through `log.md`.
 - **Working tree:** `clean`, `dirty`, or `null` when `git status` fails or times out (with a warning); files under `workDir` are ignored. With `null`, `next` is never `/loom:describe-pr` or `/loom:finish-task` (§9.12).
 - **Screens:** a screen is a file directly in `docs.screens` whose name is a screen ID plus one extension of §9.14.3; `.dc.html` is tried before `.html`. Names and extensions are case-sensitive: `Sign-in.html` and `sign-in.PNG` are not screens. A subdirectory and the files in it are not screens. The directory is read from the file system, so an untracked screen counts. Two files with one screen ID add a warning; the first path in sorted order is the screen.
 - **Stale research:** `true` when files referenced in `02-research.md` (as `path:line` or `path`) changed on `main` between the research `git_commit` and `merge-base(HEAD, origin/main)`. The task's own commits do not count. Without `origin/<mainBranch>` the local main branch is used. If the check cannot run, `stale` is `false` and a warning is added.
@@ -487,7 +499,7 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
 
 - All skills set `disable-model-invocation: true`. They run only when invoked as `/loom:<skill>`.
 - Phase skills start by injecting state: `` !`"${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json` `` (verified: `` !`cmd` `` injects command output, and `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SKILL_DIR}` are substituted when the skill loads).
-- Every injected command needs a matching `allowed-tools` rule, or the skill aborts outside auto mode (§24.2). Phase skills set `allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json) Bash(loom-state --json) Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` (`iterate`, `implement`, `describe-pr`, `finish-task`, and `next`: the injected command is `… --json --pr`; `finish-task` also allows the bare `Bash(loom-state --json --pr)`, which step 3 runs). Only the injection line uses the full path; every Bash call in a skill body uses the bare `loom-state --json` (`bin/` is on the Bash `PATH`), which matches the §19.3 allowlist. `setup`, `backlog`, and `start-task` inject `--json`; `start-task` also allows `Bash(loom-state --slug *)`. The `Read` rule lets the skill read its shared snippets and templates, which lie outside the project's working directory. The grant lasts one turn, so skills read these files before they ask the user anything. Skills inject nothing else; the date comes from `loom-state` → `today`.
+- Every injected command needs a matching `allowed-tools` rule, or the skill aborts outside auto mode (§24.2). Phase skills set `allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/bin/loom-state --json) Bash(loom-state --json) Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` (`iterate`, `implement`, `describe-pr`, `finish-task`, `next`, and `screens`: the injected command is `… --json --pr`; `finish-task` and `screens` also allow the bare `Bash(loom-state --json --pr)`: `finish-task` runs it in step 3, `screens` after a branch switch and before the PR update of a landing). Only the injection line uses the full path; every Bash call in a skill body uses the bare `loom-state --json` (`bin/` is on the Bash `PATH`), which matches the §19.3 allowlist. `setup`, `backlog`, and `start-task` inject `--json`; `start-task` also allows `Bash(loom-state --slug *)`. The `Read` rule lets the skill read its shared snippets and templates, which lie outside the project's working directory. The grant lasts one turn, so skills read these files before they ask the user anything. Skills inject nothing else; the date comes from `loom-state` → `today`.
 - Skills spawn agents by their namespaced name: `loom:codebase-locator`, etc.
 - Every Bash call runs one command. A permission rule such as `Bash(git *)` (§19.3) matches one command, so a chained call prompts the user, and an eval run in `dontAsk` mode denies it (§24.2). Every skill reads these rules in `_shared/bash-calls.md`:
   - no `cd`: the working directory is the git top level;
@@ -503,7 +515,7 @@ A single Python script, `bin/loom-state`, with no dependencies outside the stand
 |---|---|---|
 | design, plan | inherit | high |
 | research-questions, research, implement, iterate, describe-pr, backlog | inherit | default |
-| setup, start-task | inherit | default |
+| setup, start-task, screens | inherit | default |
 | next, finish-task | inherit | default |
 
 `finish-task` runs the least reversible action (the merge) and reads rulesets, branch protection, and check states, so it keeps the session's model too. `next` runs a phase skill in its own turn (§9.12), so it keeps the session's model and effort: a phase run through `next` uses the session's effort, not the phase's `effort` field. For `effort: high` on design or plan, invoke `/loom:design` or `/loom:plan` directly.
@@ -556,9 +568,9 @@ Other untracked files of the empty repository (e.g. the files of `uv init`) go i
 **Does:**
 - **Discuss ideas:** reads the vision (`docs.vision` in the state, §8.2), the overview and the task summaries, open issues (`gh issue list`), and the code state; discusses options.
 - **Create issues** in the format of `references/issue-format.md`: title, context, acceptance criteria, labels. Shows the list and waits for confirmation before `gh issue create`.
-- **Prioritize:** answers "what next?" from issue dependencies and what is done.
+- **Prioritize:** answers "what next?" from issue dependencies and what is done. Its final message names `/loom:start-task #<n>` for the recommended issue, or `/loom:screens` when the issue's title starts with `Design screens:` (`start-task` refuses such an issue, §9.3).
 - Helps fill the vision when it is still a skeleton. The main branch takes no commits, so with an active task and a clean working tree it commits the vision on the task branch (`docs(#<n>): update product vision`); otherwise it offers a `type:docs` oneshot issue that carries the agreed text.
-- **Screens** (§9.14.4): when `design.style` is `true`, it reads the style guide with the other context. An issue for work that a screen shows gets a `## Screens` section with paths from `design.screens`. When `design.style` is `true` or `design.screens` is not empty, a screen that the work needs and `design.screens` lacks lands first, through its own task, and `backlog` says so. A project without design files hears nothing about screens. When `design.screens` is not empty, every activity starts with the attach step: it proposes an issue for each screen that no issue names, and edits the confirmed issues with `gh issue edit`.
+- **Screens** (§9.14.4): when `design.style` is `true`, it reads the style guide with the other context. An issue for work that a screen shows gets a `## Screens` section with paths from `design.screens`. When `design.style` is `true` or `design.screens` is not empty, a screen that the work needs and `design.screens` lacks lands first, through its own task: `backlog` says so and names `/loom:screens`, which draws the screen in a screens task (§9.14.6). A project without design files hears nothing about screens. When `design.screens` is not empty, every activity starts with the attach step: it proposes an issue for each screen that no issue names, and edits the confirmed issues with `gh issue edit`.
 - Issue bodies are written to `<workDir>/_drafts/` (ignored by git), never elsewhere in the repository tree.
 - Without `.claude/loom.json` it points to `/loom:setup`. With an active task it says so; new issues do not change the task.
 
@@ -577,6 +589,8 @@ Other untracked files of the empty repository (e.g. the files of `uv init`) go i
 8. Ends with a `Next:` line from `next.command` (§7.4). For a new task it is `/clear, then` the first phase of the mode: `/loom:research-questions` (full), `/loom:research` (quick), or `/loom:implement` (oneshot). A restored task, or an existing branch, has its own state, so the command can be any other. When the issue has a `## Screens` section, each path that is not in `design.screens` of its final `loom-state --json` gets a `Warning:` line (§9.14.4).
 
 If the issue already has an archived task directory, offers to restore it from `_archive/` instead. The setup issue ("Set up loom") is refused with `Next: /loom:setup`.
+
+**Screens task (§9.14.6):** an issue whose title starts with `Design screens:` is refused with `Next: /loom:screens`, before the restore offer: `screens` owns the branch and the ticket of a screens task. It continues or restores the task of the issue, or its next kickoff offers the issue (also an update issue `Design screens: update <screen ID>`).
 
 ### 9.4 `research-questions` (full mode)
 
@@ -657,9 +671,12 @@ The single skill for changing anything that already exists. It detects the targe
 | A stopped rebase (`rebaseInProgress`), with any argument (after the task-directory rows and the unknown-tree stop) | Shows the conflicts, resolves them by the rules of `_shared/git-flow.md` or asks; then `git rebase --continue`, or `git rebase --abort` on the user's choice; then checks and push as below. Never starts a new rebase |
 | `rebase` | `git rebase origin/<mainBranch>`, checks, push with `--force-with-lease` (confirmation) |
 | Mode change, or an invalid mode (`/loom:iterate mode <oneshot\|quick\|full>`) | §5.3 rules; an invalid mode is repaired at any time, with the mode the user names |
+| A screens task, and feedback that names a screen, a screen ID, or the style guide (after the rebase rows) | Stops: `Next: /loom:screens` (§9.14.6) |
 | An unknown working tree (`workingTree: null`), with any argument (this row comes before every row that reads or changes the working tree or commits) | Stops: `git status failed`, `Next: fix the git error, then /loom:next`. Answers, approval, a mode change, and feedback on an artifact before implementation started still run: they change only the task directory |
 
 **Screens** (§9.14.5): `iterate` passes `docs.style` (when `design.style` is `true`) and `docs.screens` (when `design.screens` is not empty) to the implementer and the reviewer, as `implement` does; every fix-loop prompt names these lines. Its prompts to the codebase agents carry `Excluded path: <docs.screens>` under the condition of `research`, and an edit of `01-research-questions.md` or `02-research.md` never opens a screen. When the ticket has a `## Screens` section, a later round of `03-design.md` or `04-plan.md`, an edit on feedback, and a plan change keep the screen rules of `design` and `plan`. A question about a difference from a screen names the screen ID.
+
+**Screens task (§9.14.6):** `screens` draws and lands the screens and the style guide of a screens task, so `iterate` refuses two things there, with `Next: /loom:screens`: every mode change, also the repair of an invalid mode (§5.3; while a rebase is stopped, `Next:` is `/loom:iterate rebase`), and feedback that names a screen, a screen ID, or the style guide (row 6a of the skill's routing table, after the rebase rows). Failing checks and a rebase work as for every task. In the post-PR fix, an item whose fix changes `docs.style` or a file below `docs.screens` is not a fix item, also a failing check: `iterate` lists those items apart, fixes the other items, and stops with `Next: /loom:screens <the items>` (§9.14.6). On a screens task its implementer never edits these files.
 
 **Onboarding (§9.13.4, §9.13.5):** on the onboarding task, `iterate` reads `design/references/onboarding.md` when it writes `03-design.md` (answers to a round, feedback on the design), and `plan/references/onboarding.md` when it writes or changes `04-plan.md`.
 
@@ -689,6 +706,8 @@ The user can override: "do all phases and stop at the end" or "stop after every 
 
 Steps 2–4 are `_shared/implementation-loop.md`; `iterate` runs the same loop for fixes, so both skills decide `done` and `blocked` by the same rules.
 
+**Screens task (§9.14.6):** `implement` refuses a screens task with `Next: /loom:screens`, after its stop on a stopped rebase: `screens` draws and lands the screens itself, and no implementer runs. `loom-state` never names `/loom:implement` for it (§9.12 row 2d).
+
 **A phase that changes `.claude/loom.json`** (§9.13.5). The values in the implementer prompt come from the state before the phase, so they can be out of date. The implementer runs `loom-state --json` after it changes the file and uses the `checks` of that output. When the implementer's `Files changed` lists `.claude/loom.json`, or `git status --porcelain` shows it changed, `implement` and `iterate` run `loom-state --json` again and use its values (`checks`, `docs`, `design`, `mainBranch`, `implement`, `hooks`) for their own check run, the reviewer prompt, the fix attempts, and the later phases.
 
 **A phase that changes `.claude/settings.json`** (§9.13.5). The implementer never edits `.claude/settings.json` or `.claude/settings.local.json`: in auto permission mode Claude Code denies a subagent's edit of a settings file (§24.2). `implement` applies the plan's change itself, in the main context, before it starts the phase: it shows the `diff`, asks one confirmation, and edits the file. If the user or the permission system refuses the change, `implement` stops before the phase starts, with the `diff` and a `Next:` line. `iterate` does the same before it fixes a blocked phase that has no commit yet. A dirty working tree that holds only that settings change gets no offer to resume, stash, or discard: `implement` starts the phase. A fix of a settings file never goes to the implementer: the phase is `blocked`, and the user changes the file (§9.13.5).
@@ -709,7 +728,9 @@ Steps 2–4 are `_shared/implementation-loop.md`; `iterate` runs the same loop f
 
 describe-pr takes every doc path from `docs` in the state (§8.2, §15) and `pullRequest.requiredSections` from the state, never from `loom.json`.
 
-**Screens** (§9.14.5): when the ticket has a `## Screens` section, the Verification of the task summary and of the PR body lists each screen path with the result of its `Manual:` comparison. A oneshot PR body lists only the paths: a oneshot task has no plan and no `Manual:` line. Step 9 adds one follow-up `Design screens: update <screen ID>` for each of these screens that a Resolved Decision (`03-design.md`, `04-plan.md`) or a deviation in `log.md` names. It is labeled `type:docs` and has no `## Screens` section.
+**Screens** (§9.14.5): when the ticket has a `## Screens` section, the Verification of the task summary and of the PR body lists each screen path with the result of its `Manual:` comparison. A oneshot PR body lists only the paths: a oneshot task has no plan and no `Manual:` line. Step 9 adds one follow-up `Design screens: update <screen ID>` for each of these screens that a Resolved Decision (`03-design.md`, `04-plan.md`) or a deviation in `log.md` names. It is labeled `type:docs` and has no `## Screens` section. A screens task covers it: the next kickoff of `/loom:screens` offers it.
+
+**Screens task (§9.14.6):** while `next.command` is `/loom:screens` (§9.12 row 2d), `describe-pr` stops with `Next: /loom:screens`, after its stop on a merged PR. A tree that is dirty only in the docs paths is then a landing that stopped, not an interrupted docs refresh, so it is never committed here. On a screens task the PR body closes the covered update issues whose screens landed: one `Closes #<k>` line, after `Closes #<n>`, for each `Covers #<k>` line of the ticket's Context whose screen is in the branch diff. The screen ID comes from the issue title (`gh issue view <k> --json title`); `_shared/pr-update.md` computes these lines again when it rewrites the body, with the same method in full. On a branch that matches no task, the stop takes `Next:` from `next.command` (`/loom:screens` on a branch `docs/<n>-loom-screens`).
 
 **Onboarding (§9.13.5):** on the onboarding task, the follow-ups include every `Follow-up:` line of the design's Out of Scope.
 
@@ -735,6 +756,8 @@ All steps are idempotent: re-running after a partial failure continues where it 
 
 **Setup task (§9.13.1):** on the task branch, step 7 takes the setup task from `task.setup` in the state. On the main branch (`/loom:finish-task #<n>` after the merge) the state has no task, so it still takes it from the ticket title `Set up loom`.
 
+**Screens task (§9.14.6):** while `next.command` is `/loom:screens` (§9.12 row 2d), `finish-task` stops with `Next: /loom:screens`: the drafts or a stopped landing are not committed, and a tree dirty only in the docs paths is never committed here as a docs refresh. The stop comes after the rows of a merged or closed PR, so after the merge the stash offer below stays. When the archive moves a screens task whose phase 1 is `in-progress`, the final message adds `Warning: screens task #<n> has draft changes that did not land; they are in the archived task directory`.
+
 Dirty working tree: changes only in the docs paths (`workingTreeDocsOnly`) are an interrupted docs refresh, so `finish-task` runs `_shared/pr-update.md` (docs commit, confirmed push) and continues. Code changes stop it with `Next: /loom:iterate`, which keeps them as a fix or stashes or discards them. With the PR already merged, it offers a stash before the cleanup.
 
 ### 9.12 `next`
@@ -743,7 +766,7 @@ Dirty working tree: changes only in the docs paths (`workingTreeDocsOnly`) are a
 
 **When the user needs it:** the `Next:` line of every final message names the next command itself (§7.4), so the normal loop does not go through `next`. `next` is for a session without that line (a new day, another machine), and for the `Next:` lines that name it because a step of the user changes the state first.
 
-**Does:** runs `loom-state --pr`, prints a 3–5 line state summary, then reads and follows the next phase's `SKILL.md` from `${CLAUDE_PLUGIN_ROOT}/skills/<phase>/` (same rules as invoking that skill directly). For `iterate`, `describe-pr`, and `finish-task` it only names the command, because those need the user's input or confirmation.
+**Does:** runs `loom-state --pr`, prints a 3–5 line state summary, then reads and follows the next phase's `SKILL.md` from `${CLAUDE_PLUGIN_ROOT}/skills/<phase>/` (same rules as invoking that skill directly). For `iterate`, `describe-pr`, `finish-task`, `setup`, and `screens` it only names the command, because those need the user's input or confirmation.
 
 A file read with Read is not loaded as a skill, so `next` compensates (§24.2):
 - **Injection and variables:** Read does not run the phase file's `` !`…` `` line and does not substitute `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SKILL_DIR}`, or `$ARGUMENTS` in it. The model uses the state that `next` injected (or bare `loom-state --json`) instead of the injection, replaces `${CLAUDE_PLUGIN_ROOT}` with the value shown in `next`'s own (substituted) body, replaces `${CLAUDE_SKILL_DIR}` with `<plugin root>/skills/<phase>`, and treats `$ARGUMENTS` as `next`'s arguments. `next`'s prompt names these placeholders without writing them, because its own body is substituted too.
@@ -768,7 +791,7 @@ A file read with Read is not loaded as a skill, so `next` compensates (§24.2):
 | 10 | The plan gate holds, phases left | run `implement` |
 | 11 | Otherwise | run the next missing phase for the mode |
 
-**The plan gate** holds for oneshot, and for quick or full when `04-plan.md` is `approved`. An invalid mode never holds it. `next` is never `implement` while the gate does not hold. With an invalid mode, `next` is always `/loom:iterate mode <oneshot|quick|full>` (row 2b), except on rows 1, 2, and 2a: every later row depends on the mode. Artifacts have no `blocked` status (§13.1); `loom-state` reports such a value as an unknown status (`in-review`, with a warning).
+**The plan gate** holds for oneshot, and for quick or full when `04-plan.md` is `approved`. An invalid mode never holds it. `next` is never `implement` while the gate does not hold. With an invalid mode, `next` is always `/loom:iterate mode <oneshot|quick|full>` (row 2b), except on rows 1, 2, and 2a: every later row depends on the mode. On a setup task and on a screens task, row 2b names the skill of the task instead (below). Artifacts have no `blocked` status (§13.1); `loom-state` reports such a value as an unknown status (`in-review`, with a warning).
 
 Gate work (rows 6 and 7) comes before PR routing and "all implementation phases done": a design or plan that went back to review, for example after a plan change on an open PR, is never skipped. Before implementation starts, a `draft` gate artifact is unfinished work and falls to row 11, which reruns its phase (`/loom:plan` overwrites a draft plan). After implementation started, a draft or in-review plan is a plan change and row 4 handles it, before the dirty tree, PR routing, and describe-pr. Non-gate artifacts (research-questions, research) never block row 11. If research is `in-review`, `next`, `design`, and `plan` print `Warning: research not reviewed; approve it with /loom:iterate approve research` and continue. If the research questions are `in-review`, `research` prints `Warning: research questions not reviewed; approve them with /loom:iterate approve research-questions` and continues. `implement` prints neither. The note in `next.reason` names the same command: `research not reviewed (/loom:iterate approve research)`. In `approve <name>`, the name `research` is `02-research.md`, and `research-questions` is `01-research-questions.md`. If research is stale, `next` warns and offers to rerun research.
 
@@ -783,7 +806,22 @@ An unknown working tree (`workingTree: null`, `git status` failed or timed out) 
   - mode `oneshot` and implementation phase 1 is `pending` or `in-progress`: the fast path stopped before or during its commit. Without this row, rows 5 and 10 name `/loom:implement`, which would build the setup from the ticket. A `blocked` phase 1 stays with row 3: `iterate` writes it when a fix on the setup PR fails.
 - While row 2c applies, `loom-state` adds no warning about uncommitted changes or a phase in progress (row 5): the uncommitted files are the stopped `setup` run.
 
-Rows 2a and 2b in the skills: `iterate` handles a stopped rebase in its Rebase section (after an explicit mode, `approve`, answers, and the unknown-tree stop, §9.8), and repairs an invalid mode in its Mode change section, also after implementation started. `implement`, `describe-pr`, and `finish-task` stop while `rebaseInProgress` is `true`, with `Next: /loom:iterate rebase`.
+**Screens tasks (§9.14.6).** `screens` owns the ticket, the drafts, and the landings of a screens task (`task.screens`), so three routes change:
+- **Row 2 on a branch `docs/<n>-loom-screens`** without a task directory names `/loom:screens`, not `/loom:start-task #<n>`. `screens` restores the task directory.
+- **Row 2b on a screens task** names `/loom:screens`, not a mode change. A screens task is `oneshot`: there `quick` and `full` count as invalid modes too. The next run of `screens` writes `oneshot` into the ticket again.
+- **Row 2d**, directly after row 2c and before row 3: a screens task with screens that are not landed → `/loom:screens`. The condition is one of:
+  - implementation phase 1 is `pending`: the screens are not landed yet. Without this row, rows 5 and 10 name `/loom:implement`, which would build the screens from the ticket.
+  - implementation phase 1 is `in-progress`: feedback after a landing appends this entry after the `done` entry. The last heading wins (§8.3), so the task stays here until the next landing appends `done`.
+  - the working tree is dirty, also when it is dirty only in the docs paths (`workingTreeDocsOnly`): a landing that stopped on failing checks. Without this condition, rows 8 and 9 send such a tree to `/loom:finish-task` or `/loom:describe-pr`, which commit it as an interrupted docs refresh. Row 5 sends it to `/loom:implement` (phases left) or `/loom:iterate <feedback>` (code changes), so row 2d comes before row 5.
+- With an unknown working tree (`workingTree: null`), a `pending` or `in-progress` phase 1 still gives `/loom:screens`; `screens` stops on it with `Next: fix the git error, then /loom:screens`.
+- An archived screens task on its branch keeps the general route of row 2, `/loom:start-task #<n>`, as an archived setup task does. `start-task` refuses the `Design screens:` issue with `Next: /loom:screens`, and `screens` offers to move the task directory back from `_archive/`.
+- Two cases do not route to `/loom:screens`:
+  - A `blocked` implementation phase 1 stays with row 3, also with a dirty tree: `iterate` writes it when a fix on the PR fails.
+  - With a merged PR (`pr.state` `MERGED`), row 2d gives `/loom:finish-task`, as row 5 does for a dirty tree after all phases are done. `finish-task` offers its stash (§9.11), and `/loom:implement` never runs.
+- After a landing commit with a clean tree, a screens task routes like every oneshot task: row 9 (`/loom:describe-pr`), then the PR routes of row 8.
+- While row 2d applies, `loom-state` adds no warning about uncommitted changes or a phase in progress: the plan gate holds (oneshot).
+
+Rows 2a and 2b in the skills: `iterate` handles a stopped rebase in its Rebase section (after an explicit mode, `approve`, answers, and the unknown-tree stop, §9.8), and repairs an invalid mode in its Mode change section, also after implementation started. `implement`, `describe-pr`, `finish-task`, and `screens` stop while `rebaseInProgress` is `true`, with `Next: /loom:iterate rebase`.
 
 ### 9.13 Onboarding an existing repository
 
@@ -1035,7 +1073,7 @@ Each milestone removed its **Planned** markers from this spec and added its `CHA
 
 ### 9.14 UI design: style guide and screens (M10)
 
-**Status:** milestone M10, in two milestones (§9.14.9). Milestone M10a (the style guide and the screens in the existing skills) is implemented and not released yet (`CHANGELOG.md`, `[Unreleased]`); the sections that §9.14.8 names for M10a carry its text. Milestone M10b (the `screens` skill) is planned. M10b builds on M9b: `task.setup`, the reserved slug, and row 2c of §9.12. No other section carries M10b text yet: its changes are listed only in §9.14.8, and M10b moves its text there when it ships. In this section, the `screens` skill, the screens task, the canvas, and local mode are M10b.
+**Status:** milestone M10, in two milestones (§9.14.9). Both are implemented and not released yet (`CHANGELOG.md`, `[Unreleased]`): M10a (the style guide and the screens in the existing skills) and M10b (the `screens` skill). The sections that §9.14.8 names carry the text of both milestones; this section stays the full description. M10b builds on M9b: `task.setup`, the reserved slug, and row 2c of §9.12. The live run of M10b with a canvas is still to do (§9.14.9), so the items of §9.14.10 are not verified yet. In this section, the `screens` skill, the screens task, the canvas, and local mode are M10b.
 
 Before M10, loom had no place for UI design. A task that built a screen got its look from the ticket text and from the model. M10 adds design as optional work at the product level. The result is files in the repository: one style guide and one mockup file per screen. Issues name the screens they implement, and the phases read those files. A new skill, `screens`, produces the files with Claude Design (§9.14.7). A project can also add them by hand or from another tool.
 
@@ -1048,7 +1086,7 @@ Principles:
 5. **The style guide wins.** When a screen and the style guide disagree, the style guide controls.
 6. **No orphan screens.** `screens` draws a screen only for a feature that the vision or an issue names. `backlog` reports every screen that no issue names.
 
-Terms (M10a added the first three to §3 and to the glossary of `_shared/writing-style.md`; M10b adds the others):
+Terms (M10a added the first three to §3 and to the glossary of `_shared/writing-style.md`; M10b added the others):
 
 | Term | Meaning |
 |---|---|
@@ -1058,6 +1096,7 @@ Terms (M10a added the first three to §3 and to the glossary of `_shared/writing
 | **screens task** | The task of an issue that `screens` created, on the branch `docs/<n>-loom-screens` (§9.14.6) |
 | **canvas** | The Claude Design artifact that `screens` draws on (§9.14.7) |
 | **local mode** | `screens` without a canvas: it writes each screen as a plain HTML file (§9.14.7) |
+| **stage** | One step of a screens task in `screens`: brief, direction, style guide, screens (§9.14.6) |
 
 The word "design" alone keeps its one meaning: the `design` phase and its artifact `03-design.md` (§3). So the issue section is `## Screens`, and the working artifact of a screens task is `screens-brief.md`.
 
@@ -1080,7 +1119,7 @@ Two optional docs roles join the docs map (§15):
 | `style` | `<docsDir>/design/DESIGN.md` | backlog, design, plan, implementer, implementation-reviewer, screens | screens, or a task whose ticket or plan names the change (§9.14.5) |
 | `screens` | directory `<docsDir>/design/screens` | backlog, design, plan, implementer, screens | the same |
 
-The `screens` skill in these columns is M10b. Until then §15 lists the roles without it.
+§15 lists the roles with the same columns.
 
 - Both roles are optional: `setup` writes no skeleton for them. A missing file or an empty directory means the project has no design of that kind.
 - `docs.style` follows the rules of `docs.vision` (§19.1), with one more: it shares its file with no other role. `screens` rewrites the file, so it cannot also be the vision or the conventions.
@@ -1158,7 +1197,7 @@ The issue format (`backlog/references/issue-format.md`) gets one optional sectio
 - `start-task` copies the issue into the ticket verbatim, so every phase that reads the ticket sees the paths. Its final `loom-state --json` runs on the task branch: a new branch is cut from the updated main branch; a restored task or an existing branch keeps its own base (§9.3). A path that is not in that `design.screens` gets the line `Warning: screen <path> is not in design.screens; add the screen file first, or fix the issue` in its final message.
 - `backlog` writes the section when it drafts an issue for work that a screen shows.
 - **Attach.** When `design.screens` is not empty, `backlog` runs this step first, with every activity. It reads the `## Screens` sections of all issues, open and closed (`gh issue list --state all --limit 1000`; a repository with more issues is not covered). It lists every screen that no issue names. For each one it proposes: add it to an open issue, or draft a new issue. After one confirmation it writes each new body to `<workDir>/_drafts/issue-<k>-screens.md` and runs `gh issue edit <k> --body-file <file>` (§16.4). It changes nothing else in the body.
-- An issue that needs a new screen and has none: `backlog` says so. From M10b on it names `/loom:screens`.
+- An issue that needs a new screen and has none: `backlog` says so and names `/loom:screens`.
 
 #### 9.14.5 Screens in the phases
 
@@ -1177,7 +1216,7 @@ A rule about screens applies only when the ticket has a `## Screens` section. A 
 | `describe-pr` | The task summary and the PR body list the screens under Verification. It proposes one follow-up issue, `Design screens: update <screen ID>`, for each screen that a Resolved Decision or a `log.md` deviation names. The follow-up is labeled `type:docs` and has no `## Screens` section: it changes a screen, it does not implement one. |
 
 - **Who changes the files.** A task changes the style guide or a screen only when its ticket or its plan names that change. The usual route is a screens task (§9.14.6). A file made by hand or by another tool comes in through an ordinary task, for example a `type:docs` issue "Add the screens of the checkout".
-- **A task that differs from its screen.** A task that implements a screen does not change the screen. A planned difference is a Resolved Decision in `03-design.md` (quick mode: in `04-plan.md`) that names the screen ID: `design`, `plan`, and `iterate` write the question with it. The follow-up issue brings the screen back in line. Until M10b, that issue is an ordinary task whose ticket names the change; from M10b on, a screens task covers it (§9.14.6).
+- **A task that differs from its screen.** A task that implements a screen does not change the screen. A planned difference is a Resolved Decision in `03-design.md` (quick mode: in `04-plan.md`) that names the screen ID: `design`, `plan`, and `iterate` write the question with it. The follow-up issue brings the screen back in line: a screens task covers it (§9.14.6). `start-task` refuses it, and the next kickoff of `screens` offers it.
 - **Visual check.** The comparison is manual in M10. A comparison by a model is not reliable enough to block a phase (§9.14.10).
 
 #### 9.14.6 The `screens` skill
@@ -1194,26 +1233,34 @@ The work of `screens` is a screens task: an issue, the branch `docs/<n>-loom-scr
 |---|---|---|
 | Not on a screens branch | A branch `docs/<n>-loom-screens` exists, locally or on `origin` | Switches to it (a clean working tree is required), then continues that task |
 | Not on a screens branch | Otherwise | Kickoff |
-| A screens branch | The task directory is missing (a fresh clone, a deleted directory) | Restores it (below), then continues |
-| A screens branch | Implementation phase 1 is not `done` | Continues at the first stage whose result the brief lacks |
-| A screens branch | Phase 1 is `done`, the PR is not merged | With feedback: first writes `in-progress` for phase 1 to `log.md`, then changes the screens and stops. With `approve`: lands again (below). With no argument: prints the state and `Next:` from `loom-state` |
+| A screens branch | The task directory is missing (a fresh clone, a deleted directory) or archived | Restores it (below), then continues |
 | A screens branch | The PR is merged | Stops with `Next: /loom:finish-task` |
+| A screens branch | Implementation phase 1 is not `done` | With `approve`: lands only when the style guide draft exists and at least one screen is `drafted`; otherwise it continues at the first missing stage. With other text: feedback when stage 4 is done, else the answer of the first stage whose result the brief lacks. With no argument: continues at the first stage whose result the brief lacks; when the brief lacks none, it stops with `Next: give feedback, or /loom:screens approve` |
+| A screens branch | Phase 1 is `done`, the PR is not merged | With feedback: first writes `in-progress` for phase 1 to `log.md`, then changes the screens and stops. With `approve`: lands again (below). With no argument and requested changes on the PR (`pr.reviewDecision` is `CHANGES_REQUESTED`): reads the review comments with the commands of `iterate` (§6.2), and the comments that the user confirms are feedback. Otherwise, with no argument: prints the state and `Next:` from `loom-state` |
 
-**Restore.** `screens` writes the ticket from the issue, as `start-task` does. When `git log <main>..HEAD` has a commit with the body line `Phase 1: oneshot`, it writes the `done` entry of `log.md`. It writes a new brief from the Acceptance Criteria of the issue. A screen is `drafted` when its artboard, its local file, or its file in the branch diff exists; else it is `planned`. Decisions that only the lost brief held are gone, as for every task (§4.3). After a restore with a `done` entry, `screens` asks whether the drafts have changes that are not landed; on yes it writes `in-progress` again.
+- The first matching row wins. Before the table, `screens` stops during a stopped rebase (`Next: /loom:iterate rebase`) and when `git status` failed (`Next: fix the git error, then /loom:screens`). It chooses the drawing target when the brief is known, and a task on the canvas stops in a session without one before a step that draws on or reads the canvas (§9.14.7).
+- The branch list: `git branch --list`, and with `origin` also `git fetch origin` and `git branch -r --list`. Only names of the form `docs/<digits>-loom-screens` count. With several branches, the user picks one.
+- `gh` runs only in the kickoff, the restore, the reading of review comments, and the PR update after a landing. The stages, feedback, and a landing without an open PR work without `gh`.
+- On a screens branch whose ticket has another mode or none, `screens` writes `mode: oneshot` into the ticket and names the change in a `Warning:` line.
 
-**Changes after a landing.** The drafts live on the canvas or in the ignored task directory, so `loom-state` cannot see a change to them. The `in-progress` entry in `log.md` makes it visible: until the next landing writes `done`, row 2d routes to `/loom:screens`, and no skill merges the old screens.
+**Restore.** An archived task directory (`<workDir>/_archive/<n>-loom-screens`): `screens` offers to move it back, and the task keeps its ticket, brief, and `log.md`. Otherwise `screens` writes the ticket from the issue, as `start-task` does, with `mode: oneshot` and `size: S`. The base is `origin/<main>`, or `<main>` without a remote `origin`; with `origin`, `screens` runs `git fetch origin <main>` first, so the base is current. When `git log <base>..HEAD` has a commit with the body line `Phase 1: oneshot`, it writes the `done` entry of `log.md`. It writes a new brief from the Acceptance Criteria of the issue.
+- It copies the landed files back as drafts (Read, then Write; a draft that exists stays), because the landing copies the drafts over the landed files: `docs.style` to `<task dir>/DESIGN.md` when `design.style` is `true` and phase 1 has a `done` entry; in local mode, each `.html` screen of the branch diff (`git diff --name-only <base>...HEAD`) to `<task dir>/screens/<screen ID>.html`. A `.dc.html` or image screen cannot become a local HTML draft: `screens` says so, and the screen stays as landed, without a draft. Feedback on such a screen draws a new draft `<task dir>/screens/<screen ID>.html`, and `screens` tells the user that the landing then removes the old file (one file per screen ID). On a canvas the artboards are the screen drafts.
+- The new brief records the drawing target (§9.14.7).
+- A screen is `drafted` when its artboard, its local file, or its file in the branch diff exists; else it is `planned`. Decisions that only the lost brief held are gone, as for every task (§4.3). After a restore with a `done` entry, `screens` asks whether the drafts have changes that are not landed; on yes it writes `in-progress` again.
+
+**Changes after a landing.** The drafts live on the canvas or in the ignored task directory, so `loom-state` cannot see a change to them. The `in-progress` entry in `log.md` makes it visible: until the next landing writes `done`, row 2d routes to `/loom:screens`, and no skill merges the old screens. When it writes that entry, before the first draft change after a landing, `screens` runs the check of landing step 1 and copies each change made outside the drafts into its draft (Read, then Write; on a canvas, a publish). So the drafts start from the landed state, and a fix of a landed file survives the feedback.
 
 **Kickoff:**
 
 1. Refuses a dirty working tree, as `start-task` does.
-2. Reads the vision, the style guide, `design.screens`, and the open issues.
-3. On a canvas, runs the drift check (§9.14.7).
+2. Reads the vision, the style guide, `design.screens`, and the open issues (from the current branch: the switch to the main branch comes in step 6).
+3. On a canvas, runs the drift check (§9.14.7). The branch and the task directory do not exist yet, so the check only reads and compares: its answers feed the scope of step 4.
 4. Proposes the scope: the screens of this task and the states of each one (default, and those of empty, loading, and error that apply). Each screen names the vision item or the issue that it serves. A screen that serves neither is not in the scope. It also lists every open issue whose title starts with `Design screens:` and that has no branch `docs/<k>-loom-screens`:
    - an update issue, `Design screens: update <screen ID>` (§9.14.5): the user chooses which ones this task covers;
    - any other one (a kickoff that stopped after it created the issue, or an issue written by hand): it becomes the issue of this task. With several, the user picks one; the others are named and stay open.
-5. After one confirmation, creates the issue `Design screens: <scope>` in the issue format, with the labels `type:docs`, `size:S`, and `mode:oneshot` that exist. A reused issue gets the new title and the confirmed scope as its body instead (`gh issue edit`). Acceptance Criteria has one line per screen and state. Context ends with one line `Covers #<k>` per covered update issue.
+5. After one confirmation, creates the issue `Design screens: <scope>` in the issue format, with the labels `type:docs`, `size:S`, and `mode:oneshot` that exist. A reused issue gets the new title and the confirmed scope as its body instead (`gh issue edit`), and no label change. The body is written to `<workDir>/_drafts/issue-screens.md` first. Acceptance Criteria has one line per screen and state. Context ends with one line `Covers #<k>` per covered update issue.
 6. Cuts the branch `docs/<n>-loom-screens` from the up-to-date main branch.
-7. Writes `00-ticket.md` (`mode: oneshot`, `size: S`) and the brief, `<task dir>/screens-brief.md`.
+7. Writes `00-ticket.md` (`mode: oneshot`, `size: S`) and the brief, `<task dir>/screens-brief.md`. Then it publishes each screen file that won the drift check to the canvas, as the artboard of its screen ID.
 
 **The brief** is the working artifact of the task. A fresh session continues from it:
 
@@ -1221,73 +1268,91 @@ The work of `screens` is a screens task: an issue, the branch `docs/<n>-loom-scr
 ---
 task: 57-loom-screens
 updated: 2026-11-12
+drawing: canvas
 ---
 ## Scope        ← one line per screen: screen ID, states, and the vision item or issue it serves
 ## Audience     ← who uses the screens, and what each screen must do first
 ## References   ← sites, screenshots, brand assets, and files that the user gave, or `none`
 ## Direction    ← the chosen direction, or `open`
 ## Decisions    ← one line per decision, newest last
-## Screens      ← table: screen ID | status: planned, drafted
+## Screens      ← table: screen ID | status: planned, drafted; one row per screen ID, states included
 ```
 
-**Stages.** `screens` records each result in the brief. A stage whose result the brief already holds is skipped. The stops below are the only ones before `approve`:
+**Stages.** A *stage* is one step of a screens task (§3). `screens` records each result in the brief. A stage whose result the brief already holds is skipped. The stops below are the only ones before `approve`:
 
-1. **Brief.** In one message, it asks what the Audience and References sections lack. References are sites, screenshots, brand assets, or an existing UI. They change the result more than any rule, so it asks before it draws. It stops for the answer.
-2. **Direction.** Skipped when the style guide exists: the direction is settled. Otherwise it shows 2–4 different low-fidelity directions and names the tradeoff of each. It stops for the choice. `screens` never picks the direction itself, unless the user says so.
+1. **Brief.** In one message, it asks what the Audience and References sections lack. References are sites, screenshots, brand assets, or an existing UI. They change the result more than any rule, so it asks before it draws. It stops for the answer: the message ends with `Answer here, or later with /loom:screens <answer>.`
+2. **Direction.** Skipped when the style guide exists: the direction is settled. Otherwise it shows 2–4 different low-fidelity directions and names the tradeoff of each. It stops for the choice: the message ends with `Choose here, or later with /loom:screens <choice>.` `screens` never picks the direction itself, unless the user says so.
 3. **Style guide.** It drafts the style guide from the chosen direction, as `<task dir>/DESIGN.md` (§9.14.2). With an existing style guide, the draft is a copy with only the changes that the new screens need.
 4. **Screens.** In the same run as stage 3, it draws each screen of the scope, in the states that the Scope lists, with the tokens of the style guide. A drawn screen is `drafted`. Then it stops: `Next: give feedback, or /loom:screens approve`.
 
-Feedback comes in the conversation or as the argument; `screens` changes the drafts and stops again. A decision that is settled stays settled.
+Feedback comes in the conversation or as the argument; `screens` changes the drafts and stops again. A decision that is settled stays settled. In local mode, feedback on a landed `.dc.html` or image screen draws a new draft `<task dir>/screens/<screen ID>.html`; `screens` tells the user that the landing removes the old file.
 
 **Landing** (`/loom:screens approve`):
 
-1. Shows one plan: the style guide (new, or a `diff`) and each screen file (new, changed, removed). It acts after one confirmation. Screens that are still `planned` are named and left for a later task; so is each covered update issue whose screen does not land, which stays open.
-2. Writes the style guide to `docs.style`. Copies each `drafted` screen unchanged to `<docs.screens>/<screen ID><extension>` (Read, then Write, never from memory).
-3. Runs `checks.check`. On failure it stops: `Next: fix the checks, then /loom:screens approve`.
-4. Commits every changed docs path:
-   - the first landing: `docs(design): <summary> (#<n>)`, body `Phase 1: oneshot`; then `## Phase 1 — done — <hash>` in `log.md`;
+1. Looks for changes outside the drafts first. A *target* is a file that the landing writes: `docs.style` and the screen files. A target that differs from its draft and has a change since the last landing (`git diff` against the commit of the newest `done` entry of phase 1 in `log.md` whose `Reviewer:` line names `/loom:screens`), or is dirty or untracked, holds a fix of a landed file, for example by the user. Before the first landing only a dirty or untracked target counts. `screens` shows each such difference and asks which side wins: the file (it copies the file into the draft first: Read, then Write; on a canvas, a publish as the artboard), or the draft. When the draft also changed since the last landing, a third answer is merge: `screens` applies the change of the file to the draft with the Edit tool, shows the new difference between the draft and the file, and asks once. While phase 1 is `pending` or `in-progress`, a dirty target can come from a landing that stopped on failing checks; the question says so and names the draft as the default answer. So the next landing does not overwrite a fix.
+2. Shows one plan: the style guide (new, or a `diff`) and each screen file (new, changed, removed). It acts after one confirmation. Screens that are still `planned` are named and left for a later task; so is each covered update issue whose screen does not land, which stays open.
+3. Writes the style guide to `docs.style`. Copies each `drafted` screen that has a draft unchanged to `<docs.screens>/<screen ID><extension>` (Read, then Write, never from memory). A file of `design.screens` with the screen ID of a landing screen and another extension is removed with `git rm` (one file per screen ID).
+4. Runs `checks.check`. On failure it stops: `Next: fix the drafts (<task dir>/DESIGN.md or the screen drafts), then /loom:screens approve`, with the drafts of the current drawing target in place of "the screen drafts": the artboards, or `<task dir>/screens/<screen ID>.html`. The next `approve` writes the drafts over the landed files again.
+5. Commits every changed docs path. A commit that fails (a hook refuses it) stops with `Result: landing commit failed: <the error>`, `Next: fix it, then /loom:screens approve`.
+   - the first landing: `docs(design): <summary> (#<n>)`, body `Phase 1: oneshot`, after an `in-progress` entry of phase 1 in `log.md` (as `setup` does); then `## Phase 1 — done — <hash>` in `log.md`, whose `Reviewer:` line says that the commit comes from `/loom:screens`;
    - a later landing: the fix commit of `_shared/git-flow.md` (the same subject form; body `Phase 1: oneshot`, a blank line, one `Fix: <item>` line per change), and the fix entry in `log.md`;
-   - a landing without a file change (the user withdrew the feedback): no commit. It appends `## Phase 1 — done — <hash of the last Phase 1 commit>` with the line `Fix: none (feedback withdrawn)` to `log.md`, so the task can go on.
-5. With an open PR, runs `_shared/pr-update.md` (push with confirmation).
-6. Final message: `Next:` from `loom-state`, written as §7.4 says (`/clear, then /loom:describe-pr` after the first landing). It adds: after the merge, `/loom:backlog` attaches the screens to issues (§9.14.4).
+   - a landing without a file change (the user withdrew the feedback): no commit. With `origin`, it runs `git fetch origin <main>` first, so the base is current. It appends `## Phase 1 — done — <hash of the last Phase 1 commit>` with the line `Fix: none (feedback withdrawn)` to `log.md`, so the task can go on.
+6. With an open PR, runs `_shared/pr-update.md` (push with confirmation). When the PR state is unknown (`pr` is `null` while the ticket has `pr:`), it pushes nothing and adds a `Warning:` line.
+7. Final message: `Next:` from `loom-state`, written as §7.4 says (`/clear, then /loom:describe-pr` after the first landing). Its `Result:` line names the landed screens and adds: after the merge, `/loom:backlog` attaches the screens to issues (§9.14.4).
+
+**Final messages.** The stops of stages 1 and 2 are questions, not final messages. The other stops and the landing end in the format of `_shared/final-answer.md`, with a `Result:` line instead of `Artifact` and `Status`. The message of the drafts (stage 4, and after feedback) adds a `Screens:` line: the canvas URL, or the paths of the local files.
 
 **Routing** (`loom-state`, §9.12):
 
 - `task.screens` is `true` for a task on a branch `docs/<n>-loom-screens`. The slug `loom-screens` is reserved: `loom-state --slug` returns `loom-screens-task` for a title that would give it.
-- Row 2 on a branch `docs/<n>-loom-screens` without a task directory names `/loom:screens`, which restores it.
+- Row 2 on a branch `docs/<n>-loom-screens` without a task directory names `/loom:screens`, which restores it. The skills that stop on a branch that matches no task (`implement`, `iterate`, `describe-pr`, and the phase skills) take that stop's `Next:` from `next.command`, so they name `/loom:screens` there, and `/loom:start-task #<n>` on other branches, the setup branch included.
 - Row 2b on a screens task names `/loom:screens`; its next run writes `oneshot` into the ticket again.
 - New row 2d, after row 2c: a screens task whose implementation phase 1 is `pending` or `in-progress`, or whose working tree is dirty → `/loom:screens`.
   - Without the first condition, rows 5 and 10 name `/loom:implement`, which would build the screens from the ticket.
   - Without the second, a landing that stopped on failing checks leaves a tree that is dirty only in the docs paths. The later rows would send it to `/loom:describe-pr` or `/loom:finish-task`, which commit such a tree as an interrupted docs refresh (§9.10, §9.11).
   - Phase 1 is also `in-progress` after feedback on a landed task, until the next landing (above).
-- While row 2d applies, `describe-pr` and `finish-task` stop with `Next: /loom:screens`. After the merge, `finish-task` keeps its stash offer (§9.11).
+  - Two exceptions narrow the row: a `blocked` phase 1 stays with row 3 (`/loom:iterate <fix>`), also with a dirty tree; with a merged PR, row 2d gives `/loom:finish-task`, which offers its stash (§9.12).
+  - With an unknown working tree (`workingTree: null`), a `pending` or `in-progress` phase 1 still gives `/loom:screens`.
+- An archived screens task on its branch keeps the general route of row 2, `/loom:start-task #<n>`, as an archived setup task does; `start-task` then refuses the issue with `Next: /loom:screens`, and `screens` moves the task directory back (Restore).
+- While row 2d applies, `describe-pr` and `finish-task` stop with `Next: /loom:screens`. After the merge, `finish-task` keeps its stash offer (§9.11). When it archives a screens task whose phase 1 is `in-progress`, `finish-task` adds `Warning: screens task #<n> has draft changes that did not land; they are in the archived task directory`.
 - After a landing commit, with a clean tree, the task routes like every oneshot task: `/loom:describe-pr`, then the PR routes of §6.2.
 - `next` only names `/loom:screens`, as it does for `/loom:setup`: the skill needs the user.
 - `implement` refuses a screens task with `Next: /loom:screens`.
 - `start-task` refuses an issue whose title starts with `Design screens:`, with `Next: /loom:screens`. This covers the update issues of §9.14.5: the next kickoff offers them (step 4).
 - `iterate` refuses a mode change on a screens task, and feedback that names a screen or the style guide, with the same `Next:`. Failing checks and a rebase work as for every task.
-- `describe-pr` on a screens task closes the covered update issues that are done. For each `Covers #<k>` line of the ticket's Context, it adds `Closes #<k>` to the PR body, after `Closes #<n>`, only when the screen of that issue is in the branch diff (`git diff origin/<mainBranch>...HEAD --name-only`; without `origin/<mainBranch>`, the local main branch). `_shared/pr-update.md` computes these lines again when it rewrites the body.
+- **Review comments on the PR of a screens task.** Requested changes route to `/loom:iterate` (§6.2). In its post-PR fix, an item whose fix changes `docs.style` or a file below `docs.screens` is not a fix item, also when it is a failing check (a lint error in a landed screen): the drafts would miss the fix, and the next landing would overwrite it, or the fix would overwrite later feedback. On a screens task the implementer never edits these files. `iterate` lists such items apart; when the only way to make a failing check pass is such a change, the check is one of them. After the user's confirmation it fixes the other items (failing checks, a rebase) as for every task, then stops with `Next: /loom:screens <the items>`. `screens` takes them as feedback and never sends a review comment back to `iterate`. Until the reviewer reviews again, `loom-state` keeps `/loom:iterate`; there the user drops the comments that a landing already applied, as for every task. `/loom:screens` without an argument on a PR with requested changes reads the comments itself (Where it runs).
+- `backlog` names `/loom:screens` instead of `/loom:start-task #<n>` when the recommended issue's title starts with `Design screens:`.
+- `describe-pr` on a screens task closes the covered update issues that are done. For each `Covers #<k>` line of the ticket's Context, it adds `Closes #<k>` to the PR body, after `Closes #<n>`, only when the screen of that issue is in the branch diff (`git diff origin/<mainBranch>...HEAD --name-only`; without `origin/<mainBranch>`, the local main branch). The screen ID comes from the issue title, `Design screens: update <screen ID>` (`gh issue view <k> --json title`); the screen is in the diff when the diff lists a file below `docs.screens` with that screen ID. `_shared/pr-update.md` computes these lines again when it rewrites the body. It states the same method in full, because `screens`, `iterate`, and `implement` run it without `describe-pr`.
 
 #### 9.14.7 The canvas and local mode
 
-`screens` draws on a canvas when the session offers the `Artifact` tool with the Design type. Otherwise it works in local mode; `--local` forces it. It names the mode in its first message. Claude Code offers no `Artifact` tool in headless runs, with API-key authentication, and on other providers (§9.14.10), so loom's evals run local mode.
+`screens` draws on a canvas when the session offers the `Artifact` tool with the Design type: it calls `Artifact` with `action: "quickstart"` and `intent: "design"`, and a result that names a Design type (a `type_url`) means the canvas. Otherwise it works in local mode: no `Artifact` tool, or an account without the Design type. `--local` asks for local mode. Its first message names where it draws, in one line: `Drawing: canvas` or `Drawing: local mode (<reason>)`. Claude Code offers no `Artifact` tool in headless runs, with API-key authentication, and on other providers (§9.14.10), so loom's evals run local mode.
+
+**The drawing target** of a screens task is `canvas` or `local`. It is chosen once per task and recorded in the brief, as the frontmatter line `drawing: canvas` or `drawing: local`. Every later run takes it from the brief and does not need `--local` again, so no `Next:` line changes.
+
+- The choice runs only when the brief has no `drawing` value yet: in the kickoff, in a restore, or with a brief written before the line existed. `--local` gives `local`. Else a task that already draws in local mode gives `local`: its task directory holds a screen draft, or its branch diff has an `.html` screen below `docs.screens`. Else a session that can draw on a canvas gives `canvas`. Else a project with a canvas (`design.canvas` is not `null`) gives `canvas`, and the stop below applies. Else `local`. So a restore on a project with `design.canvas` set, in a session with a canvas, picks `canvas`, unless the task landed local screens before.
+- The brief says `local`: local mode, also in a session that has the `Artifact` tool.
+- The brief says `canvas`, and `--local` is given: `screens` asks once. On yes it copies the landed files as drafts, as Restore does (§9.14.6), keeps each draft that exists, sets `drawing: local`, and adds a `Warning:` line that the canvas does not get the changes of local mode.
+- The brief says `canvas`, and the session cannot draw on a canvas: `screens` stops with `Result: the screens of this project are on the canvas <url>; this session has no canvas`, `Next: /loom:screens in a session with the Artifact tool, or /loom:screens --local to go on in local mode`. The stop applies only before a step that draws on or reads the canvas: a stage that draws, feedback, the drift check, a landing. The merged-PR stop, the switch to the branch, the restore, stage 1, and the state message still run.
 
 **Canvas:**
 
-- One canvas per project. The first screens task creates it and writes its URL to `design.canvas` in `.claude/loom.json` at once. It commits that one file right away: `docs(design): record the canvas (#<n>)`, with no `Phase` line in the body and without a checks run, like the kickoff commit of §9.13.2. So a branch switch or a stash cannot lose the URL. Later tasks open that canvas. Without the URL, a new session would create a second canvas.
-- An artboard is a screen when its title is a screen ID of the scope. Other artboards (the directions of stage 2, notes) stay on the canvas and never land.
+- One canvas per project. The first screens task creates it on its branch, when a stage first draws, and writes its URL to `design.canvas` in `.claude/loom.json` at once. It commits that one file right away: `docs(design): record the canvas (#<n>)`, with no `Phase` line in the body and without a checks run, like the kickoff commit of §9.13.2. So a branch switch or a stash cannot lose the URL. Later tasks open that canvas. Without the URL, a new session would create a second canvas. A canvas commit that fails (a hook refuses it) stops with `Result: canvas commit failed: <the error>`, `Next: fix it, then /loom:screens`.
+- An artboard is a screen when its title in `project/canvas.json` is a screen ID of the scope; its file name does not count. Other artboards (the directions of stage 2, notes) stay on the canvas and never land.
 - The Design type ships its own instructions for the artboard format and for visual quality. `screens` follows them and does not repeat them. loom adds only the process of §9.14.6.
-- The user can edit the canvas by hand. `screens` reads the canvas again before each change and before the landing.
+- The user can edit the canvas by hand. `screens` reads the canvas again before each change and before the landing: it saves the canvas files to `<task dir>/canvas` (`out_dir`), or takes the paths that the result names.
+- The `Artifact` tool is not in the skill's `allowed-tools`: the permission system may ask for its calls.
+- `screens` does not rely on a version history of the canvas. The landed files in git are the record.
 - A comment on the canvas reaches the session only when the user sends it to Claude. `screens` says so once; feedback in the conversation always works.
-- **Drift check** (kickoff only). `screens` compares each screen file in the repository with the artboard of the same screen ID. It lists the differences and asks which side wins for each: the artboard joins the scope of this task, or the file goes back to the canvas.
-- A canvas that the session cannot open (another account, a deleted canvas): `screens` says so and offers a new canvas built from the screen files.
+- **Drift check** (kickoff only, step 3). It runs before `<n>`, the branch, and the task directory exist, so it only reads and compares: it saves the canvas files to `<workDir>/_drafts/canvas`, not to the task directory, and it publishes and commits nothing. `screens` compares each screen file in the repository with the artboard of the same screen ID. It lists the differences and asks which side wins for each: the artboard joins the scope of this task, or the file goes back to the canvas, published after kickoff step 7.
+- A canvas that the session cannot open (another account, a deleted canvas): `screens` says so. At kickoff it only reports it. On the screens branch, when a stage first draws, it offers a new canvas built from the screen files; the canvas commit then runs on that branch.
 - The canvas is private to its owner until the owner shares it. The URL in `loom.json` gives no access.
 
 **Local mode:**
 
 - Each screen is a plain HTML file with its styles inside, `<task dir>/screens/<screen ID>.html`. The directions of stage 2 are `<task dir>/screens/_direction-<letter>.html`.
 - The user opens the files in a browser. The landing copies the screens of the scope to `docs.screens`.
-- `design.canvas` stays `null`.
+- Local mode never creates or changes a canvas: `design.canvas` stays as it is.
 
 Known limits:
 
@@ -1297,24 +1362,24 @@ Known limits:
 
 #### 9.14.8 Changes to other sections
 
-M10a is done: its changes are in the sections below (the Milestone column says "M10a, done"). The M10b changes are still planned: no section outside §9.14 carries them yet.
+M10a and M10b are done: their changes are in the sections below (the Milestone column says "done"). Those sections state each rule in one or two sentences and point here.
 
 | Section | Change | Milestone |
 |---|---|---|
-| §3, `_shared/writing-style.md` | The terms of this section | M10a, done (style guide, screen, screen ID); M10b (the others) |
-| §4.1 | `skills/screens/` (SKILL.md, `references/brief-template.md`, `references/style-guide-template.md`) | M10b |
-| §5.3 | No mode change on a screens task | M10b |
-| §6.1 | `/loom:screens` between `backlog` and `start-task`, marked optional | M10b |
-| §7.4, `_shared/final-answer.md` | `/loom:screens` from `next.command` is written as it is, like `/loom:setup` | M10b |
-| §8.2, §8.3 | `docs.style`, `docs.screens`, the `design` object; `task.screens`, the reserved slug | M10a, done; M10b |
-| §9.0 | `screens` in the model and effort table: inherit, default | M10b |
-| §9.2, §9.3 | `backlog`: the `## Screens` section and attach; `start-task`: the warning, and the refusal of a screens issue | M10a, done; M10b |
+| §3, `_shared/writing-style.md` | The terms of this section | M10a, done (style guide, screen, screen ID); M10b, done (the others) |
+| §4.1 | `skills/screens/` (SKILL.md, `references/brief-template.md`, `references/style-guide-template.md`) | M10b, done |
+| §5.3 | No mode change on a screens task | M10b, done |
+| §6.1 | `/loom:screens` between `backlog` and `start-task`, marked optional | M10b, done |
+| §7.4, `_shared/final-answer.md` | `/loom:screens` from `next.command` is written as it is, like `/loom:setup` | M10b, done |
+| §8.2, §8.3 | `docs.style`, `docs.screens`, the `design` object; `task.screens`, the reserved slug | M10a, done; M10b, done |
+| §9.0 | `screens` in the model and effort table: inherit, default | M10b, done |
+| §9.2, §9.3 | `backlog`: the `## Screens` section and attach; `start-task`: the warning, and the refusal of a screens issue | M10a, done; M10b, done |
 | §9.4–§9.10, §10.1 | The rules of §9.14.5, the excluded path of the research agents included | M10a, done |
-| §9.8–§9.12 | A screens task in `iterate`, `implement`, `describe-pr`, `finish-task`, and `next`; rows 2, 2b, and 2d | M10b |
-| §13.2 | Key Context Pointers leave out the `## Screens` paths; the brief of a screens task | M10a, done; M10b |
-| §15, §19.1 | The two docs roles; the `design` key | M10a, done (M10b adds the `screens` skill to the roles of §15) |
-| §16.2, §16.4, §19.3 | The landing commits; `gh issue edit` asks for confirmation | M10b; M10a, done |
-| §20.2 | The eval changes of §9.14.9 | M10a, done; M10b |
+| §9.8–§9.12 | A screens task in `iterate`, `implement`, `describe-pr`, `finish-task`, and `next`; rows 2, 2b, and 2d | M10b, done |
+| §13.2 | Key Context Pointers leave out the `## Screens` paths; the brief of a screens task | M10a, done; M10b, done |
+| §15, §19.1 | The two docs roles; the `design` key | M10a, done (M10b, done: the `screens` skill in the roles of §15) |
+| §16.2, §16.4, §19.3 | The landing commits; `gh issue edit` asks for confirmation | M10b, done; M10a, done |
+| §20.2 | The eval changes of §9.14.9 | M10a, done; M10b, done |
 
 #### 9.14.9 Implementation milestones
 
@@ -1323,7 +1388,7 @@ M10a makes loom read design files, whatever produced them. M10b adds the produce
 | Milestone | Changes | Tests and evals |
 |---|---|---|
 | **M10a** (done) — style guide and screens in the existing skills | `bin/loom-state`: the docs roles `style` and `screens` with their validation, the `design` key, and the `design` object. The issue format and `backlog` (§9.14.4). `start-task`: the warning. The rules of §9.14.5 in `research-questions`, `research`, `design`, `plan`, `implement`, `iterate`, `_shared/implementation-loop.md`, `describe-pr`, and the agents `codebase-locator`, `codebase-analyzer`, `codebase-pattern-finder`, `implementer`, and `implementation-reviewer`. The ask rule `Bash(gh issue edit *)` in the `settings.json` template of `setup` (§19.3). The glossary terms **style guide**, **screen**, and **screen ID**. | Unit tests: defaults, custom and invalid values, the overlap rules (an optional role only when in use), a shared `docs.style` file, `design.style` and `design.screens` on fixture repositories (two files with one screen ID, a file that is not a screen); lints that no skill builds these paths. No new eval case. The fixtures of `research-full` and `design-full` get a style guide, one HTML screen, and a `## Screens` section in the ticket. New graders: in `research-full`, no Read, Grep, Glob, or Bash input names `docs/design/screens` except inside an exclusion (Grep `glob: "!<path>/**"`, the pathspecs `':(exclude)<path>'` and `':!<path>'`, `find -not -path '*<path>/*'`), and the trace never holds a phrase that occurs only in the screen, on the line of the feature's text, so a content search that reaches the screen fails; `design-full` has a Read of the screen and names its path in `03-design.md`. Rerun `research-full`, `design-full`, `implement-manual`, `describe-pr-quick`, and `design-onboarding` (its kickoff settings gain the `gh issue edit` ask rule). |
-| **M10b** — the `screens` skill | `skills/screens/` with its templates. `bin/loom-state`: `task.screens`, the reserved slug `loom-screens`, rows 2 and 2b for screens tasks, row 2d. The refusals and stops of §9.14.6 in `start-task`, `iterate`, `implement`, `describe-pr`, and `finish-task`; the `Closes #<k>` lines in `describe-pr` and `_shared/pr-update.md`; `next` names `/loom:screens`; `_shared/final-answer.md` writes `/loom:screens` as it is (§7.4); `backlog` names `/loom:screens` for a missing screen. The glossary terms **screens task**, **canvas**, and **local mode**. | Unit tests: `task.screens`, the reserved slug, rows 2, 2b, and 2d (phase 1 pending, a dirty tree after phase 1 is done, phase 1 `in-progress` again after a `done` entry); the skill texts. One new eval case, `screens-local`: a screens task with a brief that has one screen with its states in the Scope, the Audience, References `none`, and a chosen direction; no style guide. So stages 3 and 4 run without a question. Graders: `<task dir>/DESIGN.md` exists with the six headings of §9.14.2; `<task dir>/screens/<screen ID>.html` exists; the brief marks the screen `drafted`; no Bash `git commit`. The kickoff needs `gh`, and the canvas needs the `Artifact` tool; eval runs have neither. So: static tests, plus one live run on a sandbox repository with a canvas, from `/loom:screens` to `/loom:finish-task`. |
+| **M10b** (done; the live run with a canvas is still to do) — the `screens` skill | `skills/screens/` with its templates. `bin/loom-state`: `task.screens`, the reserved slug `loom-screens`, rows 2 and 2b for screens tasks, row 2d. The refusals and stops of §9.14.6 in `start-task`, `iterate`, `implement`, `describe-pr`, and `finish-task`; the `Closes #<k>` lines in `describe-pr` and `_shared/pr-update.md`; `next` names `/loom:screens`; `_shared/final-answer.md` writes `/loom:screens` as it is (§7.4); `backlog` names `/loom:screens` for a missing screen. The glossary terms **screens task**, **canvas**, **local mode**, and **stage**. | Unit tests: `task.screens`, the reserved slug, rows 2, 2b, and 2d (phase 1 pending, a dirty tree after phase 1 is done, phase 1 `in-progress` again after a `done` entry); the skill texts. One new eval case, `screens-local`: a screens task with a brief that has one screen with its states in the Scope, the Audience, References `none`, and a chosen direction; no style guide. So stages 3 and 4 run without a question. Graders: `<task dir>/DESIGN.md` exists with the six headings of §9.14.2; `<task dir>/screens/<screen ID>.html` exists for each state; the brief marks the row of each state `drafted`; no Bash `git commit`, and no style guide at `docs.style`. The kickoff needs `gh`, and the canvas needs the `Artifact` tool; eval runs have neither. So: static tests, plus one live run on a sandbox repository with a canvas, from `/loom:screens` to `/loom:finish-task`. |
 
 #### 9.14.10 Later, and items to verify
 
@@ -1343,13 +1408,13 @@ Verified on 2026-11-12 (Claude Code desktop, one test canvas):
 - The `Artifact` tool saves these files to the local disk, also from a subagent.
 - The `Artifact` tool is off by default in `claude -p`, the Agent SDK, the GitHub Action, with API-key authentication, and on Bedrock and Vertex (Claude Code documentation).
 
-To verify during M10b:
+To verify in the live run of M10b (§9.14.9; not verified yet, no run with a canvas so far), with what `screens` does meanwhile:
 
-- Whether a plugin skill can name `Artifact` in `allowed-tools`, and which calls still ask the user.
-- Whether the first artboard of a canvas must be named `Main.dc.html`, or can carry a screen ID.
-- Whether the `Artifact` tool can save a canvas file straight into the working tree.
-- How `screens` detects the Design type reliably, and what it does when the account has none.
-- Whether a canvas keeps a version history. The Claude Design help says it has none; the artifact documentation says each publish is a version.
+- Whether a plugin skill can name `Artifact` in `allowed-tools`, and which calls still ask the user. Meanwhile: the frontmatter does not name it, and the skill says that the permission system may ask for its calls.
+- Whether the first artboard of a canvas must be named `Main.dc.html`, or can carry a screen ID. Meanwhile: `screens` finds a screen by its artboard title in `canvas.json`, never by the file name.
+- Whether the `Artifact` tool can save a canvas file straight into the working tree. Meanwhile: `screens` saves to `out_dir` `<task dir>/canvas` and uses the paths of the result when the tool saves elsewhere.
+- How `screens` detects the Design type reliably, and what it does when the account has none. Meanwhile: local mode when the quickstart names no Design type (`type_url`); the first message says so.
+- Whether a canvas keeps a version history. The Claude Design help says it has none; the artifact documentation says each publish is a version. Meanwhile: `screens` does not rely on it; the landed files in git are the record.
 
 ---
 
@@ -1618,12 +1683,12 @@ The ticket frontmatter has instead: `mode`, `size` (`S`|`M`|`L`, optional, copie
 
 | Artifact | Statuses | Set by | Gate for |
 |---|---|---|---|
-| `00-ticket.md` | — | start-task | — |
+| `00-ticket.md` | — | start-task (`setup` and `screens` for their own tasks) | — |
 | `01-research-questions.md` | draft → in-review → approved | skill / iterate | none |
 | `02-research.md` | draft → in-review → approved | skill / iterate | none (warning only) |
 | `03-design.md` | draft → in-review → approved | skill / iterate | plan |
 | `04-plan.md` | draft → in-review → approved | skill / iterate | implement |
-| `log.md` | per phase: in-progress / done / blocked | implement | — |
+| `log.md` | per phase: in-progress / done / blocked | implement, iterate (`setup` and `screens` for their own tasks) | — |
 
 A skill writes `draft` while it works and `in-review` when it finishes. `iterate` also writes `draft` on `04-plan.md` while it changes the plan after implementation started. Only `iterate approve` sets `approved`. `loom-state` reads `status` and the ticket's `mode` ignoring case and surrounding whitespace. Another `status` value adds a warning and counts as `in-review`; there is no `blocked` artifact status. The file name, not `phase`, decides an artifact's phase; a different `phase` adds a warning. The ticket's `pr` may be written `57` or `#57`; it is a number of at least 1.
 
@@ -1676,6 +1741,8 @@ A skill writes `draft` while it works and `in-review` when it finishes. `iterate
        - [ ] Manual: (only if it cannot be automated)
 ## Phase 2: …
 ```
+
+**Screens task (§9.14.6):** its working artifact is the brief `screens-brief.md` instead of 01–04: frontmatter `task`, `updated`, and `drawing` (the drawing target, `canvas` or `local`, §9.14.7), then Scope, Audience, References, Direction, Decisions, and a Screens table (screen ID and status `planned` or `drafted`, one row per screen ID, states included). It has no `status` and no gate; `screens` writes it and continues from it in a fresh session. The drafts live beside it: the style guide draft `DESIGN.md`, in local mode `screens/<screen ID>.html`, and on a canvas the files that `screens` reads into `canvas/`.
 
 **`events.jsonl`** — not an artifact: one JSON line per subagent event, written by the hook of §11.6 and read by `loom-state` for `task.metrics`. Skills never write it.
 
@@ -1803,17 +1870,17 @@ docs/
 
 | Role | Default path | Read by | Written by |
 |---|---|---|---|
-| `vision` | `<docsDir>/product/vision.md` | backlog | setup (skeleton), backlog |
+| `vision` | `<docsDir>/product/vision.md` | backlog, screens | setup (skeleton), backlog |
 | `overview` | `<docsDir>/architecture/overview.md` | backlog, design, plan, describe-pr | setup (skeleton), describe-pr (update) |
 | `decisions` | directory `<docsDir>/architecture/decisions`, file name pattern `<NNNN>-<slug>.md` | design, describe-pr | setup (skeleton), describe-pr |
 | `conventions` | `<docsDir>/conventions.md` | design, plan, implementer, implementation-reviewer | setup (skeleton) |
 | `tasks` | `<docsDir>/tasks` (files `<n>-<slug>.md`) | backlog, `_shared/pr-update.md` | setup (skeleton), describe-pr, `_shared/pr-update.md` |
-| `style` (optional) | `<docsDir>/design/DESIGN.md` | backlog, design, plan, implementer, implementation-reviewer | a task whose ticket or plan names the change (§9.14.5) |
-| `screens` (optional) | directory `<docsDir>/design/screens` (files `<screen ID><extension>`, §9.14.3) | backlog, design, plan, implementer | a task whose ticket or plan names the change (§9.14.5) |
+| `style` (optional) | `<docsDir>/design/DESIGN.md` | backlog, design, plan, implementer, implementation-reviewer, screens | screens, or a task whose ticket or plan names the change (§9.14.5) |
+| `screens` (optional) | directory `<docsDir>/design/screens` (files `<screen ID><extension>`, §9.14.3) | backlog, design, plan, implementer, screens | screens, or a task whose ticket or plan names the change (§9.14.5) |
 
 - `CLAUDE.md` is not a docs role. It stays at the git top level.
 - `style` and `screens` are optional: `setup` writes no skeleton for them, and the tree above leaves them out. A missing file or an empty directory means the project has no design of that kind (§9.14).
-- Every skill that names a doc path takes it from `docs` in the state: `setup` (it writes the skeleton by docs role), `backlog`, `research-questions` and `research` (they name `docs.screens` as an excluded path), `design`, `plan`, `implement` and `iterate` (they pass `docs.conventions`, `docs.style` when `design.style` is `true`, and `docs.screens` when `design.screens` is not empty, to the implementer and the reviewer), `describe-pr` with its templates, and `_shared/pr-update.md`. No skill builds a role path from `docsDir`, and no skill reads `docs` from `loom.json`; `tests/test_skills.py` checks both. Skills take the screens from `design.screens` in the state and never list the screens directory; no skill or agent builds a path below `docs/design` or reads `design` from `loom.json`. Before `.claude/loom.json` exists, `setup` uses the default paths of its skeleton templates.
+- Every skill that names a doc path takes it from `docs` in the state: `setup` (it writes the skeleton by docs role), `backlog`, `research-questions` and `research` (they name `docs.screens` as an excluded path), `design`, `plan`, `implement` and `iterate` (they pass `docs.conventions`, `docs.style` when `design.style` is `true`, and `docs.screens` when `design.screens` is not empty, to the implementer and the reviewer), `describe-pr` with its templates, `_shared/pr-update.md`, and `screens` (it reads `docs.vision` and writes `docs.style` and the screens below `docs.screens`). No skill builds a role path from `docsDir`, and no skill reads `docs` from `loom.json`; `tests/test_skills.py` checks both. Skills take the screens from `design.screens` in the state and never list the screens directory; no skill or agent builds a path below `docs/design` or reads `design` from `loom.json`, except `screens`, which writes `design.canvas` (§9.14.7). Before `.claude/loom.json` exists, `setup` uses the default paths of its skeleton templates.
 - `docsDir` stays for compatibility. It is the root of the default paths, and changes below it still count as docs changes (§8.2). A path in the map may lie outside `docsDir`, e.g. `ARCHITECTURE.md` or `adr/`.
 - loom writes its own ADR layout (§13.5) also in a mapped directory. Only the file name follows the project's pattern. The `NNNN` in the ADR title is the number of the file name, with the digit count of the pattern.
 - The task summary file name stays `<n>-<slug>.md`.
@@ -1836,6 +1903,7 @@ docs/
 - Docs commit before the PR, only if docs changed: `docs(#42): record decisions and summary`.
 - No commits during research/design/plan (those artifacts are in `.loom/`).
 - The onboarding kickoff commit (§9.13.2): `chore(loom): start loom setup (#<n>)` comes before research. It holds only `.claude/loom.json`, the kickoff settings of `.claude/settings.json`, and the `.gitignore` line, and its body has no `Phase` line.
+- The landing commits of a screens task (§9.14.6), created by `screens`: the first landing `docs(design): <summary> (#<n>)` with the body `Phase 1: oneshot`; a later landing the fix commit of `_shared/git-flow.md` (the same subject form, the body `Phase 1: oneshot`, a blank line, one `Fix: <item>` line per change). When `screens` creates the canvas, it commits only `.claude/loom.json` right away: `docs(design): record the canvas (#<n>)`, without a `Phase` line and without a checks run (§9.14.7).
 
 ### 16.3 Rebase and merge
 
@@ -2030,7 +2098,7 @@ Every component takes `mainBranch`, `workDir`, and `docsDir` from this file, dir
 | `hooks.stopLint` | `false` | `true` or `false` | Warning, the default |
 | `hooks.maxCheckAttempts` | `3` | An integer of at least 1 | Warning, the default |
 | `design` | `{ "canvas": null }` | An object. An unknown key gets a warning and is ignored. | Not an object (also `null`): warning, the default |
-| `design.canvas` | `null` | `null`, or the URL of the canvas (§9.14.1): a string that starts with `https://claude.ai/` and has more after it, without whitespace or control characters. The prefix is case-sensitive; surrounding whitespace is not stripped | Warning, `null` |
+| `design.canvas` | `null` | `null`, or the URL of the canvas (§9.14.1): a string that starts with `https://claude.ai/` and has more after it, without whitespace or control characters. The prefix is case-sensitive; surrounding whitespace is not stripped. `screens` writes it when it creates the canvas (§9.14.7) | Warning, `null` |
 | any other top-level key | — | Not a `loom.json` key (the keys are `version`, `tracker`, `mainBranch`, `workDir`, `docsDir`, `docs`, `checks`, `ci`, `pullRequest`, `hooks`, `rounds`, `implement`, `design`) | Warning, ignored |
 
 The resolved docs map is also checked as a whole; these warnings keep the values. `docs.tasks`, `docs.decisions.dir`, and `docs.screens` must not be at or below one another (equal included), and no role file may lie at or below any of them. `vision`, `overview`, and `conventions` may share one file (one `README.md` can play several roles). `docs.style` shares its file with no other role, compared ignoring case. A docs map path at or below `workDir` gets a warning (a configured path there is already invalid, so this is a default built from `docsDir`, e.g. `docsDir: "work"` with `workDir: "work/tasks"` makes `docs.tasks` `work/tasks`; it is the only default, so it stays). These checks include `docs.style` and `docs.screens` only when the role is in use: `docs` sets its key (also with an invalid value), or its path exists in the working tree (a file for `docs.style`, a directory for `docs.screens`, §9.14.1). The file may start with a UTF-8 byte order mark.
@@ -2083,10 +2151,11 @@ evals/
 ├── implement-manual/
 ├── guard-main/
 ├── describe-pr-quick/
+├── screens-local/
 └── results/                 # written by the runs; ignored by git
 ```
 
-- Each case's `scaffold.sh` runs `_fixture/build.py <scenario>`. It builds a tiny Python repository (`shop/`, stdlib `unittest` checks behind `make check`, the §19.1 `loom.json`, with the optional keys of `describe-pr-quick` below), one commit on `main` with fixed dates (stable hashes), and the task directory of task #7 with the artifacts the scenario needs. `research-full` and `design-full` also get a style guide at the default path (`docs/design/DESIGN.md`, the six headings of §9.14.2), one plain HTML screen with inline styles (`docs/design/screens/order-summary.html`), and a `## Screens` section in the ticket that names it. The other cases have no design files. `tests/test_evals.py` runs every scaffold and checks that `loom-state` routes it to the case's skill.
+- Each case's `scaffold.sh` runs `_fixture/build.py <scenario>`. It builds a tiny Python repository (`shop/`, stdlib `unittest` checks behind `make check`, the §19.1 `loom.json`, with the optional keys of `describe-pr-quick` below), one commit on `main` with fixed dates (stable hashes), and the task directory of task #7 with the artifacts the scenario needs. `research-full` and `design-full` also get a style guide at the default path (`docs/design/DESIGN.md`, the six headings of §9.14.2), one plain HTML screen with inline styles (`docs/design/screens/order-summary.html`), and a `## Screens` section in the ticket that names it. The other cases have no design files. `screens-local` has the screens task #12 instead of task #7 (below). `tests/test_evals.py` runs every scaffold and checks that `loom-state` routes it to the case's skill.
 - Graders never call a model (`regex`, `tool_used`, `file_exists` only):
   - `research-full` (full mode, research questions approved):
     - `02-research.md` exists with `status: in-review` and `file:line` references.
@@ -2128,12 +2197,19 @@ evals/
     - No Bash `git push` and no `gh pr create` (`tool_used`, max 0). The fixture has no remote, and `make eval` does not grant `gh`. The skill writes `pr-body.md` before it asks to push, and the run ends at that question.
     - The case needs `gh` installed (not authenticated): without it, `loom-state --pr` warns `gh is not installed`, and the skill stops before it writes the body.
     - Passed 4 of 4 local runs before M9a (haiku, macOS, Homebrew git, about 0.02 USD each); not run on the CI runner yet. In one run Bash denied a chained `cd …; ls …`, so the docs commit and the rebase did not happen; the body was still written. With the M9a fixture (mapped `docs.tasks`, required `## Test plan`) it passed 2 of 2 local runs (about 0.03 USD each), and 1 of 1 with the hardening after M9a (2026-11-12, §24.2).
+  - `screens-local` (a screens task #12 in oneshot mode on `docs/12-loom-screens`, cut from `main` without a commit; the brief has one screen in two states, `order-summary` and `order-summary--empty`, the Audience, References `none`, and a chosen direction; the repository has no style guide and no screen; the prompt is `/loom:screens --local`, so stages 3 and 4 run without a question, §9.14.6):
+    - `<task dir>/DESIGN.md` exists (`file_exists`) and has the six headings of §9.14.2, in order.
+    - `<task dir>/screens/order-summary.html` and `<task dir>/screens/order-summary--empty.html` exist (local mode: one file per state, §9.14.7).
+    - The Screens table of `screens-brief.md` has one row per state, as the brief template has it, and marks both rows, `order-summary` and `order-summary--empty`, `drafted`.
+    - No Bash `git commit` (`tool_used`, max 0), and no `docs/design/DESIGN.md` after the run (`file_exists` with `exists: false`): nothing lands before `/loom:screens approve`.
+    - The kickoff needs `gh` and the canvas needs the `Artifact` tool; eval runs have neither, so they are covered by unit tests and the live run of §9.14.9.
 - Every case has `runs: 1` and `model: haiku` (cost); `--runs 3` and `--model sonnet` override them.
 - The full suite on the code of the hardening after M9a passed 5 of 5 cases (1 run each, haiku, macOS, Homebrew git, 0.32 USD in total, 2026-11-12, §24.2). On the M9b code it passed 6 of 6 cases locally (1 run each, haiku, macOS, Homebrew git, 0.32 USD in total, 2026-11-13).
 - On the M10a code, the full suite passed 6 of 6 cases locally, with every grader (1 run each, haiku, macOS, Homebrew git, 0.35 USD in total, 2026-11-13). The grader `screens-never-touched` passed because its pattern was absent; no run has shown it fail on a real search of the screens directory.
+- On the M10b code, the full suite passed 7 of 7 cases locally, with every grader (1 run each, haiku, macOS, Homebrew git, 0.36 USD in total, 2026-11-13). The canvas path of `screens` has not run: eval runs have no `Artifact` tool (§9.14.9).
 - `make eval` runs the suite with `--scaffold --ablation none --no-publish --trust-plugin`, a `--max-cost-usd` ceiling, and the narrowest `--allow-tools` set: `Write Edit 'Bash(git *)' 'Bash(make *)' 'Bash(loom-state *)' 'Bash(*/bin/loom-state *)'`. It is not part of `make check`. It puts the plugin's `bin/` on `PATH` (the eval runtime does not) and, on macOS only, the developer directory (`xcode-select -p`) first.
 - In loom's CI: `make check` (unit tests and `claude plugin validate --strict`), then `make test` on Python 3.9, on every PR and push to `main` (`.github/workflows/ci.yml`, §21). The evals run only on demand (`.github/workflows/eval.yml`, `workflow_dispatch`, repository secret `ANTHROPIC_API_KEY`), never on a schedule: they cost tokens.
-- `make eval` runs every case, locally and in the Evals workflow. The Evals workflow runs all 6 cases on a pinned `macos-26` runner. Linux cannot run the skill cases: the eval sandbox breaks every Bash call there (§24.2).
+- `make eval` runs every case, locally and in the Evals workflow. The Evals workflow runs all 7 cases on a pinned `macos-26` runner. Linux cannot run the skill cases: the eval sandbox breaks every Bash call there (§24.2).
 - macOS needs Homebrew git (`brew install git`) for `implement-manual` and `describe-pr-quick` (docs commit and rebase). Inside the eval sandbox Bash `git` is always the `/usr/bin/git` shim; without another git it fails, with the Command Line Tools and with full Xcode (§24.2). When the first `git` on the caller's `PATH` (`command -v git`) is `/usr/bin/git`, `make eval` prints a warning that names `brew install git` and still runs every case.
 
 ### 20.3 When to run
@@ -2193,8 +2269,8 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
   - New `loom.json` keys let skills use an existing structure: a docs map, the required CI check, and required PR sections.
   - Specified in §9.13. Both milestones, M9a and M9b (§9.13.8), are implemented and not released yet (`CHANGELOG.md`).
 - **UI design (M10):** an optional style guide and one mockup file per screen, in the repository. Issues name the screens they implement, and the phases read them. A new skill, `screens`, produces them with Claude Design or in local mode. Specified in §9.14, with the milestones M10a and M10b in §9.14.9.
-  - Done in milestone M10a (not released yet, `CHANGELOG.md`): the docs roles `style` and `screens`, the `design` key, and the existing skills and agents read the files.
-  - Planned: M10b, the `screens` skill, for v1.2 or the release after it.
+  - Both milestones are implemented and not released yet (`CHANGELOG.md`). M10a: the docs roles `style` and `screens`, the `design` key, and the existing skills and agents read the files. M10b: the `screens` skill and the screens task, with the routes and refusals in the other skills.
+  - Still to do for M10b: the live run with a canvas (§9.14.9), which verifies the items of §9.14.10.
 
 Done in v1.1 (release 1.1.0, `CHANGELOG.md`):
 
@@ -2234,7 +2310,7 @@ None. Onboarding existing repositories moved to §23.1 (M9, §9.13). It migrates
 
 ### 24.2 To verify against current Claude Code docs during implementation
 
-Still open: nothing.
+Still open: the five items of the `Artifact` tool and the canvas in §9.14.10, for the live run of M10b.
 
 Resolved (corrections to the M9b plan, 2026-11-12):
 

@@ -89,7 +89,7 @@ When `design.screens` is not empty, run [Attach screens](#attach-screens) first,
 
 Follow `issue-format.md` exactly.
 
-1. **Draft** every issue: title, labels, and body (Context, Acceptance Criteria, and Out of Scope when it helps). Add `## Screens` with the paths of `design.screens` that the work implements. When `design.style` is `true` or `design.screens` is not empty, and the work needs a screen that `design.screens` does not have, say so: the screen file must land first, through its own task (for example a `type:docs` issue that adds it). Put `Depends on #<k>` lines at the end of the Context for dependencies on open issues. For dependencies between new drafts, number the drafts (`draft 1`, `draft 2`) and fill in the real numbers after the earlier draft is created.
+1. **Draft** every issue: title, labels, and body (Context, Acceptance Criteria, and Out of Scope when it helps). Add `## Screens` with the paths of `design.screens` that the work implements. When `design.style` is `true` or `design.screens` is not empty, and the work needs a screen that `design.screens` does not have, say so, and name `/loom:screens`: it draws the screen and lands the file through a screens task, before the issue that implements it. Put `Depends on #<k>` lines at the end of the Context for dependencies on open issues. For dependencies between new drafts, number the drafts (`draft 1`, `draft 2`) and fill in the real numbers after the earlier draft is created.
 2. **Labels**: read the existing ones with `gh label list --json name --limit 200`. Use only labels that exist. If the loom labels are missing, add `Warning: loom labels missing; /loom:setup creates them` to the final message.
 3. **Show the full list**: every draft with its title, labels, and body. Ask for confirmation. The user may drop or change drafts; show the changed drafts again.
 4. **After "yes"**, create the issues in order. For each one:
@@ -144,6 +144,6 @@ Warning: <one line per warning, if any>
 Next: <next step>
 ```
 
-- `Next:` comes from `next.command`, mapped as `final-answer.md` describes. On `<main>`, `next.command` is `/loom:start-task #<n>`: fill in the recommended issue number.
+- `Next:` comes from `next.command`, mapped as `final-answer.md` describes. On `<main>`, `next.command` is `/loom:start-task #<n>`: fill in the recommended issue number. When the title of the recommended issue starts with `Design screens:`, write `/loom:screens` instead: `start-task` refuses such an issue, and `screens` starts its task.
 - With an active task, `Next:` is the task's next step; add `Warning: task #<task.number> is still active` when the user wants to start another issue.
 - When you only discussed and created nothing, write `Result: no changes` and the recommendation, if any.

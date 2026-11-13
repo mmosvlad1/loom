@@ -96,7 +96,7 @@ Agents do not edit the ticket, except these frontmatter fields: `mode` and `pr`.
 
 ## `log.md`
 
-`log.md` has no frontmatter. Its headings are machine-readable. Only `implement` (and `iterate` for fixes) writes it:
+`log.md` has no frontmatter. Its headings are machine-readable. Only `implement` (and `iterate` for fixes) writes it; `setup` and `screens` write the entries of their own tasks:
 
 ```markdown
 ## Phase 1 — done — d4e5f6

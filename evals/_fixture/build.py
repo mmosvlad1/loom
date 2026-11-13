@@ -26,6 +26,9 @@ Scenarios:
                     loom.json maps docs.tasks to notes/loom-tasks and requires the PR section ## Test plan
   design-onboarding the onboarding task #1 (setup task, full mode) on chore/1-loom-setup after the kickoff
                     commit, research approved; AGENTS.md without CLAUDE.md, a CI job named `test`
+  screens-local     the screens task #12 (oneshot) on docs/12-loom-screens, cut from main without a commit;
+                    a brief with one screen and its states in the Scope, the Audience, References `none`,
+                    and a chosen direction; no style guide and no screen in the repository
 """
 from __future__ import annotations
 
@@ -1137,6 +1140,83 @@ def scenario_design_onboarding() -> None:
                         git_commit=git("rev-parse", "--short", "HEAD"))
 
 
+# ---------------------------------------------------------------------------
+# screens-local: a screens task before its stages 3 and 4 (LOOM_SPEC.md 9.14.6, 9.14.9)
+# ---------------------------------------------------------------------------
+
+SCREENS_ISSUE = 12
+SCREENS_TASK = "%d-loom-screens" % SCREENS_ISSUE
+SCREENS_BRANCH = "docs/" + SCREENS_TASK
+SCREENS_TASK_DIR = os.path.join(".loom", "tasks", SCREENS_TASK)
+SCREENS_ISSUE_URL = "https://github.com/example/shop/issues/%d" % SCREENS_ISSUE
+# The one screen of the scope, in two states: the default state and `empty` (LOOM_SPEC.md 9.14.3).
+SCREEN_ID = "order-summary"
+
+# The issue of the screens task as the kickoff creates it (LOOM_SPEC.md 9.14.6 step 5): one acceptance
+# criterion per screen and state, no `## Screens` section.
+SCREENS_ISSUE_BODY = """\
+## Context
+
+Issue #7 adds bulk discount tiers to the receipt. The order summary of the shop has no screen yet, so the
+look of the discount line and of an empty cart is open. This task draws the screen and lands the style guide.
+
+## Acceptance Criteria
+
+- [ ] order-summary: the items, the bulk discount line, and the total of a cart with 52 items
+- [ ] order-summary--empty: a cart without items
+"""
+
+# The brief after stages 1 and 2 (LOOM_SPEC.md 9.14.6): Scope, Audience, References `none`, and a chosen
+# direction. The project has no style guide, so stage 3 drafts one and stage 4 draws the screen.
+SCREENS_BRIEF = """\
+## Scope
+
+- `order-summary`: default, empty; serves #7 (bulk discount tiers on the receipt)
+
+## Audience
+
+Wholesale customers who buy notebooks and pens in large quantities. The order summary must first show
+what the bulk discount saves, then the total.
+
+## References
+
+none
+
+## Direction
+
+Plain ledger: calm and quiet, like a printed paper slip; numbers line up in one column.
+
+## Decisions
+
+- 2026-11-12: References none; the user gave no site, screenshot, or brand asset.
+- 2026-11-12: Direction "Plain ledger", chosen by the user from three directions.
+
+## Screens
+
+| Screen ID | Status |
+|---|---|
+| order-summary | planned |
+| order-summary--empty | planned |
+"""
+
+
+def scenario_screens_local() -> None:
+    """A screens task on docs/12-loom-screens whose brief holds the results of stages 1 and 2.
+
+    The branch is cut from main and has no commit; the repository has no style guide and no screen.
+    So /loom:screens --local runs stages 3 and 4 without a question and stops before the landing.
+    """
+    build_repo()
+    git("switch", "-q", "-c", SCREENS_BRANCH)
+    fields = {"task": SCREENS_TASK, "phase": "ticket", "mode": "oneshot", "size": "S",
+              "issue": str(SCREENS_ISSUE), "url": SCREENS_ISSUE_URL}
+    write(os.path.join(SCREENS_TASK_DIR, "00-ticket.md"), frontmatter(fields) + (
+        "# Design screens: order summary\n\nLabels: type:docs, size:S, mode:oneshot\nURL: %s\n\n"
+        % SCREENS_ISSUE_URL) + SCREENS_ISSUE_BODY)
+    write(os.path.join(SCREENS_TASK_DIR, "screens-brief.md"),
+          frontmatter({"task": SCREENS_TASK, "updated": "2026-11-12", "drawing": "local"}) + SCREENS_BRIEF)
+
+
 SCENARIOS = {
     "research-full": scenario_research_full,
     "design-full": scenario_design_full,
@@ -1144,6 +1224,7 @@ SCENARIOS = {
     "guard-main": scenario_guard_main,
     "describe-pr-quick": scenario_describe_pr_quick,
     "design-onboarding": scenario_design_onboarding,
+    "screens-local": scenario_screens_local,
 }
 
 

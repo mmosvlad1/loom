@@ -73,5 +73,6 @@ Without required sections, nothing goes here.
 <!--
 oneshot mode: a short body with only three parts, in this order: the `Closes #<n>` line, the Why section, and the Verification section.
 No Special things to note, no Change outline, no Decisions, and no plan.
+A screens task adds one `Closes #<k>` line per covered update issue whose screen is in the branch diff, right after `Closes #<n>`.
 The required sections that this layout does not have are the exception: they come after the Verification section.
 -->
