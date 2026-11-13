@@ -71,11 +71,12 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 |---|---|---|
 | The state is empty | `not a loom project (no .claude/loom.json)` | `/loom:setup` |
 | `onMain` is `true` | `on the main branch; no task` | `/loom:start-task #<n>` |
-| `task` is `null` | `branch <branch> matches no task` | `/loom:start-task #<n>` |
+| `task` is `null` | `branch <branch> matches no task` | from `next.command` (`/loom:start-task #<k>`; `/loom:screens` on a branch `docs/<k>-loom-screens`) |
 | `task.archived` is `true` | `task #<n> is archived` | `/loom:start-task #<n>` (offers a restore) |
 | `rebaseInProgress` is `true` | `a rebase of <branch> is in progress` | `/loom:iterate rebase` |
 | `workingTree` is `null` | `git status failed: <the error from its warning>` | `fix the git error, then /loom:next` |
 | `pr.state` is `MERGED` | `PR #<number> is merged` | `/loom:finish-task` |
+| `task.screens` is `true`, and `next.command` is `/loom:screens` (implementation phase 1 is `pending` or `in-progress`, or the working tree is dirty) | `screens task #<n> has drafts or a landing that are not committed` | `/loom:screens` |
 | `pr.state` is `OPEN` | `PR #<number> is already open; change it with /loom:iterate` | from `next.command` |
 | `implementation.blocked` or `implementation.inProgress` is set | `implementation is not finished` | from `next.command` |
 | `implementation.total` is `0`, or `implementation.done` is less than `implementation.total` | `implementation is not finished (<done> of <total> phases done)` | from `next.command` |
@@ -84,6 +85,7 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 | `task.pr` is set and `pr` is `null` (`gh` failed) | `PR #<task.pr> state unknown (gh: <the gh warning>)` | — (fix `gh`, then run `/loom:describe-pr` again) |
 | `warnings` says `gh` is not installed | `gh is not installed; the PR needs it` | — |
 
+- A screens task stops while `loom-state` routes it to `/loom:screens`. A tree that is dirty only in the docs paths is then a landing that stopped, not a docs refresh: never commit it here.
 - If `pr.state` is `OPEN` and `task.pr` is not set, an earlier run created the PR but stopped. Write `pr: <number>` into the `00-ticket.md` frontmatter (step 8), then stop with the `PR #<number> is already open` row.
 - While `task.pr` is not set, other `gh` warnings (for example `gh auth login` is missing, or the repository has no remote) do not stop it here. Steps 3-8 still write the docs and `pr-body.md`; step 8 stops when the push or `gh pr create` fails. With `task.pr` set, a failed `gh` stops it (the row above): the PR may exist, so do not redo the docs, the rebase, or the PR.
 - Re-running after a partial failure is safe: every step below checks what already exists.
@@ -162,6 +164,11 @@ Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`,
 2. **Body**: write `<task dir>/pr-body.md` from `pr-template.md`. A re-run finds the file of the earlier run: Read it before you Write it (`git-flow.md`).
    - quick and full, in this order: `Closes #<n>`, Why, Special things to note, Change outline, Verification, Decisions, then the body of `04-plan.md` (without frontmatter) inside `<details><summary>Implementation plan</summary>`.
    - oneshot: only `Closes #<n>`, Why, and Verification. Keep it short.
+   - **Covered issues** (a screens task, `task.screens` is `true`): for each `Covers #<k>` line of the ticket's Context, add the line `Closes #<k>` after `Closes #<n>`, only when the screen of issue `#<k>` is in the branch diff. The shared `pr-update.md` repeats this method for a later update of the body:
+     - For each `Covers #<k>` line of the ticket's Context, run `gh issue view <k> --json title`. Its title `Design screens: update <screen ID>` names the screen.
+     - The branch diff: `git diff origin/<main>...HEAD --name-only` (without `origin/<main>`: the local `<main>`; `<main>` is `mainBranch`).
+     - The screen is in the diff when the diff lists a file below `docs.screens` with that screen ID. Then add the line `Closes #<k>` after `Closes #<n>`.
+     - Keep no line whose screen is not in the diff: a covered issue whose screen did not land stays open.
    - **Why** is exactly one sentence of at most 25 words: the problem or need this PR answers (from `00-ticket.md`). It is not a list of what changed.
    - **Special things to note** has 1-3 list items, most important first: only what a reviewer must know and cannot see quickly in the diff. Candidates: a deviation or addition from `log.md`, a risk, a non-obvious decision, a migration or manual step (also a manual verification step the user has not confirmed), a known limit. If nothing qualifies, write the single line None. (plain text, no backticks); never add filler.
    - **Change outline** has one line per implementation phase (`1. <phase name> — <commit subject>`), then one visual: a file tree of the changed files only, or an interface `diff` block with only signatures and public API. Pick the one that shows the shape of the change better (`visual-conventions.md`). Omit unchanged parts.
@@ -192,7 +199,7 @@ Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`,
 ## 9. Follow-up issues
 
 1. Collect follow-ups: the task summary's Follow-ups (oneshot: worthwhile nits and open problems from `log.md`). On the onboarding task, check that every `Follow-up:` line of the design's Out of Scope is among them; add a missing one.
-   - **Screens.** Only when the ticket has a `## Screens` section. For each of its screens that a Resolved Decision (`03-design.md`, `04-plan.md`) or a deviation in `log.md` names, add one follow-up titled `Design screens: update <screen ID>`, labeled `type:docs`. Its Context names the screen path and the difference, so the screen can follow the code. It has no `## Screens` section.
+   - **Screens.** Only when the ticket has a `## Screens` section. For each of its screens that a Resolved Decision (`03-design.md`, `04-plan.md`) or a deviation in `log.md` names, add one follow-up titled `Design screens: update <screen ID>`, labeled `type:docs`. Its Context names the screen path and the difference, so the screen can follow the code. It has no `## Screens` section. A screens task covers it: the next `/loom:screens` kickoff offers it.
 2. If there are none, skip this step.
 3. Draft each follow-up as an issue in the format of `issue-format.md`: Context starts with `Follow-up from #<n>` and links the PR.
 4. Show the drafts. Ask the user which ones to create. Create only confirmed issues, with `gh issue create` as `issue-format.md` describes.

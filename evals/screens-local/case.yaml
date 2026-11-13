@@ -1,0 +1,20 @@
+schema_version: "1.1"
+name: screens-local
+description: >-
+  A screens task in oneshot mode whose brief holds one screen with its states, the Audience,
+  References none, and a chosen direction; the repository has no style guide. /loom:screens --local
+  runs stages 3 and 4 without a question: it drafts <task dir>/DESIGN.md with the six sections of the
+  style guide, writes each state of the screen as <task dir>/screens/<screen ID>.html (order-summary
+  and order-summary--empty), marks both rows of the brief's Screens table drafted (one row per state,
+  as the brief template has it), and lands nothing before approve: no commit and no
+  docs/design/DESIGN.md (LOOM_SPEC.md 9.14.6, 9.14.7, 9.14.9).
+tags: [screens, oneshot]
+runs: 1
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: haiku
+  max_turns: 60
+  timeout_seconds: 1200
+  allowed_tools: [Read, Glob, Grep, Skill]
+  prompt: /loom:screens --local

@@ -359,6 +359,120 @@ class TaskLookupTest(RepoTestCase):
         self.assertTrue(any("mode" in w for w in s["warnings"]))
 
 
+class ScreensTaskStateTest(RepoTestCase):
+    """The screens task in loom-state: task.screens, the reserved slug, rows 2, 2b, and 2d (LOOM_SPEC.md 9.14.6)."""
+
+    def screens_task(self, mode: str = "oneshot", number: int = 57) -> str:
+        d = self.task_dir("%d-loom-screens" % number)
+        self.ticket(d, mode=mode, issue=number)
+        git(self.repo, "switch", "-q", "-c", "docs/%d-loom-screens" % number)
+        return d
+
+    def test_task_screens(self):
+        """task.screens: true only on the branch docs/<n>-loom-screens; a task is never both."""
+        cases = (("docs/57-loom-screens", "57-loom-screens", True), ("docs/58-loom-screens", "58-renamed", True),
+                 ("docs/59-other", "59-other", False), ("chore/60-loom-screens", "60-loom-screens", False),
+                 ("docs/61-loom-screens-task", "61-loom-screens-task", False),
+                 ("chore/62-loom-setup", "62-loom-setup", False))
+        for branch, dirname, expected in cases:
+            with self.subTest(branch=branch):
+                issue = int(dirname.split("-")[0])
+                self.ticket(self.task_dir(dirname), mode="oneshot", issue=issue)
+                git(self.repo, "switch", "-q", "-c", branch)
+                s = self.state()
+                self.assertIs(s["task"]["screens"], expected)
+                self.assertFalse(s["task"]["screens"] and s["task"]["setup"])
+                self.assertEqual(json.loads(run_loom_state(self.repo).stdout)["task"]["screens"], expected)
+                git(self.repo, "switch", "-q", "main")
+
+    def test_reserved_slug(self):
+        cases = {"Loom screens": "loom-screens-task", "  LOOM: Screens! ": "loom-screens-task",
+                 "Loom-screens": "loom-screens-task", "Loom screens task": "loom-screens-task",
+                 "Loom screens notes": "loom-screens-notes", "Design screens: sign-in": "design-screens-sign-in",
+                 "Loom setup": "loom-setup-task"}
+        for title, slug in cases.items():
+            with self.subTest(title=title):
+                self.assertEqual(ls.slugify(title), slug)
+        self.assertFalse(ls.SCREENS_BRANCH_RE.match("docs/1-%s" % ls.slugify("Loom screens")))
+        proc = run_loom_state(self.tmp, "--slug", "Loom screens")
+        self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "loom-screens-task\n", ""))
+
+    def test_row2_screens_branch_without_task_directory(self):
+        git(self.repo, "switch", "-q", "-c", "docs/57-loom-screens")
+        s = self.state()
+        self.assertIsNone(s["task"])
+        self.assertEqual(s["next"]["command"], "/loom:screens")
+        self.assertIn("/loom:screens restores it", s["next"]["reason"])
+
+    def test_row2b_quick_and_full_are_invalid(self):
+        for mode in ("quick", "full", "huge"):
+            with self.subTest(mode=mode):
+                self.ticket(self.task_dir("57-loom-screens"), mode=mode, issue=57)
+                if mode == "quick":
+                    git(self.repo, "switch", "-q", "-c", "docs/57-loom-screens")
+                s = self.state()
+                self.assertEqual(s["task"]["mode"], mode)
+                self.assertEqual(s["next"]["command"], "/loom:screens")
+                self.assertEqual(len([w for w in s["warnings"] if "mode" in w]), 1, s["warnings"])
+        s = self.state()
+        self.assertTrue(any("no valid mode (got 'huge')" in w for w in s["warnings"]), s["warnings"])
+        self.ticket(self.task_dir("57-loom-screens"), mode="full", issue=57)
+        self.assertIn("00-ticket.md has no valid mode for the screens task (got 'full'); a screens task is oneshot",
+                      self.state()["warnings"])
+
+    def test_row2d_phase1_pending(self):
+        self.screens_task()
+        s = self.state()
+        self.assertEqual(s["warnings"], [])
+        self.assertEqual(s["next"]["command"], "/loom:screens")
+        self.assertIn("not landed yet (implementation phase 1 is pending)", s["next"]["reason"])
+
+    def test_row2d_landing_then_feedback_then_landing(self):
+        d = self.screens_task()
+        log = os.path.join(d, "log.md")
+        write(self.path("docs", "design", "DESIGN.md"), "# Style guide\n")
+        write(self.path("docs", "design", "screens", "sign-in.html"), "<html></html>\n")
+        git(self.repo, "add", "docs")
+        git(self.repo, "commit", "-q", "-m", "docs(design): add the sign-in screen (#57)", "-m", "Phase 1: oneshot")
+        write(log, "## Phase 1 — done — abc1234\n")
+        s = self.state()
+        self.assertEqual((s["workingTree"], s["next"]["command"]), ("clean", "/loom:describe-pr"))
+        # Feedback after the landing: in-progress again, until the next landing.
+        write(log, "## Phase 1 — done — abc1234\n\n## Phase 1 — in-progress\n")
+        s = self.state()
+        self.assertEqual(s["implementation"]["inProgress"], 1)
+        self.assertEqual(s["next"]["command"], "/loom:screens")
+        self.assertIn("phase 1 is in-progress", s["next"]["reason"])
+        # A landing that stopped on failing checks: the tree is dirty only in the docs paths.
+        write(self.path("docs", "design", "screens", "sign-in.html"), "<html><body></body></html>\n")
+        write(self.path("docs", "design", "screens", "sign-in--error.html"), "<html></html>\n")
+        write(log, "## Phase 1 — done — abc1234\n\n## Phase 1 — in-progress\n\n## Phase 1 — done — abc1234\n")
+        s = self.state()
+        self.assertEqual((s["workingTree"], s["workingTreeDocsOnly"]), ("dirty", True))
+        self.assertEqual(s["next"]["command"], "/loom:screens")
+        self.assertIn("uncommitted changes", s["next"]["reason"])
+        self.assertEqual(s["warnings"], [])
+        # The fix commit lands it: the oneshot routes again.
+        git(self.repo, "add", "docs")
+        git(self.repo, "commit", "-q", "-m", "docs(design): add the error state (#57)",
+            "-m", "Phase 1: oneshot\n\nFix: add the error state")
+        self.assertEqual(self.state()["next"]["command"], "/loom:describe-pr")
+
+    def test_ordinary_docs_task_routes_as_before(self):
+        d = self.task_dir("59-other")
+        self.ticket(d, mode="oneshot", issue=59)
+        git(self.repo, "switch", "-q", "-c", "docs/59-other")
+        s = self.state()
+        self.assertFalse(s["task"]["screens"])
+        self.assertEqual(s["next"]["command"], "/loom:implement")
+        write(os.path.join(d, "log.md"), "## Phase 1 — done — abc1234\n")
+        write(self.path("docs", "design", "DESIGN.md"), "# Style guide\n")
+        self.assertEqual(self.state()["next"]["command"], "/loom:describe-pr")
+        os.remove(os.path.join(d, "log.md"))
+        self.ticket(d, mode="quick", issue=59)
+        self.assertEqual(self.state()["next"]["command"], "/loom:research")
+
+
 class ArtifactsAndLineTest(RepoTestCase):
     def setUp(self):
         super().setUp()

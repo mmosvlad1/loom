@@ -114,6 +114,12 @@ BRANCH_RE = re.compile(r"^(feat|fix|chore|docs|refactor)/([0-9]+)-(.+)$")
 SETUP_SLUG = "loom-setup"
 SETUP_SLUG_REPLACEMENT = "loom-setup-task"
 SETUP_BRANCH_RE = re.compile(r"^chore/([0-9]+)-%s$" % SETUP_SLUG)
+# The screens task (LOOM_SPEC.md 9.14.6): its branch, and the slug only it may use.
+SCREENS_SLUG = "loom-screens"
+SCREENS_SLUG_REPLACEMENT = "loom-screens-task"
+SCREENS_BRANCH_RE = re.compile(r"^docs/([0-9]+)-%s$" % SCREENS_SLUG)
+# Slugs that start-task never gives a branch: each belongs to one kind of task.
+RESERVED_SLUGS = {SETUP_SLUG: SETUP_SLUG_REPLACEMENT, SCREENS_SLUG: SCREENS_SLUG_REPLACEMENT}
 # .claude/loom.json as git names it (CONFIG_PATH uses the OS separator).
 CONFIG_FILE = ".claude/loom.json"
 
@@ -1898,12 +1904,16 @@ def compute_state(cwd: str, with_pr: bool = False, for_line: bool = False) -> Op
                     size = None
             mode = normalize_mode(ticket.get("mode"))
             setup = bool(SETUP_BRANCH_RE.match(branch or ""))
+            screens = bool(SCREENS_BRANCH_RE.match(branch or ""))
             if mode not in MODES:
                 warnings.append("%s has no valid mode (got %r)" % (TICKET_FILE, mode))
                 mode = mode or None
             elif setup and mode not in SETUP_MODES:
                 warnings.append("%s has no valid mode for the setup task (got %r); no setup path uses %s"
                                 % (TICKET_FILE, mode, mode))
+            elif screens and mode not in SCREENS_MODES:
+                warnings.append("%s has no valid mode for the screens task (got %r); a screens task is oneshot"
+                                % (TICKET_FILE, mode))
             pr_number = _to_int(ticket.get("pr"))
             if pr_number is not None and pr_number < 1:
                 pr_number = None  # PR numbers start at 1
@@ -1919,6 +1929,8 @@ def compute_state(cwd: str, with_pr: bool = False, for_line: bool = False) -> Op
                 "archived": archived,
                 # The setup task (LOOM_SPEC.md 9.13.1): known by its branch, not by a ticket field.
                 "setup": setup,
+                # The screens task (LOOM_SPEC.md 9.14.6): known by its branch too.
+                "screens": screens,
                 "url": ticket.get("url"),
                 "pr": pr_number,
                 "metrics": task_metrics(task_dir),
@@ -2064,11 +2076,18 @@ def _phase_status(impl: Dict[str, Any], number: int) -> str:
 
 # Modes that a setup path writes (LOOM_SPEC.md 5.3): on a setup task `quick` is invalid.
 SETUP_MODES = ("oneshot", "full")
+# The mode of a screens task (LOOM_SPEC.md 9.14.6): quick and full are invalid there.
+SCREENS_MODES = ("oneshot",)
 
 
 def mode_is_valid(task: Dict[str, Any]) -> bool:
-    """The ticket has a valid mode: oneshot, quick, or full; on a setup task only oneshot or full."""
-    return task.get("mode") in (SETUP_MODES if task.get("setup") else MODES)
+    """The ticket has a valid mode: oneshot, quick, or full; on a setup task only oneshot or full;
+    on a screens task only oneshot."""
+    if task.get("setup"):
+        return task.get("mode") in SETUP_MODES
+    if task.get("screens"):
+        return task.get("mode") in SCREENS_MODES
+    return task.get("mode") in MODES
 
 
 def setup_unfinished(task: Dict[str, Any], artifacts: List[Dict[str, Any]], impl: Dict[str, Any]) -> Optional[str]:
@@ -2105,6 +2124,31 @@ def setup_unfinished(task: Dict[str, Any], artifacts: List[Dict[str, Any]], impl
     return None
 
 
+def screens_unlanded(state: Dict[str, Any]) -> Optional[str]:
+    """Why a screens task goes back to /loom:screens (LOOM_SPEC.md 9.12 row 2d), or None.
+
+    Implementation phase 1 is pending (not landed yet) or in progress (feedback
+    after a landing, until the next landing writes `done`), or the working
+    tree is dirty, docs-only included (a landing that stopped on failing
+    checks). A blocked phase 1 stays with row 3, like on a setup task:
+    `iterate` writes it when a fix on the PR fails. With a merged PR,
+    decide_next routes to /loom:finish-task instead.
+    """
+    task = state.get("task") or {}
+    if not task.get("screens"):
+        return None
+    status = _phase_status(state.get("implementation") or {}, 1)
+    if status == "blocked":
+        return None
+    if status == "pending":
+        return "the screens are not landed yet (implementation phase 1 is pending)"
+    if status == "in-progress":
+        return "the screens have changes that are not landed yet (implementation phase 1 is in-progress)"
+    if state.get("workingTree") == "dirty":
+        return "the working tree has uncommitted changes, for example of a landing that stopped on failing checks"
+    return None
+
+
 UNCOMMITTED_BEFORE_PLAN_WARNING = (
     "working tree has uncommitted changes; they are not part of research, design, or plan "
     "(commit, stash, or discard them before /loom:implement)"
@@ -2121,7 +2165,7 @@ def routing_warnings(state: Dict[str, Any]) -> List[str]:
     if state.get("onMain") or not task or task.get("archived"):
         return []
     if not mode_is_valid(task):
-        # An invalid mode routes to the mode change (or /loom:setup); the plan is not the reason.
+        # An invalid mode routes to the mode change (or /loom:setup, /loom:screens); the plan is not the reason.
         return []
     impl = state.get("implementation") or {}
     artifacts = state.get("artifacts") or []
@@ -2175,6 +2219,11 @@ def _decide(state: Dict[str, Any]) -> Dict[str, str]:
 
     # Row 2: no task for this branch, or the task is archived.
     if not task:
+        screens = SCREENS_BRANCH_RE.match(branch or "")
+        if screens:
+            # The screens skill restores the task directory of its branch (LOOM_SPEC.md 9.14.6).
+            n = int(screens.group(1))
+            return _next("/loom:screens", "no task directory for screens task #%d; /loom:screens restores it" % n)
         m = BRANCH_RE.match(branch or "")
         if m:
             n = int(m.group(2))
@@ -2202,11 +2251,17 @@ def _decide(state: Dict[str, Any]) -> Dict[str, str]:
     # phases, the plan gate), so nothing else runs until the mode is set
     # again. setup owns the ticket of the setup task: its re-run writes the
     # mode of its path (LOOM_SPEC.md 5.3); no setup path uses `quick`.
+    # screens owns the ticket of the screens task the same way: only oneshot.
     if not mode_is_valid(task):
         if task.get("setup"):
             problem = "has mode quick, which no setup path uses" if task.get("mode") == "quick" else \
                 "has no valid mode"
             return _next("/loom:setup", "%s of setup task #%s %s; /loom:setup writes the mode of its path again"
+                         % (TICKET_FILE, number, problem))
+        if task.get("screens"):
+            # A screens task is oneshot (LOOM_SPEC.md 9.14.6): quick and full are invalid too.
+            problem = "has mode %s" % task.get("mode") if task.get("mode") in MODES else "has no valid mode"
+            return _next("/loom:screens", "%s of screens task #%s %s, not oneshot; /loom:screens writes oneshot again"
                          % (TICKET_FILE, number, problem))
         return _next("/loom:iterate mode <oneshot|quick|full>",
                      "%s has no valid mode; set it with a mode change" % TICKET_FILE)
@@ -2219,6 +2274,18 @@ def _decide(state: Dict[str, Any]) -> Dict[str, str]:
     unfinished = setup_unfinished(task, artifacts, impl)
     if unfinished:
         return _next("/loom:setup", "setup task #%s: %s; /loom:setup continues it" % (number, unfinished))
+
+    # Row 2d: a screens task with screens that are not landed, or with a dirty
+    # tree, goes back to /loom:screens: implement would build the screens from
+    # the ticket, and describe-pr or finish-task would commit a docs-only tree
+    # of a stopped landing as an interrupted docs refresh. After the merge,
+    # /loom:finish-task cleans up (it offers a stash first, like row 5).
+    unlanded = screens_unlanded(state)
+    if unlanded:
+        pr_state = state.get("pr")
+        if isinstance(pr_state, dict) and str(pr_state.get("state") or "").upper() == "MERGED":
+            return _route_pr(pr_state)
+        return _next("/loom:screens", "screens task #%s: %s; /loom:screens continues it" % (number, unlanded))
 
     # The plan gate after implementation started: a plan changed by
     # /loom:iterate (draft while the edit runs, then in-review) must be
@@ -2456,9 +2523,9 @@ def slugify(title: str) -> str:
     while len(words) > 1 and len("-".join(words)) > SLUG_MAX_CHARS:
         words.pop()
     slug = "-".join(words)[:SLUG_MAX_CHARS].strip("-") or SLUG_FALLBACK
-    # The setup task owns `loom-setup` (LOOM_SPEC.md 9.13.1): start-task never
-    # creates a branch chore/<n>-loom-setup.
-    return SETUP_SLUG_REPLACEMENT if slug == SETUP_SLUG else slug
+    # The setup task owns `loom-setup` (LOOM_SPEC.md 9.13.1), the screens task
+    # owns `loom-screens` (9.14.6): start-task never creates their branches.
+    return RESERVED_SLUGS.get(slug, slug)
 
 
 # ---------------------------------------------------------------------------

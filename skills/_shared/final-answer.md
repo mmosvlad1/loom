@@ -26,7 +26,7 @@ Optional lines, in this order, between `Open questions` and `Next`:
 - **Next**: compute it, do not remember it. Run `loom-state --json` (the plugin's `bin/` is on the Bash `PATH`) after your last write and read `next.command`:
   - `/loom:iterate …` (open round, approval, fix): write the command; it continues in this session.
   - A phase command (`/loom:research-questions`, `/loom:research`, `/loom:design`, `/loom:plan`, `/loom:implement`), `/loom:describe-pr`, or `/loom:finish-task`: write `/clear, then <command>`, e.g. `/clear, then /loom:design`. A phase that the user invokes by its own command runs with the `model` and `effort` of its skill. Through `/loom:next` it does not.
-  - `/loom:start-task …`, `/loom:backlog`, or `/loom:setup`: write the command as it is. Write `/clear, then` before it only when this session did real work (wrote an artifact, committed, created an issue, or merged).
+  - `/loom:start-task …`, `/loom:backlog`, `/loom:setup`, or `/loom:screens`: write the command as it is. Write `/clear, then` before it only when this session did real work (wrote an artifact, committed, created an issue, or merged).
   - With manual verification steps, write `run the manual steps, then ` before the mapped command. The manual steps do not change the state. Normally it is `run the manual steps, then /clear, then /loom:implement`. After the last implementation phase it is `/clear, then /loom:describe-pr`, or `/clear, then /loom:finish-task` with an open PR.
   - Write `/loom:next` only where the skill's own text names it. There a step of the user comes first and changes the state, so the next command is not known yet:
     - a git error to fix (`workingTree` is `null`);

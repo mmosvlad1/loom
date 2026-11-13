@@ -300,6 +300,25 @@ class PlanAndLogTest(unittest.TestCase):
         self.assertEqual(phases[2], {"status": "blocked", "commit": None, "reason": "storage API missing"})
         self.assertEqual(phases[3]["commit"], "abc1234")
 
+    def test_latest_heading_of_a_phase_wins(self):
+        # Feedback on a landed screens task appends `in-progress` after `done` (LOOM_SPEC.md 9.14.6);
+        # the next landing appends `done` again.
+        log = dedent("""
+            ## Phase 1 — done — d4e5f6
+            Checks: make check ✓
+
+            ## Phase 1 — in-progress
+        """)
+        self.assertEqual(ls.parse_log(log)[1], {"status": "in-progress", "commit": None, "reason": None})
+        impl, warnings = ls.implementation_progress("oneshot", None, log)
+        self.assertEqual(warnings, [])
+        self.assertEqual((impl["total"], impl["done"], impl["inProgress"], impl["blocked"]), (1, 0, 1, None))
+        self.assertEqual(impl["phases"], [{"number": 1, "status": "in-progress", "commit": None}])
+        log += "\n## Phase 1 — done — a1b2c3d\nFix: tighten the spacing\n"
+        impl, _ = ls.implementation_progress("oneshot", None, log)
+        self.assertEqual((impl["done"], impl["inProgress"]), (1, None))
+        self.assertEqual(impl["phases"][0]["commit"], "a1b2c3d")
+
     def test_blocked_reason_in_heading(self):
         phases = ls.parse_log("## Phase 1 — blocked — tests keep failing\n")
         self.assertEqual(phases[1]["reason"], "tests keep failing")

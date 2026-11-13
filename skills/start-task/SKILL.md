@@ -71,6 +71,7 @@ Run `gh issue view <n> --json title,body,labels,url,state`.
 - It fails: stop with `Result: issue #<n> not found: <the error>`, `Next: /loom:backlog`.
 - `state` is `CLOSED`: ask whether to start it anyway.
 - The title is `Set up loom`: stop with `Result: #<n> is the setup task`, `Next: /loom:setup` (setup owns its branch and ticket).
+- The title starts with `Design screens:`: stop with `Result: #<n> is a screens issue; /loom:screens draws and lands its screens`, `Next: /loom:screens`. `screens` owns the branch and the ticket of a screens task: it continues the task of the issue (it also restores an archived task directory), or its next kickoff offers the issue, also an update issue `Design screens: update <screen ID>`.
 
 ## 4. Existing task directory
 

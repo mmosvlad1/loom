@@ -2,7 +2,7 @@
 
 `<task dir>/log.md` records every implementation phase. `loom-state` parses its headings to compute `implementation` (phase statuses, `inProgress`, `blocked`) and the next step. The body lines are for people and for `describe-pr`.
 
-`implement` writes it; `iterate` appends fix and plan-change entries. The implementer agent never writes it.
+`implement` writes it; `iterate` appends fix and plan-change entries. `setup` and `screens` write the entries of their own tasks. The implementer agent never writes it.
 
 ## Rules
 

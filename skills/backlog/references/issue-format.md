@@ -1,6 +1,6 @@
 # Issue Format
 
-The format of a GitHub issue that loom creates: from `backlog`, from free text in `start-task`, and for follow-ups in `describe-pr`. `start-task` copies the issue into `00-ticket.md`, so a good issue is a good ticket.
+The format of a GitHub issue that loom creates: from `backlog`, from free text in `start-task`, for follow-ups in `describe-pr`, and for a screens task in `screens`. `start-task` copies the issue into `00-ticket.md`, so a good issue is a good ticket.
 
 ## Title
 

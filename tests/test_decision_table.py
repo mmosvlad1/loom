@@ -790,6 +790,200 @@ class SetupTaskRoutingTest(unittest.TestCase):
         self.assertNext(s, "/loom:start-task #3", "archived")
 
 
+def screens_state(mode: Any = "oneshot", status: str = "pending", **overrides: Any) -> Dict[str, Any]:
+    """A screens task (task.screens true) on docs/57-loom-screens with phase 1 in `status`."""
+    overrides.setdefault("implementation", oneshot_impl(status))
+    s = state(mode, (), branch="docs/57-loom-screens", **overrides)
+    s["task"].update({"number": 57, "slug": "loom-screens", "dir": ".loom/tasks/57-loom-screens",
+                      "setup": False, "screens": True})
+    return s
+
+
+class ScreensTaskRoutingTest(unittest.TestCase):
+    """Rows 2, 2b, and 2d for screens tasks (LOOM_SPEC.md 9.12, 9.14.6)."""
+
+    assertNext = DecisionTableTest.assertNext
+
+    # Row 2: a screens branch without a task directory names /loom:screens, which restores it.
+    def test_row2_screens_branch_without_directory(self):
+        for tree in ("clean", "dirty", None):
+            with self.subTest(tree=tree):
+                s = state(branch="docs/57-loom-screens", task=None, workingTree=tree)
+                r = self.assertNext(s, "/loom:screens", "no task directory for screens task #57")
+                self.assertIn("/loom:screens restores it", r["reason"])
+
+    def test_row2_other_branches_keep_start_task(self):
+        for branch, command in (("docs/57-other", "/loom:start-task #57"),
+                                ("chore/57-loom-screens", "/loom:start-task #57"),
+                                ("docs/57-loom-screens-task", "/loom:start-task #57"),
+                                ("chore/3-loom-setup", "/loom:start-task #3"),
+                                ("docs/x-loom-screens", "/loom:start-task #<n>")):
+            with self.subTest(branch=branch):
+                self.assertNext(state(branch=branch, task=None), command)
+
+    def test_row2_archived_screens_task_keeps_start_task(self):
+        s = screens_state(status="done")
+        s["task"]["archived"] = True
+        self.assertNext(s, "/loom:start-task #57", "archived")
+
+    # Row 2b: only oneshot is valid on a screens task.
+    def test_row2b_screens_task_invalid_mode_goes_to_screens(self):
+        variants = {
+            "plain": {},
+            "dirty": dict(workingTree="dirty"),
+            "done": dict(status="done"),
+            "blocked": dict(status="blocked"),
+            "open pr": dict(status="done", pr=open_pr(checks="failing")),
+            "merged pr": dict(status="done", pr=open_pr(state="MERGED")),
+        }
+        for mode, text in ((None, "has no valid mode"), ("fast", "has no valid mode"), ("", "has no valid mode"),
+                           ("quick", "has mode quick"), ("full", "has mode full")):
+            for name, overrides in variants.items():
+                with self.subTest(mode=mode, variant=name):
+                    s = screens_state(mode, **overrides)
+                    r = self.assertNext(s, "/loom:screens", text)
+                    self.assertIn("screens task #57", r["reason"])
+                    self.assertIn("/loom:screens writes oneshot again", r["reason"])
+                    self.assertEqual(warn(s), [])
+
+    def test_row2b_quick_and_full_stay_valid_on_other_tasks(self):
+        self.assertNext(state("quick"), "/loom:research")
+        self.assertNext(state("full"), "/loom:research-questions")
+        s = state("quick")
+        s["task"]["screens"] = False
+        self.assertNext(s, "/loom:research")
+
+    def test_row2b_comes_after_rows_1_2_and_2a(self):
+        self.assertNext(screens_state("quick", onMain=True), "/loom:start-task #<n>")
+        self.assertNext(screens_state("quick", rebaseInProgress=True), "/loom:iterate rebase")
+        s = screens_state("quick")
+        s["task"]["archived"] = True
+        self.assertNext(s, "/loom:start-task #57", "archived")
+
+    # Row 2d: the screens are not landed, or the tree is dirty.
+    def test_row2d_phase1_pending(self):
+        for tree in ("clean", "dirty", None):
+            for pr in (None, open_pr()):
+                with self.subTest(tree=tree, pr=bool(pr)):
+                    s = screens_state(status="pending", workingTree=tree, pr=pr)
+                    r = self.assertNext(s, "/loom:screens", "the screens are not landed yet")
+                    self.assertIn("screens task #57", r["reason"])
+                    self.assertIn("phase 1 is pending", r["reason"])
+                    self.assertEqual(warn(s), [])
+
+    def test_row2d_phase1_in_progress_again_after_a_landing(self):
+        # Feedback after a landing writes `in-progress` for phase 1 until the next landing.
+        for tree in ("clean", "dirty"):
+            for pr in (None, open_pr(), open_pr(checks="failing", reviewDecision="CHANGES_REQUESTED")):
+                with self.subTest(tree=tree, pr=pr):
+                    s = screens_state(status="in-progress", workingTree=tree, pr=pr)
+                    r = self.assertNext(s, "/loom:screens", "changes that are not landed yet")
+                    self.assertIn("phase 1 is in-progress", r["reason"])
+        s = screens_state(status="in-progress")
+        s["task"]["pr"] = 58  # a PR known only from the ticket
+        self.assertNext(s, "/loom:screens", "phase 1 is in-progress")
+
+    def test_row2d_from_summary_fields_only(self):
+        for implementation, text in ((impl(1, 0), "pending"), (impl(1, 0, in_progress=1), "in-progress")):
+            with self.subTest(text=text):
+                self.assertNext(screens_state(implementation=implementation), "/loom:screens", text)
+
+    def test_row2d_dirty_tree_after_phase1_is_done(self):
+        for docs_only in (True, False):
+            for pr in (None, open_pr(), open_pr(checks="pending"), open_pr(checks="failing")):
+                with self.subTest(docs_only=docs_only, pr=pr):
+                    s = screens_state(status="done", workingTree="dirty", workingTreeDocsOnly=docs_only, pr=pr)
+                    r = self.assertNext(s, "/loom:screens", "the working tree has uncommitted changes")
+                    self.assertIn("landing that stopped on failing checks", r["reason"])
+                    self.assertEqual(warn(s), [])
+
+    def test_row2d_docs_only_tree_never_reaches_describe_pr_or_finish_task(self):
+        # Without row 2d, rows 9 and 8 would commit it as an interrupted docs refresh.
+        for pr in (None, open_pr()):
+            s = screens_state(status="done", workingTree="dirty", workingTreeDocsOnly=True, pr=pr)
+            s["task"]["screens"] = False
+            self.assertNext(s, "/loom:describe-pr" if pr is None else "/loom:finish-task")
+            s["task"]["screens"] = True
+            self.assertNext(s, "/loom:screens", "uncommitted changes")
+
+    def test_row2d_merged_pr_goes_to_finish_task(self):
+        # The PR is merged: finish-task keeps its stash offer; implement never runs.
+        for status in ("pending", "in-progress", "done"):
+            for tree in ("clean", "dirty"):
+                with self.subTest(status=status, tree=tree):
+                    s = screens_state(status=status, workingTree=tree, workingTreeDocsOnly=True,
+                                      pr=open_pr(state="MERGED"))
+                    self.assertNext(s, "/loom:finish-task", "PR #57 is merged")
+        s = screens_state(status="done", workingTree=None, pr=open_pr(state="MERGED"))
+        self.assertNext(s, "/loom:iterate <feedback>", "git status failed")
+
+    def test_row2d_done_phase1_with_unknown_tree_and_no_pr(self):
+        # Row 2d does not apply (phase 1 is done; a dirty tree is not known). Row 9 would name /loom:describe-pr,
+        # which needs a known working tree, so TREE_SENSITIVE_COMMANDS turns it into /loom:iterate <feedback>.
+        s = screens_state(status="done", workingTree=None, pr=None)
+        self.assertIn("/loom:describe-pr", loom_state().TREE_SENSITIVE_COMMANDS)
+        r = self.assertNext(s, "/loom:iterate <feedback>", "git status failed")
+        self.assertIn("/loom:describe-pr needs a known working tree", r["reason"])
+
+    def test_row2d_blocked_phase1_stays_with_row3(self):
+        for tree in ("clean", "dirty"):
+            with self.subTest(tree=tree):
+                s = screens_state(status="blocked", workingTree=tree, pr=open_pr(checks="failing"))
+                s["implementation"]["blocked"]["reason"] = "checks failed on the PR"
+                self.assertNext(s, "/loom:iterate <fix>", "checks failed on the PR")
+
+    def test_row2d_comes_after_rows_1_2_2a_and_2b(self):
+        self.assertNext(screens_state(onMain=True), "/loom:start-task #<n>")
+        self.assertNext(screens_state(rebaseInProgress=True, workingTree="dirty"), "/loom:iterate rebase")
+        self.assertNext(screens_state("full", workingTree="dirty"), "/loom:screens", "has mode full")
+
+    def test_screens_task_never_routes_to_implement(self):
+        for status in ("pending", "in-progress", "done", "blocked"):
+            for tree in ("clean", "dirty", None):
+                for pr in (None, open_pr(), open_pr(state="MERGED"), open_pr(checks="failing")):
+                    with self.subTest(status=status, tree=tree, pr=pr):
+                        s = screens_state(status=status, workingTree=tree, pr=pr)
+                        self.assertNotEqual(decide(s)["command"], "/loom:implement")
+
+    # After a landing commit with a clean tree: the routes of every oneshot task.
+    def test_clean_landing_routes_like_every_oneshot_task(self):
+        cases = (
+            ({}, "/loom:describe-pr", "all 1 implementation phases are done"),
+            ({"pr": open_pr()}, "/loom:finish-task", "checks are green"),
+            ({"pr": open_pr(checks="pending")}, "/loom:finish-task", "pending"),
+            ({"pr": open_pr(checks="failing")}, "/loom:iterate", "failing checks"),
+            ({"pr": open_pr(reviewDecision="CHANGES_REQUESTED")}, "/loom:iterate", "requested changes"),
+            ({"pr": open_pr(behindMain=2)}, "/loom:iterate rebase", "behind"),
+            ({"pr": open_pr(state="MERGED")}, "/loom:finish-task", "merged"),
+        )
+        for overrides, command, reason in cases:
+            with self.subTest(overrides=overrides):
+                s = screens_state(status="done", **overrides)
+                r = self.assertNext(s, command, reason)
+                plain = state("oneshot", implementation=oneshot_impl("done"), **overrides)
+                self.assertEqual(decide(plain), r)
+        s = screens_state(status="done")
+        s["task"]["pr"] = 58
+        self.assertNext(s, "/loom:finish-task", "PR #58 exists")
+
+    def test_row2d_needs_a_screens_task(self):
+        # An ordinary oneshot task and the setup task route as before.
+        self.assertNext(state("oneshot", implementation=oneshot_impl("pending")), "/loom:implement")
+        self.assertNext(state("oneshot", implementation=oneshot_impl("in-progress")), "/loom:implement")
+        s = state("oneshot", implementation=oneshot_impl("done"), workingTree="dirty", workingTreeDocsOnly=True)
+        self.assertNext(s, "/loom:describe-pr")
+        s = state("oneshot", implementation=oneshot_impl("done"), workingTree="dirty")
+        self.assertNext(s, "/loom:iterate <feedback>", "uncommitted code changes")
+        for screens in (False, None):
+            s = screens_state(status="pending")
+            s["task"]["screens"] = screens
+            with self.subTest(screens=screens):
+                self.assertNext(s, "/loom:implement")
+        s = setup_state("oneshot", implementation=oneshot_impl("pending"))
+        s["task"]["screens"] = False
+        self.assertNext(s, "/loom:setup", "fast setup stopped")
+
+
 class PlanGateTest(unittest.TestCase):
     def test_plan_gate_holds(self):
         gate = loom_state().plan_gate_holds

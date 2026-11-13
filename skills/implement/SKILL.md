@@ -57,9 +57,10 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 |---|---|---|
 | The state is empty | `not a loom project (no .claude/loom.json)` | `/loom:setup` |
 | `onMain` is `true` | `on the main branch; no task` | `/loom:start-task #<n>` |
-| `task` is `null` | `branch <branch> matches no task` | `/loom:start-task #<n>` |
+| `task` is `null` | `branch <branch> matches no task` | from `next.command` (`/loom:start-task #<k>`; `/loom:screens` on a branch `docs/<k>-loom-screens`) |
 | `task.archived` is `true` | `task #<n> is archived` | `/loom:start-task #<n>` (offers a restore) |
 | `rebaseInProgress` is `true` | `a rebase of <branch> is in progress` | `/loom:iterate rebase` |
+| `task.screens` is `true` | `task #<n> is a screens task; /loom:screens draws and lands its screens, no implementer runs` | `/loom:screens` |
 | `workingTree` is `null` | `git status failed: <the error from its warning>` | `fix the git error, then /loom:next` |
 | `task.mode` is not `oneshot`, `quick`, or `full` | `00-ticket.md has no valid mode` | from `next.command` |
 | `implementation.blocked` is set | `implementation phase <k> is blocked: <reason>` | `/loom:iterate <fix>` |

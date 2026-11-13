@@ -54,7 +54,7 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 |---|---|---|
 | The state is empty | `not a loom project (no .claude/loom.json)` | `/loom:setup` |
 | `onMain` is `true` | `on the main branch; no task` | `/loom:start-task #<n>` |
-| `task` is `null` | `branch <branch> matches no task` | `/loom:start-task #<n>` |
+| `task` is `null` | `branch <branch> matches no task` | from `next.command` (`/loom:start-task #<k>`; `/loom:screens` on a branch `docs/<k>-loom-screens`) |
 | `task.archived` is `true` | `task #<n> is archived` | `/loom:start-task #<n>` (offers a restore) |
 | `task.mode` is `oneshot` | `oneshot mode has no research phase` | from `next.command` |
 | `task.setup` is `true` (the setup task), and `task.mode` is not `full` | `setup task #<n> has no valid mode for research (mode: <mode>); only /loom:setup changes it` | `/loom:setup` |

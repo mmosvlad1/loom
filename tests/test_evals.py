@@ -33,6 +33,9 @@ SETUP_BRANCH = "chore/1-loom-setup"
 STYLE_GUIDE_PATH = "docs/design/DESIGN.md"
 SCREEN_PATH = "docs/design/screens/order-summary.html"
 SCREEN_CASES = ("research-full", "design-full")
+# The screens task of screens-local (LOOM_SPEC.md 9.14.6, 9.14.9).
+SCREENS_TASK_DIR = ".loom/tasks/12-loom-screens"
+SCREENS_BRANCH = "docs/12-loom-screens"
 
 # https://code.claude.com/docs/en/plugin-evals (Claude Code 2.1.318).
 CASE_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs", "expected_outcome",
@@ -64,6 +67,9 @@ EXPECTED_STATE: Dict[str, Dict[str, Any]] = {
     "design-onboarding": {"mode": "full", "next": "/loom:design", "setup": True,
                           "branch": SETUP_BRANCH, "dir": SETUP_TASK_DIR,
                           "artifacts": {"01-research-questions.md": "approved", "02-research.md": "approved"}},
+    # A screens task before stages 3 and 4; the case runs local mode (LOOM_SPEC.md 9.14.6, 9.14.9).
+    "screens-local": {"mode": "oneshot", "next": "/loom:screens", "prompt": "/loom:screens --local",
+                      "screens": True, "branch": SCREENS_BRANCH, "dir": SCREENS_TASK_DIR, "artifacts": {}},
 }
 
 
@@ -350,6 +356,12 @@ class SuiteLayoutTest(unittest.TestCase):
         self.assertEqual(latest, (str(len(cases)), str(len(cases))))
 
 
+    def test_spec_has_no_eval_record_placeholder(self):
+        """The coordinator replaces every EVAL_RECORD_* placeholder with the record of a real eval run."""
+        spec = read(os.path.join(ROOT, "LOOM_SPEC.md"))
+        self.assertEqual(re.findall(r"EVAL_RECORD_\w*", spec), [])
+
+
 class CaseFileTest(unittest.TestCase):
     def test_case_files(self):
         for path in case_dirs():
@@ -381,7 +393,7 @@ class CaseFileTest(unittest.TestCase):
     def test_skill_prompts_name_an_existing_skill(self):
         for path in case_dirs():
             prompt = case(os.path.basename(path))["execution"]["prompt"].strip()
-            m = re.match(r"^/loom:([a-z-]+)$", prompt)
+            m = re.match(r"^/loom:([a-z-]+)(?: [^\n]*)?$", prompt)
             if m:
                 with self.subTest(case=os.path.basename(path)):
                     self.assertTrue(os.path.isfile(os.path.join(ROOT, "skills", m.group(1), "SKILL.md")))
@@ -908,11 +920,12 @@ class ScaffoldTest(unittest.TestCase):
                 self.assertEqual(state["task"]["dir"], expected.get("dir", TASK_DIR))
                 self.assertEqual(state["task"]["mode"], expected["mode"])
                 self.assertIs(state["task"]["setup"], expected.get("setup", False))
+                self.assertIs(state["task"]["screens"], expected.get("screens", False))
                 self.assertEqual(state["workingTree"], "clean")
                 self.assertEqual({a["file"]: a["status"] for a in state["artifacts"]}, expected["artifacts"])
                 self.assertFalse(any(a.get("stale") for a in state["artifacts"]))
                 self.assertEqual(state["next"]["command"], expected["next"])
-                self.assertEqual(case(name)["execution"]["prompt"].strip(), expected["next"])
+                self.assertEqual(case(name)["execution"]["prompt"].strip(), expected.get("prompt", expected["next"]))
 
     def test_research_fixture(self):
         fx = Scaffolded(self, "research-full")
@@ -1181,6 +1194,128 @@ class ScaffoldTest(unittest.TestCase):
         proc = subprocess.run([sys.executable, BUILD, "guard-main"], cwd=tmp, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, universal_newlines=True)
         self.assertNotEqual(proc.returncode, 0)
+
+
+class ScreensLocalTest(unittest.TestCase):
+    """screens-local: a screens task whose stages 3 and 4 run without a question (LOOM_SPEC.md 9.14.6, 9.14.9)."""
+
+    CASE = "screens-local"
+    GUIDE = ("# Style guide\n\n## Direction\n\nPlain ledger. Calm.\n\n## Colors\n\n- `ink: #1f2933`: text\n\n"
+             "## Typography\n\n- Families: `\"IBM Plex Mono\", monospace`\n\n## Spacing and shape\n\n- `space-1` 4px\n\n"
+             "## States\n\n- Empty: one muted line\n\n## Rules\n\n- Do: right-align every amount.\n")
+
+    def fixture(self) -> Scaffolded:
+        return Scaffolded(self, self.CASE)
+
+    def test_case_runs_local_mode(self):
+        data = case(self.CASE)
+        self.assertEqual(data["execution"]["prompt"], "/loom:screens --local")
+        self.assertNotIn("Artifact", data["execution"]["allowed_tools"])
+        self.assertTrue(os.path.isfile(os.path.join(ROOT, "skills", "screens", "SKILL.md")))
+
+    def test_fixture(self):
+        fx = self.fixture()
+        state = fx.state()
+        self.assertEqual(state["branch"], SCREENS_BRANCH)
+        self.assertTrue(state["task"]["screens"])
+        self.assertEqual(state["task"]["mode"], "oneshot")
+        self.assertEqual(state["implementation"]["done"], 0)
+        # The branch is cut from main without a commit; no style guide and no screen exist.
+        self.assertEqual(fx.git("log", "--format=%s", "main..HEAD"), "")
+        self.assertEqual(fx.git("status", "--porcelain"), "")
+        self.assertEqual(state["design"], {"canvas": None, "style": False, "screens": []})
+        self.assertFalse(os.path.exists(os.path.join(fx.cwd, state["docs"]["style"])))
+        for path in ("DESIGN.md", "screens", "log.md"):
+            with self.subTest(absent=path):
+                self.assertFalse(os.path.exists(os.path.join(fx.cwd, SCREENS_TASK_DIR, path)))
+        ticket = fx.read(SCREENS_TASK_DIR + "/00-ticket.md")
+        self.assertIn("\n# Design screens: order summary\n", ticket)
+        self.assertNotIn("## Screens", ticket)  # a screens issue draws screens, it does not implement them
+        self.assertRegex(ticket, r"(?m)^size: S$")
+
+    def test_brief_holds_the_results_of_stages_1_and_2(self):
+        fx = self.fixture()
+        brief = fx.read(SCREENS_TASK_DIR + "/screens-brief.md")
+        fm, body = brief.split("---\n", 2)[1:]
+        self.assertEqual([l.split(":", 1)[0] for l in fm.splitlines()], ["task", "updated", "drawing"])
+        self.assertIn("drawing: local\n", fm)  # the drawing target, chosen at the kickoff (LOOM_SPEC.md 9.14.7)
+        sections = dict(re.findall(r"(?ms)^## (\w+)\n\n(.*?)(?=^## |\Z)", body))
+        self.assertEqual(list(sections), ["Scope", "Audience", "References", "Direction", "Decisions", "Screens"])
+        template = read(os.path.join(ROOT, "skills", "screens", "references", "brief-template.md"))
+        inner = template.split("````markdown\n", 1)[1].split("````", 1)[0]
+        self.assertEqual(list(sections), re.findall(r"(?m)^## (\w+)$", inner))
+        self.assertEqual(len(re.findall(r"(?m)^- ", sections["Scope"])), 1)  # one screen with its states
+        self.assertIn("default, empty", sections["Scope"])
+        self.assertTrue(sections["Audience"].strip())
+        self.assertEqual(sections["References"].strip(), "none")
+        self.assertNotEqual(sections["Direction"].strip(), "open")
+        rows = re.findall(r"(?m)^\| ([\w-]+) \| (\w+) \|$", sections["Screens"])
+        self.assertEqual(rows, [("order-summary", "planned"), ("order-summary--empty", "planned")])
+        # One row per state, as the template has it: the grader requires both rows drafted.
+        self.assertIn("**Screens** has one row per screen file: the screen ID of each state.", template)
+        # The grader does not pass on the fixture: the screen is still planned.
+        self.assertIsNone(grader_regex(self.CASE, "brief-marks-drafted").search(brief))
+
+    def test_graders(self):
+        g = graders(os.path.join(EVALS, self.CASE))
+        self.assertEqual(set(g), {"style-guide-drafted", "style-guide-sections", "screen-written",
+                                  "screen-empty-written", "brief-marks-drafted", "no-git-commit",
+                                  "nothing-landed"})
+        self.assertEqual(g["style-guide-drafted"]["path"], SCREENS_TASK_DIR + "/DESIGN.md")
+        self.assertEqual(g["screen-written"]["path"], SCREENS_TASK_DIR + "/screens/order-summary.html")
+        # Every state of the Scope gets its own file (LOOM_SPEC.md 9.14.7).
+        self.assertEqual(g["screen-empty-written"]["path"], SCREENS_TASK_DIR + "/screens/order-summary--empty.html")
+        self.assertNotIn("exists", g["screen-empty-written"])
+        # Nothing lands before approve: the style guide is not at docs.style after the run.
+        fx = self.fixture()
+        self.assertEqual(g["nothing-landed"]["path"], fx.state()["docs"]["style"])
+        self.assertIs(g["nothing-landed"]["exists"], False)
+        self.assertEqual(g["style-guide-sections"]["target"], {"source": "file", "path": SCREENS_TASK_DIR + "/DESIGN.md"})
+        self.assertEqual(g["brief-marks-drafted"]["target"],
+                         {"source": "file", "path": SCREENS_TASK_DIR + "/screens-brief.md"})
+        commit = g["no-git-commit"]
+        self.assertEqual((commit["tool"], commit["min"], commit["max"]), ("Bash", 0, 0))
+        rx = js_regex(commit["input_match"])
+        for cmd in ("git commit -F .loom/tasks/12-loom-screens/commit-msg.txt", "git -C /w/cwd commit -m x"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(rx.search('{"command":"%s"}' % cmd))
+        for cmd in ("git status --porcelain", "git log --grep=commit"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(rx.search('{"command":"%s"}' % cmd))
+
+    def test_style_guide_sections_grader(self):
+        rx = grader_regex(self.CASE, "style-guide-sections")
+        self.assertIsNotNone(rx.search(self.GUIDE))
+        template = read(os.path.join(ROOT, "skills", "screens", "references", "style-guide-template.md"))
+        self.assertIsNotNone(rx.search(template.split("````markdown\n", 1)[1].split("````", 1)[0]))
+        sys.path.insert(0, os.path.join(EVALS, "_fixture"))
+        try:
+            import build  # noqa: E402
+        finally:
+            sys.path.pop(0)
+        self.assertIsNotNone(rx.search(build.STYLE_GUIDE_MD))
+        self.assertIsNone(rx.search(self.GUIDE.replace("## Rules", "## Do and do not")))
+        self.assertIsNone(rx.search(self.GUIDE.replace("## Colors", "## X").replace("## Typography", "## Colors")
+                                    .replace("## X", "## Typography")))
+        self.assertIsNone(rx.search(self.GUIDE.replace("## States", "### States")))
+
+    def test_brief_grader(self):
+        """The brief template has one Screens row per state: both rows must be drafted, in either order."""
+        rx = grader_regex(self.CASE, "brief-marks-drafted")
+        table = "## Screens\n\n| Screen ID | Status |\n|---|---|\n%s\n"
+        for rows in (("| order-summary | drafted |", "| order-summary--empty | drafted |"),
+                     ("| `order-summary` | drafted |", "| `order-summary--empty` | drafted |"),
+                     ("|order-summary--empty|drafted|", "|order-summary|drafted|")):
+            with self.subTest(rows=rows):
+                self.assertIsNotNone(rx.search(table % "\n".join(rows)))
+        for rows in (("| order-summary | drafted |", "| order-summary--empty | planned |"),
+                     ("| order-summary | planned |", "| order-summary--empty | drafted |"),
+                     ("| order-summary | drafted |",), ("| order-summary--empty | drafted |",)):
+            with self.subTest(fails=rows):
+                self.assertIsNone(rx.search(table % "\n".join(rows)))
+        for row in ("| order-summary | planned |", "| order-summary--empty | drafted |", "| order-summary-x | drafted |"):
+            with self.subTest(row=row):
+                self.assertIsNone(rx.search("## Screens\n\n| Screen ID | Status |\n|---|---|\n%s\n" % row))
 
 
 class MakefileTest(unittest.TestCase):

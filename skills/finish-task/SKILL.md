@@ -52,6 +52,7 @@ Read the state above. Take the first matching row.
 | `pr` is `null` | Stop: `Result: the branch has no PR`, `Next:` from `next.command` (normally `/loom:describe-pr`) |
 | `pr.state` is `MERGED` | The merge already happened. If `workingTree` is `dirty`, the changes are not in the merge: offer the stash of `git-flow.md` (confirmation) first. Docs-only changes are usually leftovers of this task: say so, and offer discard after the user looks at them as the other choice; without "yes", stop with `Result: PR #<number> is merged, but the working tree has uncommitted changes` and `Next: commit or stash the changes, then /loom:finish-task`. Go to step 5. |
 | `pr.state` is `CLOSED` | Stop: `Result: PR #<number> is closed without a merge`. Ask the user to reopen it or start over. |
+| `task.screens` is `true`, and `next.command` is `/loom:screens` (implementation phase 1 is `pending` or `in-progress`, or the working tree is dirty) | Stop: `Result: screens task #<n> has drafts or a landing that are not committed`, `Next: /loom:screens`. A tree that is dirty only in the docs paths is then a landing that stopped, not a docs refresh: never commit it here. |
 | `implementation.blocked` or `implementation.inProgress` is set, or `implementation.done` is less than `implementation.total` | Stop: `Result: implementation phases are left (<done> of <total> done)`, `Next:` from `next.command` |
 | `pr.reviewDecision` is `CHANGES_REQUESTED` | Stop: `Result: PR #<number> has requested changes`, `Next: /loom:iterate` |
 | `workingTree` is `dirty` and `workingTreeDocsOnly` is `true` | The docs changes are an interrupted docs refresh. Run the shared `pr-update.md` (docs commit, then the push with confirmation). Then continue with step 2. |
@@ -141,6 +142,7 @@ Run each command; each one is safe when its work is already done:
 2. If `<task dir>` does not exist and the target exists, the archive is done. Skip this step.
 3. If both exist, stop: `Result: <task dir> and its archive copy both exist; keep one`, `Next: /loom:finish-task #<n>`.
 4. Otherwise run `mkdir -p <workDir>/_archive`, then `mv <task dir> <workDir>/_archive/`.
+5. On a screens task (`task.screens` is `true`) whose phase 1 is `in-progress` (the first entry of `implementation.phases` in the state of section 1), the drafts changed after the last landing and never landed. Add `Warning: screens task #<n> has draft changes that did not land; they are in the archived task directory` to the final message.
 
 ## 7. Ruleset after the setup task
 
