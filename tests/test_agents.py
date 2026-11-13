@@ -376,7 +376,7 @@ class SharedSnippetsTest(unittest.TestCase):
         self.assertIn("as one Bash call, also when it chains commands", implementer)
 
     def test_final_answer_has_the_next_step(self):
-        self.assertIn("Next: /clear, then /loom:next", read(os.path.join(SHARED_DIR, "final-answer.md")))
+        self.assertIn("Next: /clear, then /loom:design", read(os.path.join(SHARED_DIR, "final-answer.md")))
 
     def test_clarify_line_is_shared(self):
         final = read(os.path.join(SHARED_DIR, "final-answer.md"))

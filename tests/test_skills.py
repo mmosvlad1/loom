@@ -1594,7 +1594,8 @@ class NextTest(unittest.TestCase):
 
     def test_summary_and_research_warnings(self):
         body = self.body()
-        for needle in ("3-5 lines", "Warning: research not reviewed", "Warning: research is stale", "Offer a rerun"):
+        for needle in ("3-5 lines", "Warning: research not reviewed; approve it with /loom:iterate approve research",
+                       "Warning: research is stale", "Offer a rerun"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, body)
 
@@ -1849,7 +1850,7 @@ class StartTaskSkillTest(unittest.TestCase):
         for needle in ("gh issue view <n> --json title,body,labels,url", "loom-state --slug '<issue title>'",
                        "git switch <main>", "git pull", "git switch -c <branch>", "<workDir>/_archive/<n>-*",
                        "mv <workDir>/_archive/<dir> <workDir>/", "Offer the stash of `git-flow.md`",
-                       "git rev-parse --verify --quiet refs/heads/<branch>", "Next: /clear, then /loom:next",
+                       "git rev-parse --verify --quiet refs/heads/<branch>", "Next: <next.command, mapped as final-answer.md describes>",
                        "never build it yourself", "The ticket has no `status` and no `updated`"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, body)
@@ -2398,7 +2399,7 @@ class HardeningTest(unittest.TestCase):
     def test_final_answer_writes_setup_backlog_and_start_task_as_they_are(self):
         text = shared("final-answer.md")
         self.assertIn("`/loom:start-task …`, `/loom:backlog`, or `/loom:setup`: write the command as it is", text)
-        self.assertIn("Any other command (a phase that `/loom:next` runs): write `/clear, then /loom:next`.", text)
+        self.assertNotIn("/clear, then /loom:next", text)
         final = split_frontmatter(skill_md("finish-task"))[1].split("## 8. Final message", 1)[1]
         self.assertIn("Next: /clear, then /loom:start-task #<n> (pick the issue with /loom:backlog)", final)
         self.assertIn("Do not choose an issue.", final)
@@ -2716,7 +2717,9 @@ class OnboardingSetupSkillTest(unittest.TestCase):
     def test_kickoff_final_message(self):
         final = self.onboarding().split("### Final message", 1)[1].split("\n## ", 1)[0]
         self.assertIn("`next.command` must be `/loom:research`", final)
-        self.assertIn("Next: /clear, then /loom:next", final)
+        self.assertIn("Next: /clear, then <next.command>\n", final)
+        self.assertIn("mapped as `final-answer.md` describes: normally `/clear, then /loom:research`.", final)
+        self.assertNotIn("/loom:next", final)
 
     def test_onboarding_rerun_order(self):
         rerun = self.onboarding().split("## Onboarding re-run", 1)[1]
@@ -3784,6 +3787,147 @@ class OnboardingRerunQuestionsTest(unittest.TestCase):
                 self.assertIn(needle, step)
         spec = spec_section("#### 9.13.2 Kickoff (`setup`)", "#### 9.13.3")
         self.assertIn("An existing file that is not `approved` keeps its own questions", spec)
+
+
+RESEARCH_WARNING = "Warning: research not reviewed; approve it with /loom:iterate approve research"
+QUESTIONS_WARNING = ("Warning: research questions not reviewed; approve them with "
+                     "/loom:iterate approve research-questions")
+# Code spans under skills/ that name /loom:next in a Next: value (LOOM_SPEC.md 7.4): only where a step of
+# the user comes first and changes the state. A new one fails the test.
+ALLOWED_NEXT_SPANS = {
+    ("describe-pr/SKILL.md", "fix the git error, then /loom:next"),
+    ("implement/SKILL.md", "fix the git error, then /loom:next"),
+    ("finish-task/SKILL.md", "Next: fix the git error, then /loom:next"),
+    ("iterate/SKILL.md", "Next: fix the git error, then /loom:next"),
+    ("iterate/SKILL.md", "Next: commit or stash the changes yourself, then /loom:next"),
+    ("iterate/SKILL.md", "Next: change .claude/settings.json yourself and commit it, then /clear, then /loom:next"),
+    ("iterate/SKILL.md",
+     "Next: change .claude/settings.json yourself, commit and push it, then /clear, then /loom:next"),
+    ("setup/SKILL.md", "Next: /loom:next"),
+    ("setup/references/onboarding.md", "Next: /loom:next"),
+    ("start-task/SKILL.md",
+     "Next: stash or commit them (on a task branch, /loom:next continues that task), then /loom:start-task #<n>"),
+}
+
+
+def phase_command_list(text: str) -> List[str]:
+    """The commands in the first 'A phase command (`…`, …)' parenthesis of the text."""
+    inner = re.search(r"A phase command \(([^)]*)\)", text).group(1)
+    return re.findall(r"`(/loom:[a-z-]+)`", inner)
+
+
+class NextLineTest(unittest.TestCase):
+    """The Next: line names the command itself (LOOM_SPEC.md 7.4)."""
+
+    def test_final_answer_maps_phase_commands(self):
+        text = shared("final-answer.md")
+        for needle in ("`/clear, then <command>`, e.g. `/clear, then /loom:design`",
+                       "A phase that the user invokes by its own command runs with the `model` and `effort` of its skill.",
+                       "write `run the manual steps, then ` before the mapped command",
+                       "Normally it is `run the manual steps, then /clear, then /loom:implement`.",
+                       "or `/clear, then /loom:finish-task` with an open PR",
+                       "Write `/loom:next` only where the skill's own text names it.",
+                       "There a step of the user comes first and changes the state",
+                       "    - a git error to fix (`workingTree` is `null`);\n"
+                       "    - changes that the user commits or stashes;\n"
+                       "    - a settings file that the user changes and commits;\n"
+                       "    - a PR state that the skill did not read.",
+                       "Next: /clear, then /loom:design\n",
+                       "Next: run the manual steps, then /clear, then /loom:implement\n"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+        self.assertNotIn("Any other command", text)
+
+    def test_final_answer_warnings_rule(self):
+        line = next(l for l in shared("final-answer.md").splitlines() if l.startswith("- `Warning:`"))
+        self.assertIn("one `Warning:` line for each entry of `warnings` in the `loom-state` output that gives "
+                      "`next.command`", line)
+        self.assertIn("A stop before any write takes them from the state that the skill injected.", line)
+        self.assertIn("Skip an entry when the message already has a `Result:` or `Warning:` line for it.", line)
+        spec = spec_section("### 7.4 Phase endings", "### 7.5 Skills and forked context")
+        self.assertIn("The `loom-state` output that gives `next.command` also has `warnings`. The final message has "
+                      "one `Warning:` line for each entry, unless it already has a `Result:` or `Warning:` line "
+                      "for it.", spec)
+        self.assertIn("shows the same `warnings` entries as `/loom:next`", spec)
+
+    def test_spec_and_final_answer_name_the_same_phase_commands(self):
+        spec = spec_section("### 7.4 Phase endings", "### 7.5 Skills and forked context")
+        commands = phase_command_list(spec)
+        self.assertEqual(commands, phase_command_list(shared("final-answer.md")))
+        self.assertEqual(set(commands), {"/loom:" + p for p in NEXT_RUNS})
+        self.assertEqual(set(commands), set(ls.PHASE_COMMAND.values()) | {"/loom:implement"})
+
+    def test_loom_next_only_where_the_user_changes_the_state(self):
+        found = set()
+        for path in glob.glob(os.path.join(SKILLS_DIR, "**", "*.md"), recursive=True):
+            rel = os.path.relpath(path, SKILLS_DIR).replace(os.sep, "/")
+            text = read(path)
+            for span in re.findall(r"`([^`\n]*/loom:next[^`\n]*)`", text):
+                if span != "/loom:next":
+                    found.add((rel, span))
+            for line in text.splitlines():
+                if line.startswith("Next:") and "/loom:next" in line:
+                    found.add((rel, line))
+            if "/clear, then /loom:next" in text:
+                with self.subTest(path=rel):
+                    self.assertEqual(rel, "iterate/SKILL.md")
+        self.assertEqual(found, ALLOWED_NEXT_SPANS)
+
+    def test_start_task_names_the_first_phase_of_the_mode(self):
+        final = split_frontmatter(skill_md("start-task"))[1].split("## 9. Final message", 1)[1]
+        self.assertIn("Next: <next.command, mapped as final-answer.md describes>\n", final)
+        self.assertIn("For a new task it is the first phase of the mode: `/clear, then /loom:research-questions` "
+                      "(full), `/clear, then /loom:research` (quick), or `/clear, then /loom:implement` (oneshot).",
+                      final)
+        self.assertIn("After a restore, or a switch to an existing branch, the task has its own state, "
+                      "and the command can be any other.", final)
+        step = spec_section("### 9.3 `start-task`", "### 9.4")
+        self.assertIn("A restored task, or an existing branch, has its own state, so the command can be any other.",
+                      step)
+        self.assertEqual(ls.PHASES_BY_MODE["full"][0], "research-questions")
+        self.assertEqual(ls.PHASES_BY_MODE["quick"][0], "research")
+        self.assertEqual(ls.PHASES_BY_MODE["oneshot"], [])
+
+    def test_implement_manual_steps_name_the_phase_command(self):
+        text = skill_md("implement")
+        self.assertIn("write `run the manual steps, then ` before the mapped command: normally "
+                      "`run the manual steps, then /clear, then /loom:implement`; after the last phase "
+                      "`/clear, then /loom:describe-pr`, or `/clear, then /loom:finish-task` with an open PR.", text)
+        spec = spec_section("### 7.4 Phase endings", "### 7.5 Skills and forked context")
+        self.assertIn("After the last implementation phase the command is `/loom:describe-pr`, or "
+                      "`/loom:finish-task` with an open PR.", spec)
+
+    def test_next_description_and_model_warning(self):
+        meta, body = split_frontmatter(skill_md("next"))
+        self.assertIn("Use it in a session without the Next line of the last loom message, "
+                      "or when a Next line names /loom:next.", meta["description"])
+        self.assertIn("Mention this in one `Warning:` line when the phase is design or plan.", body)
+        self.assertIn("- `02-research.md` is `in-review`, and the next phase is design or plan: "
+                      "`Warning: research not reviewed; approve it with /loom:iterate approve research`.", body)
+
+    def test_research_warnings_name_the_approve_command(self):
+        for name in ("design", "plan", "next"):
+            with self.subTest(skill=name):
+                self.assertIn("`%s`" % RESEARCH_WARNING, skill_md(name))
+                self.assertNotRegex(skill_md(name), r"`Warning: research not reviewed`")
+        self.assertIn("`%s`" % QUESTIONS_WARNING, skill_md("research"))
+        self.assertIn("`%s`" % RESEARCH_WARNING, shared("frontmatter.md"))
+        spec = spec_section("### 9.12 `next`", "### 9.13 Onboarding")
+        self.assertIn("`%s`" % RESEARCH_WARNING, spec)
+        self.assertIn("`%s`" % QUESTIONS_WARNING, spec)
+
+    def test_loom_state_notes_name_the_approve_command(self):
+        arts = {"research-questions": {"status": "in-review"}, "research": {"status": "in-review"}}
+        notes = ls._phase_notes(arts, "full")
+        self.assertIn("research-questions not reviewed (/loom:iterate approve research-questions)", notes)
+        self.assertIn("research not reviewed (/loom:iterate approve research)", notes)
+        self.assertIn("`research not reviewed (/loom:iterate approve research)`",
+                      spec_section("### 9.12 `next`", "### 9.13 Onboarding"))
+
+    def test_iterate_approve_names_research_files(self):
+        approve = skill_md("iterate").split("## Approve", 1)[1].split("### Pick the artifact", 1)[1]
+        self.assertIn("The name `research` is `02-research.md`, and `research-questions` is "
+                      "`01-research-questions.md`.", approve.split("\n2. ", 1)[0])
 
 
 if __name__ == "__main__":

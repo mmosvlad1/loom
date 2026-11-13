@@ -26,11 +26,11 @@ In a project that `/loom:setup` prepared, `.claude/settings.json` registers the 
 1. **Install** the plugin (above), then open your project in Claude Code.
 2. **`/loom:setup`** works through loom's own flow: an issue "Set up loom" and a `chore/<n>-loom-setup` branch. It shows every change first. It takes one of two paths, and the plan names it:
    - **Fast setup** (an empty or new repository, or `/loom:setup --oneshot`): one `oneshot` task. Setup detects the stack and writes `.claude/loom.json`, the checks entry point (`Makefile` or `package.json` scripts), CI with a `check` job (or keeps an existing workflow and records the check name of its job in `ci.requiredCheck`), `.claude/settings.json`, the `docs/` skeleton, and a short `CLAUDE.md`, in one commit.
-   - **Onboarding** (a repository with code): a `full`-mode setup task. Setup does only the kickoff: the ticket, a minimal `.claude/loom.json`, the kickoff settings of `.claude/settings.json` (all but the rules for the check commands and the status line), and a fixed list of research questions. Then `/clear` and `/loom:next` run research (it also times the existing check commands), design (a discussion of the checks, the required CI check, the docs, the project's own rules, and the agent instruction files), plan, and implement, as for any task.
+   - **Onboarding** (a repository with code): a `full`-mode setup task. Setup does only the kickoff: the ticket, a minimal `.claude/loom.json`, the kickoff settings of `.claude/settings.json` (all but the rules for the check commands and the status line), and a fixed list of research questions. Then `/clear` and the command of each `Next:` line run research (it also times the existing check commands), design (a discussion of the checks, the required CI check, the docs, the project's own rules, and the agent instruction files), plan, and implement, as for any task.
 3. **`/loom:describe-pr`**, then **`/loom:finish-task`** merge the setup PR. After the merge, `finish-task` offers a ruleset that protects the main branch.
 4. **`/loom:backlog`** discusses ideas, helps fill `docs/product/vision.md`, and creates GitHub issues (labels `type:*`, `size:*`, `mode:*`).
 5. **`/loom:start-task #<n>`** picks the mode, creates the branch and `.loom/tasks/<n>-<slug>/00-ticket.md`.
-6. **`/clear`, then `/loom:next`**, again and again: `next` runs the next phase for the mode (research, design, plan, implement). Answer question rounds and approve with `/loom:iterate`.
+6. **`/clear`, then the command that the `Next:` line names**, again and again: one phase per session for the mode (research, design, plan, implement). Each phase runs with the model and effort of its skill. Answer question rounds and approve with `/loom:iterate`. In a session without that line, `/loom:next` shows the state and runs the next phase.
 7. **`/loom:describe-pr`** writes the task summary and ADRs into `docs/`, pushes, and opens the PR (with confirmation). The PR body has a one-sentence Why, 1–3 Special things to note, and a Change outline (a file tree or an interface `diff`). The task summary ends its Implementation section with a Process metrics line, e.g. `9 subagent runs (research 4, implement 5), 2 review rounds (1 changes-needed), 1 checks retry, subagent time 14 min`.
 8. **`/loom:finish-task`** waits for green checks (also for the check named in `ci.requiredCheck` when GitHub requires none), squash-merges (with confirmation), and archives the task directory.
 
@@ -41,7 +41,7 @@ In a project that `/loom:setup` prepared, `.claude/settings.json` registers the 
 - Batched design questions in rounds instead of one question at a time
 - Checks enforced by hooks, not trusted from the agent
 - Every loom subagent run is recorded in `.loom/tasks/<n>-<slug>/events.jsonl` (agent, phase, result, duration); `loom-state --json` sums it up as `task.metrics`
-- `/clear` → `/loom:next` between phases
+- `/clear` → the command of the `Next:` line between phases; `/loom:next` when you do not have that line
 - Durable knowledge (task summaries, ADRs, architecture) committed to `docs/`; working artifacts stay local
 
 ## Development

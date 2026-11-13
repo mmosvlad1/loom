@@ -67,7 +67,7 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
   - If `03-design.md` or `04-plan.md` exists, show the `staleFiles` and offer to rerun the research. Continue only after the answer "rerun". The later artifacts may then need `/loom:iterate <feedback>`.
   - If neither exists, rerun it without asking.
   - Add a `Warning:` line with the `staleFiles` to the final message.
-- If `01-research-questions.md` is `in-review` (not approved), continue. Add `Warning: research questions not reviewed` to the final message. On the setup task the row above stops first.
+- If `01-research-questions.md` is `in-review` (not approved), continue. Add `Warning: research questions not reviewed; approve them with /loom:iterate approve research-questions` to the final message. On the setup task the row above stops first.
 
 ## 2. Input discipline
 

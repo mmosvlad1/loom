@@ -57,7 +57,7 @@ Read the state above. Stop at the first failed check. Report it in the `final-an
 
 Warnings (do not stop):
 
-- `02-research.md` is `in-review`: add `Warning: research not reviewed`.
+- `02-research.md` is `in-review`: add `Warning: research not reviewed; approve it with /loom:iterate approve research`.
 - `02-research.md` has `stale: true`: add `Warning: research is stale (<staleFiles>); consider /loom:research`.
 
 ## 2. Input discipline

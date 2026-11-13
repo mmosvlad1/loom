@@ -269,7 +269,7 @@ Exception: an invalid mode (`00-ticket.md` has a `mode` that is not `oneshot`, `
         │              git switch -c feat/42-auth-flow
         │              .loom/tasks/42-auth-flow/00-ticket.md
         │
-   ── /clear → /loom:next ──   runs the next phase for the mode:
+   ── /clear → the command of the Next: line ──   one phase per session, by mode:
         │
         ├─ research-questions  (full)   → 01-research-questions.md
         ├─ research                     → 02-research.md
@@ -318,7 +318,7 @@ The post-PR fix path in `iterate`: fix → checks → commit → refresh `docs/t
 
 Each phase starts in a fresh session (`/clear` between phases). A long session fills with search results, test output, and old drafts, and quality drops. Artifacts carry everything the next phase needs.
 
-The normal loop between phases is two commands: `/clear`, then `/loom:next`.
+The normal loop between phases is two commands: `/clear`, then the command that the `Next:` line of the last message names (§7.4). `/loom:next` computes the same command and runs it, for a session that does not have that line (§9.12).
 
 ### 7.2 How a fresh session knows the task
 
@@ -334,10 +334,24 @@ The `SessionStart` hook (§11.1) runs `loom-state` and injects the task director
 Every skill ends with the format from `_shared/final-answer.md`: artifact path, status, open questions count, and the next step, e.g.:
 
 ```
-Next: /clear, then /loom:next
+Next: /clear, then /loom:design
 ```
 
 Claude Code cannot clear its own context, so the user runs `/clear`.
+
+**The `Next:` line names the command itself.** The skill takes it from `next.command` of `loom-state`, after its last write:
+
+- `/loom:iterate …` is written as it is. It continues in the same session.
+- A phase command (`/loom:research-questions`, `/loom:research`, `/loom:design`, `/loom:plan`, `/loom:implement`), `/loom:describe-pr`, or `/loom:finish-task` is written as `/clear, then <command>`. A phase that the user invokes by its own command runs with the `model` and `effort` of its skill. Through `/loom:next` it runs with the session's model and effort (§9.12).
+- `/loom:start-task …`, `/loom:backlog`, and `/loom:setup` are written as they are. `/clear, then` comes before them only when the session did real work.
+- With manual verification steps, `run the manual steps, then ` comes before the mapped command. The manual steps do not change the state. Normally the line is `run the manual steps, then /clear, then /loom:implement`. After the last implementation phase the command is `/loom:describe-pr`, or `/loom:finish-task` with an open PR.
+- A `Next:` line names `/loom:next` only where a step of the user comes first and changes the state. The next command is not known there. The cases:
+  - a git error to fix (`workingTree: null`);
+  - changes that the user commits or stashes;
+  - a settings file that the user changes and commits (§9.13.5);
+  - a PR state that the skill did not read (the stops of `setup` on an open setup PR).
+
+**Warnings of the state.** The `loom-state` output that gives `next.command` also has `warnings`. The final message has one `Warning:` line for each entry, unless it already has a `Result:` or `Warning:` line for it. So a phase that the user invokes by its own command shows the same `warnings` entries as `/loom:next`, except the warnings about the PR: only `loom-state --pr` reads the PR state.
 
 ### 7.5 Skills and forked context
 
@@ -549,7 +563,7 @@ Other untracked files of the empty repository (e.g. the files of `uv init`) go i
 5. Builds the slug with `loom-state --slug '<title>'` (§8.2): issue title → lowercase ASCII, non-alphanumerics → `-`, at most 5 words / 40 characters (words are dropped from the end until it fits; a longer single word is cut; an empty result is `task`).
 6. Refuses if the working tree is dirty (offers stash). Then `git switch <mainBranch> && git pull --ff-only` (a main branch that cannot fast-forward stops it), then `git switch -c <type>/<n>-<slug>`.
 7. Creates `.loom/tasks/<n>-<slug>/00-ticket.md` from `references/ticket-template.md`: the §13.1 ticket frontmatter and a verbatim copy of the issue (title as the `# ` heading, labels, URL, body).
-8. Ends with `Next: /clear, then /loom:next`.
+8. Ends with a `Next:` line from `next.command` (§7.4). For a new task it is `/clear, then` the first phase of the mode: `/loom:research-questions` (full), `/loom:research` (quick), or `/loom:implement` (oneshot). A restored task, or an existing branch, has its own state, so the command can be any other.
 
 If the issue already has an archived task directory, offers to restore it from `_archive/` instead. The setup issue ("Set up loom") is refused with `Next: /loom:setup`.
 
@@ -704,12 +718,14 @@ Dirty working tree: changes only in the docs paths (`workingTreeDocsOnly`) are a
 
 **Purpose:** show the task state and **run** the next phase. It replaces the earlier `next-phase` idea.
 
+**When the user needs it:** the `Next:` line of every final message names the next command itself (§7.4), so the normal loop does not go through `next`. `next` is for a session without that line (a new day, another machine), and for the `Next:` lines that name it because a step of the user changes the state first.
+
 **Does:** runs `loom-state --pr`, prints a 3–5 line state summary, then reads and follows the next phase's `SKILL.md` from `${CLAUDE_PLUGIN_ROOT}/skills/<phase>/` (same rules as invoking that skill directly). For `iterate`, `describe-pr`, and `finish-task` it only names the command, because those need the user's input or confirmation.
 
 A file read with Read is not loaded as a skill, so `next` compensates (§24.2):
 - **Injection and variables:** Read does not run the phase file's `` !`…` `` line and does not substitute `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SKILL_DIR}`, or `$ARGUMENTS` in it. The model uses the state that `next` injected (or bare `loom-state --json`) instead of the injection, replaces `${CLAUDE_PLUGIN_ROOT}` with the value shown in `next`'s own (substituted) body, replaces `${CLAUDE_SKILL_DIR}` with `<plugin root>/skills/<phase>`, and treats `$ARGUMENTS` as `next`'s arguments. `next`'s prompt names these placeholders without writing them, because its own body is substituted too.
 - **Permissions:** the phase file's `allowed-tools` do not apply. `next` carries the union: its own `… --json --pr` injection rule, bare `loom-state --json`, and the plugin `Read` rule. It reads the phase file and that file's shared files before it asks the user anything.
-- **Model:** the phase file's `model` and `effort` do not apply, so `next` uses `model: inherit` with no `effort` (§9.0).
+- **Model:** the phase file's `model` and `effort` do not apply, so `next` uses `model: inherit` with no `effort` (§9.0). For design and plan (`effort: high`), `next` adds one `Warning:` line that names the direct command.
 
 **Decision table** (first matching row wins):
 
@@ -731,7 +747,7 @@ A file read with Read is not loaded as a skill, so `next` compensates (§24.2):
 
 **The plan gate** holds for oneshot, and for quick or full when `04-plan.md` is `approved`. An invalid mode never holds it. `next` is never `implement` while the gate does not hold. With an invalid mode, `next` is always `/loom:iterate mode <oneshot|quick|full>` (row 2b), except on rows 1, 2, and 2a: every later row depends on the mode. Artifacts have no `blocked` status (§13.1); `loom-state` reports such a value as an unknown status (`in-review`, with a warning).
 
-Gate work (rows 6 and 7) comes before PR routing and "all implementation phases done": a design or plan that went back to review, for example after a plan change on an open PR, is never skipped. Before implementation starts, a `draft` gate artifact is unfinished work and falls to row 11, which reruns its phase (`/loom:plan` overwrites a draft plan). After implementation started, a draft or in-review plan is a plan change and row 4 handles it, before the dirty tree, PR routing, and describe-pr. Non-gate artifacts (research-questions, research) never block row 11. If research is `in-review`, `next` prints "research not reviewed" and continues. If research is stale, it warns and offers to rerun research.
+Gate work (rows 6 and 7) comes before PR routing and "all implementation phases done": a design or plan that went back to review, for example after a plan change on an open PR, is never skipped. Before implementation starts, a `draft` gate artifact is unfinished work and falls to row 11, which reruns its phase (`/loom:plan` overwrites a draft plan). After implementation started, a draft or in-review plan is a plan change and row 4 handles it, before the dirty tree, PR routing, and describe-pr. Non-gate artifacts (research-questions, research) never block row 11. If research is `in-review`, `next`, `design`, and `plan` print `Warning: research not reviewed; approve it with /loom:iterate approve research` and continue. If the research questions are `in-review`, `research` prints `Warning: research questions not reviewed; approve them with /loom:iterate approve research-questions` and continues. `implement` prints neither. The note in `next.reason` names the same command: `research not reviewed (/loom:iterate approve research)`. In `approve <name>`, the name `research` is `02-research.md`, and `research-questions` is `01-research-questions.md`. If research is stale, `next` warns and offers to rerun research.
 
 Row 5 and a dirty tree: `implement` resumes only while implementation phases are left and the plan gate holds. Before the gate holds, a dirty tree (research, design, and plan change no code) or a `log.md` entry in progress falls through to the later rows (open questions, approve, the missing phase), and `loom-state` adds the warning `working tree has uncommitted changes; they are not part of research, design, or plan (commit, stash, or discard them before /loom:implement)` or `log.md has implementation phase <N> in progress, but 04-plan.md is not approved; implementation waits for the plan gate`. With all phases done, a tree that is dirty only in the docs paths (`workingTreeDocsOnly`) is an interrupted `describe-pr` and falls through to the later rows (row 9, `/loom:describe-pr`, which continues its partial run; with an open PR, the PR routing of row 8, whose skills commit the docs through `_shared/pr-update.md`); code changes go to `/loom:iterate` (or `/loom:finish-task` when the PR is merged). A skill that refuses a dirty tree names the skill that handles the changes, never a `Next:` that leads back to the same refusal.
 
@@ -823,7 +839,7 @@ On the onboarding path, `setup` does only the kickoff. It shows one plan and act
 9. **Kickoff commit:** `chore(loom): start loom setup (#<n>)`, with only `.claude/loom.json`, `.claude/settings.json`, and, if step 2 changed it, `.gitignore`. Its body has no `Phase` line. It keeps the working tree clean. A dirty tree would add a warning to every later phase (§9.12 row 5).
    - A git hook of the project can reject the commit (`pre-commit`, a `commit-msg` hook that checks the subject). Then setup stops with the hook's output: `Result: kickoff commit failed: <the error>`, `Next: fix it, then /loom:setup`. It never passes `--no-verify`. A hook that rejects the subject format stops the onboarding before the design can discuss it (topic 2 of §9.13.4): the user changes the hook's rule first, because loom has no config key for another format (§24.1).
 10. **Research questions:** `<task dir>/01-research-questions.md` with the fixed list of §9.13.3 and the questions the user added. `status: approved`: the user approved the list with the plan confirmation (an exception to §13.1). Key Context Pointers lists, verbatim, the paths in `found` of `--setup-path` (instruction files, workflow files, PR templates, docs directories).
-11. **Final message:** `Next: /clear, then /loom:next`. `next` then runs `research` (§9.12 row 11).
+11. **Final message:** `Next: /clear, then /loom:research`, from `next.command` (§9.12 row 11).
 
 Size `M` caps the design rounds at 3 (§12.5). Most onboarding questions are independent, so round 1 carries most of them.
 
@@ -1742,7 +1758,7 @@ evals/
     - Exactly one `git commit` (also as `git -C <dir> commit`).
     - `log.md` has `## Phase 1 — done — <hash>` and no phase 2 entry.
     - The Phase Overview ticks phase 1 only.
-    - The last message has `Manual verification:` and `run the manual steps, then /clear, then /loom:next` (the grader also accepts `step` for a single manual step).
+    - The last message has `Manual verification:` and `run the manual steps, then /clear, then /loom:implement` (implementation phase 2 is left; the grader also accepts `step` for a single manual step).
     - `<task dir>/events.jsonl` has a `stop` line of `implementation-reviewer` with `"result":"pass"` or `"changes-needed"`, and a `stop` line of `implementer` with `"result":"pass"` or `"fail"` (§11.6). Each fails when `last_assistant_message` does not hold the agent's report (the result is then `unknown`).
   - `guard-main` (on `main`, staged change, no skill):
     - A Bash `git commit` ran.
@@ -1802,7 +1818,7 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
 | Every artifact reviewed before moving on | Gates only on design and plan | Fewer interruptions |
 | Stop after every implementation phase | Auto-advance unless manual verification is needed | Fewer interruptions |
 | Checks trusted from the agent's report | Enforced by a `SubagentStop` hook | Reliability |
-| User remembers the next skill | `/loom:next` computes and runs it | Less friction |
+| User remembers the next skill | Every final message names the next command; `/loom:next` computes and runs it | Less friction |
 | Artifacts gitignored | Working artifacts ignored, knowledge committed | Clean repo + visible process |
 | "Only use when invoked by name" in description | `disable-model-invocation: true` | Enforced, saves context |
 | — | `backlog`, `finish-task`, `setup` with CI and ruleset, evals | Full lifecycle, tested harness |
@@ -1852,7 +1868,6 @@ None. Onboarding existing repositories moved to §23.1 (M9, §9.13). It migrates
 - **Project formats that loom writes (M9):** for loom tasks, the formats that loom writes and parses win over the project's formats (§9.13.4 topic 2): the branch name `<type>/<n>-<slug>`, the commit subject `<type>(<scope>): <summary> (#<n>)`, the `Phase N:` commit body, `Closes #<n>` in the PR body, and the task summary file name `<n>-<slug>.md`. A project that enforces another format (a CI check on commit subjects, branch names that a ticket system needs) has no config key for it. Decide after onboarding a mature repository whether `loom.json` needs format keys.
 - **Fast set over the hook timeout (M9):** `checks.check` must finish within 540 seconds (§17.1). A project whose fastest useful set takes longer has no answer yet: a longer hook timeout, or checks scoped to the changed files.
 - **Subagent report source for process metrics:** `subagent_events.py` reads `last_assistant_message`. In the eval runtime on Claude Code 2.1.318 it holds the report (`implement-manual` passed 7 of 7 graders locally on 2026-11-12). The hooks docs say that a subagent with the `SubagentHandback` tool delivers its report through that tool, and `last_assistant_message` then holds only its closing text; the Claude desktop app does this. There `result` can be `unknown`. Decide after dogfooding whether a hook on `SubagentHandback` should supply the report.
-- **`Next:` lines and `/loom:next` (live run, 2026-11-12):** a phase that runs through `/loom:next` is read with Read, so it does not get the `model` and `effort` of its skill (§9.12). Planned before release 1.2.0: the `Next:` line names the phase command (`/loom:plan`, `/loom:design`, …), and `Warning: research not reviewed` names `/loom:iterate approve research`.
 - **Deferred improvements from the 2026-11-12 review:**
   - The checks run three times per implementation phase: the implementer, the `SubagentStop` hook, and the orchestrator.
   - The ADR number is computed by the model (`describe-pr` step 4), not by `loom-state`.
@@ -1907,13 +1922,13 @@ Resolved (milestone M6):
 - **Evals in GitHub Actions** (`eval.yml`):
   - `ubuntu-24.04`, Claude Code 2.1.318 and 2.1.322: every skill case aborts at turn 0 with `Shell command failed for pattern "!`"…/bin/loom-state --json`"`. The trace shows the cause: `/bin/bash: line 1: /tmp/claude-eval-…/tmp/claude-1001/cwd-…: Read-only file system`. The bubblewrap sandbox keeps the run's `TMPDIR` read-only, so the Bash tool cannot write its cwd file. Every sandboxed Bash call fails, skill injections included. `guard-main` passes, because the hook denies the command before Bash runs. Managed settings `/etc/claude-code/managed-settings.json` with `{"sandbox":{"filesystem":{"allowWrite":["/tmp"]}}}` did not change it. The traces do not show whether Claude Code's sandbox profile or the runner's `/tmp` mount causes it; it looks like an upstream bug. Runs: https://github.com/mmosvlad1/loom/actions/runs/42907795225, 42908329427 (2.1.322), 42908552525 (managed settings).
   - `macos-latest` (image `macos-26-arm64`), Claude Code 2.1.318, haiku: all 4 cases pass 1/1, `implement-manual` included. Total cost 0.25 USD: research 0.15, implement 0.08, design 0.02, guard 0.002. Run: https://github.com/mmosvlad1/loom/actions/runs/42908741230. `eval.yml` therefore pins `macos-26`.
-- **`implement` stops at manual verification** (outside the eval sandbox, because of the local macOS limit above; the macOS runner later passed the case in the eval sandbox): `claude -p "/loom:implement" --plugin-dir . --model haiku --permission-mode default --setting-sources project,local --allowedTools "Read" "Edit" "Write" "Agent" "Bash(git *)" "Bash(make *)" "Bash(loom-state *)"` in the `implement-manual` fixture committed phase 1 once, ticked it, logged `## Phase 1 — done — <hash>`, did not start phase 2, and ended with `Manual verification:` and `Next: run the manual steps, then /clear, then /loom:next`. All five graders that the case had then pass on that output.
+- **`implement` stops at manual verification** (outside the eval sandbox, because of the local macOS limit above; the macOS runner later passed the case in the eval sandbox): `claude -p "/loom:implement" --plugin-dir . --model haiku --permission-mode default --setting-sources project,local --allowedTools "Read" "Edit" "Write" "Agent" "Bash(git *)" "Bash(make *)" "Bash(loom-state *)"` in the `implement-manual` fixture committed phase 1 once, ticked it, logged `## Phase 1 — done — <hash>`, did not start phase 2, and ended with `Manual verification:` and `Next: run the manual steps, then /clear, then /loom:next` (the line of that time; it now ends with `/loom:implement`, §7.4). All five graders that the case had then pass on that output.
 - **`Read(/${CLAUDE_PLUGIN_ROOT}/skills/**)` in default permission mode** (the eval runtime cannot cover it): `claude -p "/loom:research" --plugin-dir <loom> --model haiku --permission-mode default --setting-sources project,local --allowedTools "Skill"` in the `research-full` fixture read `skills/_shared/frontmatter.md`, `writing-style.md`, `visual-conventions.md`, `final-answer.md`, and `skills/research/references/template.md` without a denial (only a later Write outside the grants was denied). Control: the same run with that rule removed from the skill's `allowed-tools` denied all four `_shared` reads ("Claude requested permissions to read from …").
 - **statusLine live check:** on 2026-11-11, Claude Code 2.1.318, macOS, an interactive session `LOOM_PLUGIN_ROOT=<loom checkout> claude --plugin-dir <loom checkout>` in a copy of the `design-full` fixture, with the committed `.claude/loom-statusline.py` and only the `statusLine` entry in `.claude/settings.json`, showed the line `#7 · full · research:approved`. The working directory of the `statusLine` command is not documented; the command finds the script through `git rev-parse --show-toplevel`, and the script runs `loom-state` in `workspace.current_dir`, so any working directory inside the repository works. Scope: this check used the `LOOM_PLUGIN_ROOT` override. The lookup through `installed_plugins.json`, the `loom` marketplace, and the plugin cache is covered only by the unit test against a fake plugins root.
 - **Live run of the onboarding task** (2026-11-12 and 2026-11-13, Claude desktop app, Code tab, auto permission mode; a private sandbox repository with a small Python package, `AGENTS.md` and no `CLAUDE.md`, a `Makefile` with `test` and `lint`, a CI job named `test`, and a PR template with `## Summary` and `## Test plan`). The plugin was loaded from the working copy of the M9b branch through a local-scope install of a directory marketplace, because the desktop app has no `--plugin-dir`.
   - The run went from `/loom:setup` to `/loom:finish-task`: kickoff (commit with `.claude/loom.json`, `.claude/settings.json`, and `.gitignore`), research (check runs, instruction files), design (11 questions in round 1, 2 rounds), plan, 3 implementation phases, the setup PR with 3 follow-up issues, and the merge.
   - Findings, all fixed on the M9b branch after the run: a subagent cannot edit `.claude/settings.json` (the next item); an unticked CI item in the required `## Test plan` section (§13.6, §9.11); a `gh pr view: no pull requests found` warning at the end of `implement` (§8.2).
-  - Open after the run (§24.1): the `Next:` line names `/loom:next`, and a phase that runs through `/loom:next` does not get the `model` and `effort` of its skill; `Warning: research not reviewed` does not name the command that clears it.
+  - Found in the run and fixed after it (§7.4, §9.12): the `Next:` line named `/loom:next`, and a phase that runs through `/loom:next` does not get the `model` and `effort` of its skill. Now the `Next:` line names the phase command. `Warning: research not reviewed` did not name the command that clears it. Now it names `/loom:iterate approve research`.
   - Not checked in this run: the output of `finish-task` after the merge (the ruleset offer on a private repository), and the main-context edit of `.claude/settings.json` by `implement`, which was added after the run.
 - **A subagent cannot edit `.claude/settings.json` in auto permission mode** (live run of the onboarding task, 2026-11-12, Claude desktop app, Code tab, a private sandbox repository): the permission classifier denied the Edit of `.claude/settings.json` by the `loom:implementer` subagent as self-modification (the change added `extraKnownMarketplaces`, `enabledPlugins`, `Bash(make *)`, and `statusLine`), and implementation phase 1 was `blocked`. In the same task, the kickoff's Write of that file in the main context passed, after the user confirmed the plan that showed its `diff`. So loom edits settings files only in the main context, after a confirmation that shows the `diff` (§9.13.2, §9.13.5). Not verified: whether the main-context edit of `implement` passes in every permission mode; a denied edit stops `implement` with the `diff`.
 - **`claude plugin validate --strict` needs no credentials:** it passed with an empty `HOME` and no API key or token in the environment, so loom's CI runs it without a secret.
@@ -1932,7 +1947,7 @@ Resolved (milestone M4):
 - **`SubagentStop` for a plugin agent** (https://code.claude.com/docs/en/hooks, SubagentStart and SubagentStop): the input has `stop_hook_active`, `agent_id`, `agent_type`, `agent_transcript_path`, and `last_assistant_message`, plus the common fields. `agent_type` is the matcher value. For a plugin agent it is the plugin-scoped name (`loom:implementer`), not the frontmatter name; the docs recommend the anchored matcher `^my-plugin:reviewer$`. Exit 2 keeps the subagent running and delivers stderr as its next instruction. `stop_hook_active` is `true` while Claude Code continues because of a stop hook; Claude Code also caps consecutive stop-hook continuations at 8, but that count resets on every tool call. The default command hook timeout is 600 seconds.
   - Verified live (Claude Code 2.1.318, `claude -p --plugin-dir . --model haiku --permission-mode default --setting-sources project,local --allowedTools "Read Edit Write Agent Task"`, fixture repository whose `make check` always fails, plus a project `SubagentStop` hook with matcher `*` that logged its input): the input had `agent_type: "loom:implementer"`; the matcher `^loom:implementer$` fired; `subagent_checks.py` exited 2 twice and the implementer continued each time (the hook output reached it as "Stop hook feedback"); `stop_hook_active` was `false` on the first stop and `true` on the second and third, also after a successful Read call in between; on the third failure the hook exited 0 with its `systemMessage`, and the implementer stopped.
   - Also seen live: in default permission mode, `make check 2>&1 | tee "${TMPDIR:-/tmp}/loom-check.log"` was refused ("A variable in braces in this command can't be checked before it runs"). Skills and the implementer therefore run checks exactly as configured, with no pipe, redirection, or shell variable (`_shared/git-flow.md`).
-- **`/loom:next` follows a phase file read with Read:** the file is not loaded as a skill. Its `` !`…` `` injection does not run, its `${…}` variables and `$ARGUMENTS` are not substituted, its `allowed-tools` do not apply, and its `model` and `effort` do not apply. Fix (§9.0, §9.12): `next` injects the state itself, tells the model how to fill in the placeholders, carries the union of the permission rules, and runs with `model: inherit` and the session's effort instead of `haiku`/`low`.
+- **`/loom:next` follows a phase file read with Read:** the file is not loaded as a skill. Its `` !`…` `` injection does not run, its `${…}` variables and `$ARGUMENTS` are not substituted, its `allowed-tools` do not apply, and its `model` and `effort` do not apply. Fix (§9.0, §9.12): `next` injects the state itself, tells the model how to fill in the placeholders, carries the union of the permission rules, and runs with `model: inherit` and the session's effort instead of `haiku`/`low`. The `Next:` lines name the phase command, so the normal loop loads each phase as a skill (§7.4).
 
 Resolved (milestone M3):
 

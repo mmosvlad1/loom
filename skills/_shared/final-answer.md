@@ -16,7 +16,7 @@ Optional lines, in this order, between `Open questions` and `Next`:
 - `Manual verification:` followed by a list of steps, when `implement` stops for manual verification.
 - `Accepted by default:` followed by the question numbers, when the round cap resolved questions (see `question-rounds.md`).
 - `Clarify:` one line per question you need the user to answer outside the normal round: an unclear answer, or a question that is not minor after the round cap. Name the question number and what is unclear, e.g. `Clarify: Q4 - option d does not exist; choose a, b, or c.`
-- `Warning:` one line per warning that needs the user's attention (e.g. stale research, research not reviewed).
+- `Warning:` one line per warning that needs the user's attention (e.g. stale research, research not reviewed). Also write one `Warning:` line for each entry of `warnings` in the `loom-state` output that gives `next.command`. A stop before any write takes them from the state that the skill injected. Skip an entry when the message already has a `Result:` or `Warning:` line for it.
 
 ## Fields
 
@@ -25,9 +25,14 @@ Optional lines, in this order, between `Open questions` and `Next`:
 - **Open questions**: the number of `**Q<n>.` items under `## Open Questions`, as `loom-state` reports it. Add the round for design and plan: `3 (round 1 of ~3)`. Write `0` when none are open. Omit the line when the skill writes no artifact.
 - **Next**: compute it, do not remember it. Run `loom-state --json` (the plugin's `bin/` is on the Bash `PATH`) after your last write and read `next.command`:
   - `/loom:iterate …` (open round, approval, fix): write the command; it continues in this session.
-  - `/loom:describe-pr` or `/loom:finish-task`: write `/clear, then /loom:describe-pr` (or `/loom:finish-task`).
-  - `/loom:start-task …`, `/loom:backlog`, or `/loom:setup`: write the command as it is; `/loom:next` would only name it. Write `/clear, then` before it only when this session did real work (wrote an artifact, committed, created an issue, or merged).
-  - Any other command (a phase that `/loom:next` runs): write `/clear, then /loom:next`.
+  - A phase command (`/loom:research-questions`, `/loom:research`, `/loom:design`, `/loom:plan`, `/loom:implement`), `/loom:describe-pr`, or `/loom:finish-task`: write `/clear, then <command>`, e.g. `/clear, then /loom:design`. A phase that the user invokes by its own command runs with the `model` and `effort` of its skill. Through `/loom:next` it does not.
+  - `/loom:start-task …`, `/loom:backlog`, or `/loom:setup`: write the command as it is. Write `/clear, then` before it only when this session did real work (wrote an artifact, committed, created an issue, or merged).
+  - With manual verification steps, write `run the manual steps, then ` before the mapped command. The manual steps do not change the state. Normally it is `run the manual steps, then /clear, then /loom:implement`. After the last implementation phase it is `/clear, then /loom:describe-pr`, or `/clear, then /loom:finish-task` with an open PR.
+  - Write `/loom:next` only where the skill's own text names it. There a step of the user comes first and changes the state, so the next command is not known yet:
+    - a git error to fix (`workingTree` is `null`);
+    - changes that the user commits or stashes;
+    - a settings file that the user changes and commits;
+    - a PR state that the skill did not read.
 
 ## Rules
 
@@ -47,13 +52,13 @@ Open questions: 3 (round 1 of ~3)
 Next: /loom:iterate <answers>, e.g. /loom:iterate 1a, 2b, 3: <text>. An empty /loom:iterate accepts all recommendations.
 ```
 
-Research finished:
+Research finished (full mode):
 
 ```text
 Artifact: .loom/tasks/42-auth-flow/02-research.md
 Status: in-review
 Open questions: 0
-Next: /clear, then /loom:next
+Next: /clear, then /loom:design
 ```
 
 Implementation phase that needs manual verification:
@@ -65,5 +70,5 @@ Open questions: 0
 Manual verification:
 - Run `make dev`, open http://localhost:8000/login, and sign in with the seed user.
 - Check that the session cookie has the `HttpOnly` flag.
-Next: run the manual steps, then /clear, then /loom:next
+Next: run the manual steps, then /clear, then /loom:implement
 ```

@@ -1,6 +1,6 @@
 ---
 name: next
-description: Shows the task state in a few lines and runs the next loom phase for the mode - research-questions, research, design, plan, or implement - by following that phase's skill in this session. For iterate, describe-pr, and finish-task it only names the command. Use it after /clear between phases.
+description: Shows the task state in a few lines and runs the next loom phase for the mode - research-questions, research, design, plan, or implement - by following that phase's skill in this session. For iterate, describe-pr, and finish-task it only names the command. Use it in a session without the Next line of the last loom message, or when a Next line names /loom:next.
 disable-model-invocation: true
 argument-hint: "[notes for the next phase]"
 model: inherit
@@ -54,7 +54,7 @@ Next: /loom:iterate <answers> (plan has 2 open questions)
 Then print the warnings, one `Warning:` line each:
 
 - every entry of `warnings`
-- `02-research.md` is `in-review`, and the next phase is design, plan, or implement: `Warning: research not reviewed`. Continue.
+- `02-research.md` is `in-review`, and the next phase is design or plan: `Warning: research not reviewed; approve it with /loom:iterate approve research`. Continue.
 - `02-research.md` has `stale: true`: `Warning: research is stale (<staleFiles>)`. Offer a rerun: ask the user whether to rerun research now or continue with the next phase. On "rerun", run `/loom:research` as step 3 describes, with the phase `research`.
 
 ## 3. Run or name the next command

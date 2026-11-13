@@ -1,6 +1,6 @@
 # Question Rounds Protocol
 
-`design` and `plan` ask open questions in rounds. `iterate` records the answers and writes the next round. Follow this protocol exactly: `loom-state` counts the open questions from the artifact, and `/loom:next` routes on that count.
+`design` and `plan` ask open questions in rounds. `iterate` records the answers and writes the next round. Follow this protocol exactly: `loom-state` counts the open questions from the artifact and routes on that count.
 
 A round is one batch of open questions in an artifact. All rounds of an artifact stay in one session.
 

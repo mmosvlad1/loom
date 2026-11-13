@@ -227,7 +227,7 @@ End with the final message. `Open questions` comes from `loom-state`.
 
 ### Pick the artifact
 
-1. The argument names it after `approve` (`approve design`, `approve 04-plan.md`): take that one.
+1. The argument names it after `approve` (`approve design`, `approve 04-plan.md`): take that one. The name `research` is `02-research.md`, and `research-questions` is `01-research-questions.md`.
 2. Otherwise the first gate artifact in review, in order `03-design.md`, `04-plan.md` (gates: design and plan in full mode, plan in quick mode).
 3. Otherwise the latest artifact in phase order with `status: in-review`.
 4. If none is in review: stop with `Result: nothing to approve`, `Next:` from `next.command`.

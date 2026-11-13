@@ -1822,7 +1822,7 @@ def _phase_notes(arts: Dict[str, Dict[str, Any]], mode: str) -> str:
             continue
         art = arts.get(phase)
         if art and art.get("status") == "in-review":
-            notes.append("%s not reviewed" % phase)
+            notes.append("%s not reviewed (/loom:iterate approve %s)" % (phase, phase))
     research = arts.get("research")
     if research and research.get("stale") and "research" in PHASES_BY_MODE.get(mode, []):
         notes.append("research is stale (referenced files changed on main); consider rerunning /loom:research")

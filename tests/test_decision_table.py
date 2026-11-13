@@ -290,7 +290,7 @@ class DecisionTableTest(unittest.TestCase):
         s = state(artifacts=[art("research-questions", "approved"), art("research", "in-review"),
                              art("design", "in-review", 3)])
         r = self.assertNext(s, "/loom:iterate <answers>", "design has 3 open questions")
-        self.assertIn("research not reviewed", r["reason"])
+        self.assertIn("research not reviewed (/loom:iterate approve research)", r["reason"])
 
     def test_row6_plan_open_questions_quick(self):
         s = state("quick", [art("research", "approved"), art("plan", "in-review", 1)])
@@ -497,12 +497,12 @@ class DecisionTableTest(unittest.TestCase):
     def test_row11_full_research_after_questions(self):
         s = state(artifacts=[art("research-questions", "in-review")])
         r = self.assertNext(s, "/loom:research")
-        self.assertIn("research-questions not reviewed", r["reason"])
+        self.assertIn("research-questions not reviewed (/loom:iterate approve research-questions)", r["reason"])
 
     def test_row11_design_after_research_in_review(self):
         s = state(artifacts=[art("research-questions", "approved"), art("research", "in-review")])
         r = self.assertNext(s, "/loom:design")
-        self.assertIn("research not reviewed", r["reason"])
+        self.assertIn("research not reviewed (/loom:iterate approve research)", r["reason"])
 
     def test_row11_plan_after_design(self):
         s = state(artifacts=[art("research-questions", "approved"), art("research", "approved"),
