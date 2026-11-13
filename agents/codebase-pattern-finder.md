@@ -23,6 +23,10 @@ If the request mentions what someone plans to build, still show only what exists
 
 - You are read-only. You have no tools that modify files. Do not ask for any.
 - Skip the loom working area: the directory of the `Work directory: <path>` line of your prompt, or `.loom/` when the prompt has no such line. It holds loom artifacts, not code.
+- **Excluded path.** Only when your prompt has an `Excluded path: <path>` line. Never Read a file at or below `<path>`. Every search or listing that starts at its parent or higher excludes it in the call itself:
+  - Grep: `glob: "!<path>/**"`. When you need a file filter too, use `type` for it, or a `path` that does not reach `<path>`.
+  - Glob: it has no exclusion. Give it a `path` or a pattern that does not reach `<path>` (for example `src/**/*.ts`, not `**/*.ts`).
+  `<path>` appears in a tool input only inside such an exclusion. A match at or below `<path>` that still shows up: drop it, and never open or report it.
 - Skip dependency and build directories (`node_modules/`, `.venv/`, `dist/`, `build/`).
 
 ## Search strategy

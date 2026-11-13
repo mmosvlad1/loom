@@ -15,9 +15,12 @@ You orchestrate. The `loom:implementer` agent changes the code; it never commits
   ```text
   Checks: check = `<checks.check>`; lint = `<checks.lint>`; typecheck = `<checks.typecheck>`; test = `<checks.test>`
   Conventions: <docs.conventions>
+  Style guide: <docs.style>
+  Screens: <docs.screens>
   Main branch: <mainBranch>
   ```
   The implementer gets the `Checks:` and `Conventions:` lines. The reviewer gets the `Conventions:` and `Main branch:` lines.
+  The `Style guide:` line goes into a prompt only when `design.style` is `true`, and the `Screens:` line only when `design.screens` is not empty. Each one then follows the `Conventions:` line in every prompt that has that line, for both agents.
   A run that changes `.claude/loom.json` makes these values out of date: step 3 takes them again.
 
 ## Settings change
@@ -77,7 +80,7 @@ The implementer is the second guard: a settings item that reaches it comes back 
    - If the working tree already holds part of the work (a resumed run), add: `The working tree already contains part of this work; continue from it.`
    - If an earlier run was blocked, add the reason as context: `An earlier run was blocked by: <reason>.`
 2. **Open problems.** Read the implementer's report. If `Open problems` lists a problem that needs a design decision or a plan change (the form Expected / Found / Why it matters), stop the loop. The result is **blocked**, with that problem as the reason. Do not ask the implementer to guess. A problem that needs a change of `.claude/settings.json` or `.claude/settings.local.json` is a settings item: the reason is `settings: <the item>`.
-3. **Configuration change.** Run `git status --porcelain -- .claude/loom.json`. If it shows the file changed, or the implementer's `Files changed` lists `.claude/loom.json`, the configuration you hold came from the state before the change. The report is a claim, so check both. Run `loom-state --json` again. Take the configuration from its output (`checks`, `docs`, `mainBranch`, `implement`, `hooks`), and use it from now on:
+3. **Configuration change.** Run `git status --porcelain -- .claude/loom.json`. If it shows the file changed, or the implementer's `Files changed` lists `.claude/loom.json`, the configuration you hold came from the state before the change. The report is a claim, so check both. Run `loom-state --json` again. Take the configuration from its output (`checks`, `docs`, `design`, `mainBranch`, `implement`, `hooks`), and use it from now on:
    - for your own `checks.check` run in step 4;
    - for the reviewer prompt in step 5;
    - for the fix attempts in step 6 (the `Checks:` line of their prompt, and `implement.maxFixAttempts`);

@@ -26,7 +26,7 @@ Keep the layout of the template. On the onboarding task the sections hold:
 | Testing Approach | `checks.check` passes locally and in the required CI check of the setup PR |
 
 - **Out of Scope**: write each `Follow-up:` line as a bullet that starts with `Follow-up: `, one gap per line. `/loom:describe-pr` proposes every `Follow-up:` line as an issue after the PR opens. A gap whose topic 4 question is still open gets its line for the recommended option ("Assumes Q4 b").
-- **The new `.claude/loom.json`**: show the full file in a `json` block: `version`, `mainBranch`, `checks`, `docs` (the docs map), `ci` with `requiredCheck`, and `pullRequest` with `requiredSections`. The keys of the docs map are the five docs roles only: `docs.dir` of the state is not a key of the file. Where a value depends on an open question, write the value of the recommended option and point to the question.
+- **The new `.claude/loom.json`**: show the full file in a `json` block: `version`, `mainBranch`, `checks`, `docs` (the docs map), `ci` with `requiredCheck`, and `pullRequest` with `requiredSections`. The keys of the docs map are the five docs roles `vision`, `overview`, `decisions`, `conventions`, and `tasks` only: the optional `style` and `screens` are not part of onboarding, and `docs.dir` of the state is not a key of the file. Where a value depends on an open question, write the value of the recommended option and point to the question.
 - **The table of project rules**: one row per project rule that topic 2 covers: `| Project rule (file:line) | Resolution in loom tasks |`. This table goes into the `conventions` document in the implementation phases.
 
 ## Rounds
@@ -72,7 +72,7 @@ Two kinds of conflict have no such default, because loom cannot win them by a ru
 
 ### 3. Documentation
 
-One question per docs role (`vision`, `overview`, `decisions`, `conventions`, `tasks`), or one question for several roles with the same answer. The options for each role:
+One question per docs role (`vision`, `overview`, `decisions`, `conventions`, `tasks`), or one question for several roles with the same answer. The optional roles `style` and `screens` get no question. The options for each role:
 
 - **map**: an existing document plays the role; the docs map records its path. Recommended when one exists.
 - **migrate**: move the files into loom's layout, and update the links in the same implementation phase. Never recommend it: it applies only when the user asks for it, because other documents and people link to the old paths.

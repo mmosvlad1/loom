@@ -130,6 +130,8 @@ Write `<task dir>/00-ticket.md` from `ticket-template.md`:
 
 Run `loom-state --json`. Check that `task.number` is `<n>` and `task.mode` is the chosen mode; add a `Warning:` line for each problem and for each entry of `warnings`.
 
+**Screens.** Only when the issue body has a `## Screens` section. Its `design.screens` lists the screens of the task branch: for a new branch, the branch cut from the updated main branch; after a restore or a switch to an existing branch, that branch. For each path of the section that is not in `design.screens`, add `Warning: screen <path> is not in design.screens; add the screen file first, or fix the issue`.
+
 Use the `final-answer.md` format:
 
 ```text

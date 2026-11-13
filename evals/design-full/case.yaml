@@ -3,7 +3,7 @@ name: design-full
 description: >-
   Full mode, research approved. /loom:design writes 03-design.md in review with round 1 of
   open questions, an empty Resolved Decisions table, and no read of 01-research-questions.md
-  (LOOM_SPEC.md 9.6, 12, 20.2).
+  (LOOM_SPEC.md 9.6, 12, 20.2). It reads the screen of the ticket and names its path (9.14.5).
 tags: [design, full]
 runs: 1
 context:

@@ -51,7 +51,7 @@ The kickoff wrote every other setting of `templates/settings.json`: `extraKnownM
 
 1. **Config and checks**: the full `.claude/loom.json` (first), the missing parts of the check entry point, and the script of the optional status line (`.claude/loom-statusline.py`). The phase also carries the settings change of implementation phase 1, which `/loom:implement` applies.
 2. **CI**: the required check runs `checks.check`, as topic 6 of the design decided. Never rename an existing job.
-3. **Docs**: map, migrate, or create each docs role; the vision and the overview from the approved drafts; the `conventions` document with the CI-only checks and the table of project rules.
+3. **Docs**: map, migrate, or create each of the five docs roles (`vision`, `overview`, `decisions`, `conventions`, `tasks`); the vision and the overview from the approved drafts; the `conventions` document with the CI-only checks and the table of project rules.
 4. **Agent instructions**: `CLAUDE.md` and the agreed changes to other instruction files, each as a `diff` (a new file in full).
 
 **A hook change.** When the design changes a git hook of the project that rejects a loom format (topic 2), put that change into implementation phase 1. The commit of implementation phase 1 is the first commit with a `Phase` line, so it must pass the changed hook. A hook that lives outside the repository (`.git/hooks/`, or a hook manager that needs a reinstall) is not a plan change: the plan names it as a step that the user does before `/loom:implement`, in the Goal of implementation phase 1.

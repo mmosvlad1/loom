@@ -50,6 +50,7 @@
       "Bash(gh pr edit *)",
       "Bash(gh pr merge *)",
       "Bash(gh issue create *)",
+      "Bash(gh issue edit *)",
       "Bash(gh label create *)",
       "Bash(gh api *)"
     ]

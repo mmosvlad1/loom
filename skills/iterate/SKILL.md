@@ -50,9 +50,9 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 ### Configuration
 
-The state holds the resolved configuration: `mainBranch`, the check commands (`checks`), the doc paths (`docs`), `rounds.cap`, and `implement.maxFixAttempts`. Take every value from there, never from `.claude/loom.json`. Pass `checks`, `docs.conventions`, and `mainBranch` to the agents as the configuration lines of `implementation-loop.md`.
+The state holds the resolved configuration: `mainBranch`, the check commands (`checks`), the doc paths (`docs`), `rounds.cap`, and `implement.maxFixAttempts`. Take every value from there, never from `.claude/loom.json`. Pass `checks`, `docs.conventions`, and `mainBranch` to the agents as the configuration lines of `implementation-loop.md`. When `design.style` is `true`, also pass `docs.style` (the `Style guide:` line). When `design.screens` is not empty, also pass `docs.screens` (the `Screens:` line).
 
-**A fix that changes `.claude/loom.json`.** The state above holds the values from before the change. When the implementer's `Files changed` lists `.claude/loom.json`, or `git status --porcelain -- .claude/loom.json` shows it changed, run `loom-state --json` again (step 3 of `implementation-loop.md`). Take the configuration from that output (`checks`, `docs`, `mainBranch`, `implement`, `hooks`) for your own check run, the reviewer prompt, and the fix attempts.
+**A fix that changes `.claude/loom.json`.** The state above holds the values from before the change. When the implementer's `Files changed` lists `.claude/loom.json`, or `git status --porcelain -- .claude/loom.json` shows it changed, run `loom-state --json` again (step 3 of `implementation-loop.md`). Take the configuration from that output (`checks`, `docs`, `design`, `mainBranch`, `implement`, `hooks`) for your own check run, the reviewer prompt, and the fix attempts.
 
 Below, `<main>` is `mainBranch`, `<n>` is `task.number`, `<slug>` is `task.slug`, and `<task dir>` is `task.dir`. Never hard-code the main branch name or the work directory.
 
@@ -78,7 +78,12 @@ When you read or edit an artifact, the input rules of its phase still apply:
 - Editing `02-research.md` in full mode: never read `00-ticket.md`; read `01-research-questions.md`. Keep it descriptive only.
 - Editing `03-design.md` or `04-plan.md`: never read `01-research-questions.md`.
 - Never read `*.superseded.md` files.
-- Every prompt to `loom:codebase-locator`, `loom:codebase-analyzer`, or `loom:codebase-pattern-finder` carries the line `Work directory: <workDir>` (`workDir` from the state). The agent skips that directory: it holds the loom artifacts, the ticket too.
+- Every prompt to `loom:codebase-locator`, `loom:codebase-analyzer`, or `loom:codebase-pattern-finder` carries the line `Work directory: <workDir>` (`workDir` from the state). The agent skips that directory: it holds the loom artifacts, the ticket too. When `design.screens` in the state is not empty, every such prompt also carries the line `Excluded path: <docs.screens>`, as in `research`.
+- Editing `01-research-questions.md` or `02-research.md`: never open a screen (a file at or below `docs.screens`). When `design.screens` is not empty, your own calls follow the rule of the `Excluded path:` line too: never Read a file at or below `docs.screens`; a Grep that starts at its parent or higher carries `glob: "!<docs.screens>/**"`; a Glob gets a `path` or a pattern that does not reach it.
+
+### Screens in design and plan (all sections)
+
+**Screens.** Only when the ticket (`00-ticket.md`) has a `## Screens` section, and this run writes `03-design.md` or `04-plan.md` (answers to a round, feedback, or a plan change). Keep the screen rules of that phase: the design maps each screen, by its path, in Proposed Architecture; each implementation phase that builds UI names its screens in its Changes and keeps one `Manual:` line per screen. A question whose answer makes the code differ from a screen names that screen ID.
 
 ## 1. Check preconditions
 
@@ -299,10 +304,10 @@ Used by this section, [Fix a blocked phase](#fix-a-blocked-phase), [Post-PR fix]
 
 Run the shared `implementation-loop.md` in Fix mode. `implement` runs the same loop in phase mode, so both skills mark a phase done or blocked by the same rules:
 
-1. Launch `loom:implementer` with a short prompt: the plan path `<task dir>/04-plan.md` and the phase number N (oneshot: the ticket path `<task dir>/00-ticket.md`), the word `Fix`, the fix items, and the `Checks:` and `Conventions:` lines of `implementation-loop.md`. The implementer never commits.
-   - If its `Files changed` lists `.claude/loom.json`, or `git status --porcelain -- .claude/loom.json` shows it changed, run `loom-state --json` again. Take the configuration (`checks`, `docs`, `mainBranch`, `implement`, `hooks`) from that output for the next steps and the fix attempts.
+1. Launch `loom:implementer` with a short prompt: the plan path `<task dir>/04-plan.md` and the phase number N (oneshot: the ticket path `<task dir>/00-ticket.md`), the word `Fix`, the fix items, and the `Checks:` and `Conventions:` lines of `implementation-loop.md`, with the `Style guide:` and `Screens:` lines under their conditions. The implementer never commits.
+   - If its `Files changed` lists `.claude/loom.json`, or `git status --porcelain -- .claude/loom.json` shows it changed, run `loom-state --json` again. Take the configuration (`checks`, `docs`, `design`, `mainBranch`, `implement`, `hooks`) from that output for the next steps and the fix attempts.
 2. Run `checks.check` yourself, once. The `SubagentStop` hook already enforced it on the implementer, so a failure here means the hook gave up: the result is blocked.
-3. Launch `loom:implementation-reviewer` in fix mode: the same plan path and phase number (or ticket path), the fix items, the `Conventions:` and `Main branch:` lines, and the implementer's report.
+3. Launch `loom:implementation-reviewer` in fix mode: the same plan path and phase number (or ticket path), the fix items, the `Conventions:` and `Main branch:` lines (with the `Style guide:` and `Screens:` lines under their conditions), and the implementer's report.
 4. If the verdict has `blocking` items, send only those back to `loom:implementer` in Fix mode, at most `implement.maxFixAttempts` times. Record `nit` items, deviations, and additions for `log.md`. A `blocking` item that needs a change of a settings file never goes back: the result is blocked, with the reason `settings: <the item>`.
 5. If the result is blocked (failing checks, an open problem that needs a decision, a settings item, or blocking items after the last attempt):
    - Do not commit. Leave the change in the working tree.
@@ -401,7 +406,7 @@ Every implementation phase is done, and the working tree has code changes: the u
    1. Phase N is the last `done` implementation phase, unless the user names another one (oneshot: 1).
    2. Fix items: the user's argument, one item per stated fix; without an argument, one item `user edits: <file>` per changed file.
    3. Run `checks.check`, as `git-flow.md` describes.
-   4. Launch `loom:implementation-reviewer` in fix mode: the plan path `<task dir>/04-plan.md` and phase N (oneshot: the ticket path), the fix items, the `Conventions:` and `Main branch:` lines, and the diff.
+   4. Launch `loom:implementation-reviewer` in fix mode: the plan path `<task dir>/04-plan.md` and phase N (oneshot: the ticket path), the fix items, the `Conventions:` and `Main branch:` lines (with the `Style guide:` and `Screens:` lines under their conditions), and the diff.
    5. If the checks fail or the verdict has `blocking` items, run [the fix loop](#the-fix-loop) with the failing lines and the `blocking` items as the fix items. A blocked result stops here, as the fix loop describes.
    6. Commit a fix commit, as step 5 of [Fix an implemented phase](#fix-an-implemented-phase) describes (`<task dir>/commit-msg.txt`, Read before Write, `git commit -F`). Stage the changed files from step 1 that the user kept, plus the `Files changed` of every fix-loop run. If no implementer ran, there is no `Files changed` list; the step 1 files are the whole set.
    7. Append the fix entry of `log-format.md` to `log.md`, as step 6 of [Fix an implemented phase](#fix-an-implemented-phase) describes.

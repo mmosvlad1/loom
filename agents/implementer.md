@@ -20,9 +20,11 @@ The prompt also gives the configuration, as resolved by `loom-state`. Do not rea
 ```text
 Checks: check = `<command>`; lint = `<command>`; typecheck = `<command>`; test = `<command>`
 Conventions: <path of the conventions document>
+Style guide: <path of the style guide>
+Screens: <directory of the screens>
 ```
 
-A check written as `null` does not exist in this project. Skip it, and never invent a command for it. If the prompt has no `Checks:` or `Conventions:` line, run `loom-state --json` and take `checks` and `docs.conventions` from its output.
+A check written as `null` does not exist in this project. Skip it, and never invent a command for it. If the prompt has no `Checks:` or `Conventions:` line, run `loom-state --json` and take `checks` and `docs.conventions` from its output (and `docs.style` when `design.style` is `true`, `docs.screens` when `design.screens` is not empty). The `Style guide:` line is there only when the project has a style guide, and the `Screens:` line only when it has screens (mockup files).
 
 **Work that changes `.claude/loom.json`.** The `Checks:` line comes from the configuration before your change, so it can be out of date. When your work changes `.claude/loom.json` (the plan phase, the ticket, or a fix item asks for it; for example implementation phase 1 of the onboarding task):
 
@@ -43,6 +45,7 @@ If the prompt names no plan, ticket, or phase, stop and report that under Open p
    - oneshot: the whole ticket.
 2. Read the `## Resolved Decisions` of the plan and, if `<task directory>/03-design.md` exists and phase N depends on its decisions, of the design.
 3. Read the conventions document of the `Conventions:` line if it exists. Follow it.
+   - Before you write UI code, read the style guide of the `Style guide:` line, and every screen of your phase: the screen paths in its Changes (oneshot: the ticket's `## Screens` section). A screen is a mockup file; read it as text, or as an image.
 4. Note the check commands of the `Checks:` line. Below, `checks.check` is its `check` command, and `checks.lint`, `checks.typecheck`, and `checks.test` are the others.
 5. Read every file the phase names in full before you change it. Read the code around each change point.
 6. Run `git status` and `git diff HEAD` to see the starting state of the working tree.
@@ -74,6 +77,7 @@ Report deviations and problems in your final message. `implement` records them i
   Why it matters: <effect on this or later implementation phases>
   ```
 - Add or update the tests that the phase lists. Follow the existing test patterns.
+- **UI from a screen.** Build it with the project's components and the tokens that the code defines. Never copy the markup or the inline styles of a screen. A value that the style guide and a screen give differently comes from the style guide; name the screen and the value under Deviations. Change the style guide or a screen (a file at or below the directory of the `Screens:` line) only when the plan (oneshot: the ticket) names that change.
 - Never make checks pass by weakening them. Do not skip or delete tests, add lint or type ignores, lower thresholds, or edit check configuration, unless the plan says so.
 - Do not leave debug output, commented-out code, or temporary files.
 - Run one command per Bash call. Do not run `cd`: your working directory is already the git top level, so give paths instead. Do not chain commands with `&&`, `||`, `;`, or a newline. Add no pipe, redirection, or subshell. Permission rules match one command, so a chained call needs a permission prompt or is denied.

@@ -69,6 +69,8 @@ Follow this rule exactly. An eval checks it.
 - Do not read `*.superseded.md` files.
 - Read every file the arguments mention, in full.
 - You may read the project docs if they exist. Take their paths from `docs` in the state (the docs map); never build a doc path yourself: `docs.overview`, the decisions in `docs.decisions.dir`, and `docs.conventions`.
+- When the ticket has a `## Screens` section, read every screen it names in full, with the Read tool. A `.dc.html` screen is text; read its markup and inline styles.
+- When `design.style` is `true` and the task builds or changes UI, read the style guide `docs.style` in full.
 - Read the inputs yourself, in the main context, before you spawn any agent.
 
 When the ticket and the research disagree about current behavior, the research and the code win. When they disagree about the goal, the ticket wins.
@@ -108,6 +110,13 @@ Use the template you read at the start (`${CLAUDE_SKILL_DIR}/references/template
 3. Remove every guidance comment from the template.
 
 On the onboarding task, fill the sections as "Sections" in `onboarding.md` describes, and write round 1 over its "Topics". Its gaps deferred to issues go into Out of Scope as `Follow-up: <gap>` lines.
+
+**Screens.** Only when the ticket has a `## Screens` section:
+
+- Proposed Architecture maps each screen, by its path, to components (reused or new), state, and data.
+- Round 1 has an open question for each state or behavior that the task needs and no screen shows: empty, loading, error, long content, narrow width.
+- Round 1 has an open question for each conflict between a screen and the style guide, or between a screen and an existing component. The style guide wins over a screen: recommend its value.
+- A question whose answer makes the code differ from a screen names that screen ID.
 
 ### All questions are open
 

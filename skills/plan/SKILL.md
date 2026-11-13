@@ -84,6 +84,8 @@ Follow this rule exactly. An eval checks it.
 - **Never read `01-research-questions.md`.** It is an input of the research phase only.
 - Do not read `*.superseded.md` files.
 - Read `docs.conventions` and `docs.overview` if they exist. Take the paths from `docs` in the state (the docs map); never build a doc path yourself.
+- When `design.style` is `true` and the task builds or changes UI, read the style guide `docs.style` in full.
+- Quick mode: when the ticket has a `## Screens` section, read every screen it names in full, with the Read tool. A `.dc.html` screen is text.
 - Take the check commands from `checks` in the state (`lint`, `typecheck`, `test`, `check`). A `null` check does not exist in the project: never plan it, and never invent a command for it.
 - On the onboarding task, take the check commands from the design instead, as `onboarding.md` describes: until implementation phase 1 writes the full `.claude/loom.json`, the state has the defaults.
 - Read every file the arguments mention, in full.
@@ -144,6 +146,13 @@ On the onboarding task, also follow `onboarding.md`:
 - The Changes carry the content of every small loom template they use, with the placeholders filled.
 - When the design chose the status line, write `loom-statusline.py` unchanged to `<task dir>/templates/loom-statusline.py`, and name that copy in the Changes.
 
+**Screens.** Only when the ticket has a `## Screens` section:
+
+- Each implementation phase that builds UI names its screens in its Changes, as paths.
+- Its Verification has one `- [ ] Manual:` line per screen: compare the running screen with the screen. The line names the screen path. For a `.dc.html` screen it also names the artboard `<screen ID>` on the canvas `<design.canvas>`, where the screen renders. When `design.canvas` is `null`, write `canvas URL not recorded` instead of the URL.
+
+**Style guide.** Only when `design.style` is `true`: when the code defines no tokens yet, the first implementation phase that builds UI defines them, under the names of the style guide.
+
 ### Verification lines
 
 - Start with `- [ ] Automated: <command>` lines: the check commands from `checks` in the state (e.g. `checks.test`; never a `null` one; on the onboarding task, the check commands of the design), plus specific commands where they help (a single test file, a curl call, a CLI run).
@@ -157,6 +166,7 @@ On the onboarding task, also follow `onboarding.md`:
 - If nothing is uncertain, write `## Open Questions` with the single line `None.`.
 - Otherwise write `## Open Questions — Round 1` and follow `question-rounds.md` exactly: `**Q<n>.` at the start of the line, 2-4 options, exactly one `— recommended: <one-line reason>`, and the independence rule.
 - Write every question as open. Do not resolve it yourself. Write the plan for the recommended option and point to the question ("Assumes Q1 a").
+- A question whose answer makes the code differ from a screen names that screen ID.
 - Size: `task.size`, or `M` in quick mode and `L` in full mode if it is `null`. Cap: `rounds.cap.<size>` from the state. `/loom:iterate` applies the cap.
 - Do not write the round-cap marker from `question-rounds.md`. Only `/loom:iterate` writes it, at the cap.
 

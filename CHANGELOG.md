@@ -41,6 +41,18 @@ This file lists the notable changes of every loom version. The format follows [K
 - The setup allowlist adds the read-only `gh run list`, `gh pr list`, `gh label list`, and `gh repo view`.
 - loom's CI runs `make test` on Python 3.9 too (`actions/setup-python@v7.1.0`), in the one job `check`, on a pinned `ubuntu-24.04` runner (no Python 3.9 build exists for Ubuntu 26.04).
 - The SessionStart hook also runs for forked sessions (`fork` matcher). On the main branch and on a branch without a task, it also prints the `loom-state` warnings.
+- Milestone M10a: an optional style guide and screens (mockup files) in the repository, read by the existing skills (LOOM_SPEC.md §9.14). A project without them sees no change.
+  - Two optional docs roles: `style` (default `docs/design/DESIGN.md`) and `screens` (default `docs/design/screens`, one file per screen ID). `setup` writes no skeleton for them.
+  - The `loom.json` key `design.canvas`: `null`, or the URL of a Claude Design canvas.
+  - `loom-state --json` outputs `design`: `canvas`, `style` (the style guide exists), and `screens` (the sorted screen paths). Two files with one screen ID get a warning.
+  - The checks of the whole docs map include `docs.style` and `docs.screens` only when the role is in use: `docs` sets its key, or its path exists (a file for `style`, a directory for `screens`). A project without design files gets no new warning. With them, a custom `docs.tasks` or `docs.decisions.dir` at or above `docs/design` gets an overlap warning.
+  - The issue format has an optional `## Screens` section. `backlog` writes it, and attaches every screen that no issue names to an issue (`gh issue edit`, with confirmation). `start-task` warns about a screen path that is not in `design.screens`.
+  - `design` reads the screens of the ticket, maps them to components, and asks about missing states and conflicts with the style guide. `plan` names the screens in its Changes and adds one `Manual:` line per screen. `iterate` keeps these rules in later rounds.
+  - The implementer builds UI from the screens with the project's components and tokens; the reviewer checks tokens, UI states, and unplanned changes to the design files. Both get the `Style guide:` and `Screens:` lines in their prompt.
+  - `describe-pr` lists the screens under Verification and proposes a `Design screens: update <screen ID>` follow-up for each screen that the code differs from.
+  - Glossary terms **style guide**, **screen**, and **screen ID**.
+- `research-questions` and `research` never open a screen: the codebase agents take an `Excluded path:` line, never read a file below it, and exclude it in every search or listing from a parent directory (Grep `glob: "!<path>/**"`, `git ls-files ':(exclude)<path>'`, `find -not -path '*<path>/*'`). The two skills follow the same rule in their own calls, and `iterate` passes the line too.
+- Eval cases `research-full` and `design-full`: the fixture has a style guide, one HTML screen, and a `## Screens` section in the ticket. New graders check that research never touches the screen and that design reads it and names its path.
 
 ### Changed
 
@@ -85,6 +97,7 @@ This file lists the notable changes of every loom version. The format follows [K
 - The `Stop` lint hook does nothing in plan mode and while background tasks are in flight.
 - The `SubagentStop` checks hook still enforces the checks when its attempt counter cannot be read or written: it blocks once, then lets the implementer stop with a message. A `.claude/loom.json` that cannot be read no longer blocks the implementer; the user gets a message instead. Config warnings are added to the failure text.
 - Subagent events classify near-miss report wording: `Verdict: pass.`, `Changes needed`, `` `make check`: passed ``, `### Checks:`.
+- `gh issue edit` asks for confirmation: the setup allowlist adds the ask rule `Bash(gh issue edit *)`.
 
 ### Fixed
 

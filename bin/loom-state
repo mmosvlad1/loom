@@ -63,13 +63,31 @@ DOCS_FILE_ROLES = {
     "vision": "product/vision.md",
     "overview": "architecture/overview.md",
     "conventions": "conventions.md",
+    # The style guide (LOOM_SPEC.md 9.14.1): optional, and a file of its own.
+    "style": "design/DESIGN.md",
 }
-DOCS_DIR_ROLES = {"tasks": "tasks"}
-DOCS_ROLES = ("vision", "overview", "decisions", "conventions", "tasks")
+# `screens` (LOOM_SPEC.md 9.14.1): optional; one mockup file per screen.
+DOCS_DIR_ROLES = {"tasks": "tasks", "screens": "design/screens"}
+DOCS_ROLES = ("vision", "overview", "decisions", "conventions", "tasks", "style", "screens")
+# The optional docs roles: the docs map checks include them only when in use.
+OPTIONAL_DOCS_ROLES = ("style", "screens")
+# Role files that may share one file (one README.md can play several roles).
+SHARED_FILE_ROLES = ("vision", "overview", "conventions")
 DEFAULT_DECISIONS_DIR = "architecture/decisions"
 DEFAULT_DECISIONS_PATTERN = "<NNNN>-<slug>.md"
 DEFAULT_CI: Dict[str, Any] = {"requiredCheck": "check"}
 DEFAULT_PULL_REQUEST: Dict[str, Any] = {"requiredSections": []}
+DEFAULT_DESIGN: Dict[str, Any] = {"canvas": None}
+# design.canvas (LOOM_SPEC.md 9.14.1): the URL of a Claude Design canvas.
+CANVAS_URL_PREFIX = "https://claude.ai/"
+
+# Screens (LOOM_SPEC.md 9.14.3): a file directly in docs.screens named
+# <screen ID><extension>. `.dc.html` comes before `.html`, so `sign-in.dc.html`
+# has the ID `sign-in`. A screen ID has lowercase letters, digits, and single
+# hyphens; a state adds `--<state>` (`reading-list--empty`).
+SCREEN_EXTENSIONS = (".dc.html", ".html", ".png", ".jpg", ".jpeg", ".webp", ".svg")
+_SCREEN_WORD = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+SCREEN_ID_RE = re.compile(r"%s(?:--%s)?" % (_SCREEN_WORD, _SCREEN_WORD))  # use fullmatch
 
 # Numeric and boolean settings (LOOM_SPEC.md 19.1): "positive" is an integer
 # >= 1, "count" an integer >= 0, "bool" true or false. A JSON boolean is never
@@ -288,11 +306,13 @@ def load_config(top: str) -> Tuple[Optional[Dict[str, Any]], List[str]]:
         warnings.append("%s: invalid 'checks'; using defaults" % CONFIG_PATH)
         cfg["checks"] = copy.deepcopy(DEFAULT_CONFIG["checks"])
     warnings.extend(_resolve_checks(cfg["checks"]))
-    cfg["docs"], w = resolve_docs(data.get("docs", MISSING), cfg["docsDir"], cfg["workDir"])
+    cfg["docs"], w = resolve_docs(data.get("docs", MISSING), cfg["docsDir"], cfg["workDir"], top)
     warnings.extend(w)
     cfg["ci"], w = resolve_ci(data.get("ci", MISSING))
     warnings.extend(w)
     cfg["pullRequest"], w = resolve_pull_request(data.get("pullRequest", MISSING))
+    warnings.extend(w)
+    cfg["design"], w = resolve_design(data.get("design", MISSING))
     warnings.extend(w)
     for key, schema in SETTINGS_SCHEMA.items():
         cfg[key], w = resolve_settings(key, data.get(key, MISSING), schema, DEFAULT_CONFIG[key])
@@ -307,7 +327,7 @@ def _printable(text: str) -> str:
 
 # Top-level loom.json keys (LOOM_SPEC.md 19.1); any other key gets a warning.
 CONFIG_KEYS = ("version", "tracker", "mainBranch", "workDir", "docsDir", "docs", "checks", "ci",
-               "pullRequest", "hooks", "rounds", "implement")
+               "pullRequest", "hooks", "rounds", "implement", "design")
 
 # A key that loom.json does not have (unlike null, which is an invalid value).
 MISSING: Any = object()
@@ -489,22 +509,42 @@ def default_docs(docs_dir: str) -> Dict[str, Any]:
         "decisions": {"dir": below(DEFAULT_DECISIONS_DIR), "pattern": DEFAULT_DECISIONS_PATTERN},
         "conventions": below(DOCS_FILE_ROLES["conventions"]),
         "tasks": below(DOCS_DIR_ROLES["tasks"]),
+        "style": below(DOCS_FILE_ROLES["style"]),
+        "screens": below(DOCS_DIR_ROLES["screens"]),
     }
 
 
-def resolve_docs(raw: Any, docs_dir: str, work_dir: str) -> Tuple[Dict[str, Any], List[str]]:
+def resolve_docs(raw: Any, docs_dir: str, work_dir: str, top: str) -> Tuple[Dict[str, Any], List[str]]:
     """Resolve loom.json `docs` (the docs map) against the defaults (LOOM_SPEC.md 15, 19.1).
 
     Returns ({dir, vision, overview, decisions: {dir, pattern}, conventions,
-    tasks}, warnings). `dir` is docsDir. Paths are relative to the git top
-    level. An invalid value gets a warning and its default. raw is MISSING
-    when loom.json has no `docs` key (null is not an object). The resolved
-    map, defaults included, is then checked for overlaps.
+    tasks, style, screens}, warnings). `dir` is docsDir. Paths are relative
+    to the git top level `top`. An invalid value gets a warning and its default.
+    raw is MISSING when loom.json has no `docs` key (null is not an object). The resolved
+    map, defaults included, is then checked for overlaps; an optional role only when in use.
     """
     docs, warnings = _resolve_docs_values(raw, docs_dir, work_dir)
-    warnings.extend(docs_overlaps(docs))
-    warnings.extend(docs_in_work_dir(docs, work_dir))
+    in_use = optional_docs_roles_in_use(raw, docs, top)
+    warnings.extend(docs_overlaps(docs, in_use))
+    warnings.extend(docs_in_work_dir(docs, work_dir, in_use))
     return docs, warnings
+
+
+def optional_docs_roles_in_use(raw: Any, docs: Dict[str, Any], top: str) -> Set[str]:
+    """The optional docs roles that the docs map checks include (LOOM_SPEC.md 9.14.1).
+
+    An optional role is in use when loom.json sets its key in `docs` (an
+    invalid value too: it falls back to its default), or when its resolved
+    path exists in the working tree: a file for docs.style, a directory for
+    docs.screens. A project without design files gets no new warning.
+    """
+    in_use: Set[str] = set()
+    for role in OPTIONAL_DOCS_ROLES:
+        path = os.path.join(top, docs[role])
+        exists = os.path.isfile(path) if role in DOCS_FILE_ROLES else os.path.isdir(path)
+        if (isinstance(raw, dict) and role in raw) or exists:
+            in_use.add(role)
+    return in_use
 
 
 def _resolve_docs_values(raw: Any, docs_dir: str, work_dir: str) -> Tuple[Dict[str, Any], List[str]]:
@@ -547,15 +587,17 @@ def _resolve_docs_values(raw: Any, docs_dir: str, work_dir: str) -> Tuple[Dict[s
     return docs, warnings
 
 
-def docs_in_work_dir(docs: Dict[str, Any], work_dir: str) -> List[str]:
+def docs_in_work_dir(docs: Dict[str, Any], work_dir: str, in_use: Set[str]) -> List[str]:
     """Warnings for resolved docs map paths at or below workDir; the values stay.
 
     A configured path there is already invalid, so only a default built from
     docsDir can land there (docsDir `work`, workDir `work/tasks`: docs.tasks
-    is `work/tasks`). Its default is the only default, so it stays.
+    is `work/tasks`). Its default is the only default, so it stays. An
+    optional role counts only when it is in `in_use`.
     """
     warnings: List[str] = []
-    roles = [("docs." + role, docs[role]) for role in list(DOCS_FILE_ROLES) + list(DOCS_DIR_ROLES)]
+    roles = [("docs." + role, docs[role]) for role in list(DOCS_FILE_ROLES) + list(DOCS_DIR_ROLES)
+             if role not in OPTIONAL_DOCS_ROLES or role in in_use]
     roles.append(("docs.decisions.dir", docs["decisions"]["dir"]))
     for key, path in roles:
         if _is_under_ignoring_case(path, posixpath.normpath(work_dir)):
@@ -564,25 +606,39 @@ def docs_in_work_dir(docs: Dict[str, Any], work_dir: str) -> List[str]:
     return warnings
 
 
-def docs_overlaps(docs: Dict[str, Any]) -> List[str]:
+def docs_overlaps(docs: Dict[str, Any], in_use: Set[str]) -> List[str]:
     """Warnings for docs map roles that collide (LOOM_SPEC.md 19.1); the values stay.
 
-    vision, overview, and conventions may share one file. docs.tasks and
-    docs.decisions.dir must not be at or below each other, and no role file
-    may lie at or below either directory.
+    vision, overview, and conventions may share one file; docs.style shares
+    its file with no other role (the screens skill rewrites it). docs.tasks,
+    docs.decisions.dir, and docs.screens must not be at or below one another,
+    and no role file may lie at or below any of them. The optional roles
+    docs.style and docs.screens count only when they are in `in_use`.
     """
     warnings: List[str] = []
-    dirs = (("docs.tasks", docs["tasks"]), ("docs.decisions.dir", docs["decisions"]["dir"]))
-    (tasks_key, tasks), (decisions_key, decisions) = dirs
-    if _is_under_ignoring_case(tasks, decisions) or _is_under_ignoring_case(decisions, tasks):
-        warnings.append("%s: '%s' (%s) and '%s' (%s) overlap; task summaries and decision records would mix"
-                        % (CONFIG_PATH, tasks_key, tasks, decisions_key, decisions))
-    for role in DOCS_FILE_ROLES:
-        for dir_key, directory in dirs:
+    # (key, path, what the directory holds)
+    dirs = [("docs.tasks", docs["tasks"], "task summaries"),
+            ("docs.decisions.dir", docs["decisions"]["dir"], "decision records")]
+    if "screens" in in_use:
+        dirs.append(("docs.screens", docs["screens"], "screens"))
+    for i, (key_a, dir_a, what_a) in enumerate(dirs):
+        for key_b, dir_b, what_b in dirs[i + 1:]:
+            if _is_under_ignoring_case(dir_a, dir_b) or _is_under_ignoring_case(dir_b, dir_a):
+                warnings.append("%s: '%s' (%s) and '%s' (%s) overlap; %s and %s would mix"
+                                % (CONFIG_PATH, key_a, dir_a, key_b, dir_b, what_a, what_b))
+    file_roles = [role for role in DOCS_FILE_ROLES if role not in OPTIONAL_DOCS_ROLES or role in in_use]
+    # Without screens in use the text is the one from before the role existed.
+    where = ("task summary, decision, and screens directories" if "screens" in in_use
+             else "task summary and decision directories")
+    for role in file_roles:
+        for dir_key, directory, _ in dirs:
             if _is_under_ignoring_case(docs[role], directory):
-                warnings.append("%s: 'docs.%s' (%s) is at or below '%s' (%s); keep role files outside the "
-                                "task summary and decision directories"
-                                % (CONFIG_PATH, role, docs[role], dir_key, directory))
+                warnings.append("%s: 'docs.%s' (%s) is at or below '%s' (%s); keep role files outside the %s"
+                                % (CONFIG_PATH, role, docs[role], dir_key, directory, where))
+    for role in SHARED_FILE_ROLES:
+        if "style" in in_use and docs["style"].lower() == docs[role].lower():
+            warnings.append("%s: 'docs.style' (%s) is also 'docs.%s'; the style guide needs a file of its own"
+                            % (CONFIG_PATH, docs["style"], role))
     return warnings
 
 
@@ -642,6 +698,86 @@ def resolve_pull_request(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
         else:
             pull_request["requiredSections"].append(heading)
     return pull_request, warnings
+
+
+def resolve_design(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
+    """Resolve loom.json `design` (LOOM_SPEC.md 9.14.1): `canvas` is null or a canvas URL."""
+    design = copy.deepcopy(DEFAULT_DESIGN)
+    warnings: List[str] = []
+    if raw is MISSING:
+        return design, warnings
+    if not isinstance(raw, dict):
+        warnings.append(_invalid("design", raw, design))
+        return design, warnings
+    for key in raw:
+        if key not in design:
+            warnings.append("%s: unknown key 'design.%s' ignored" % (CONFIG_PATH, key))
+    if "canvas" in raw:
+        if valid_canvas(raw["canvas"]):
+            design["canvas"] = raw["canvas"]
+        else:
+            warnings.append("%s (null, or a URL that starts with %s)"
+                            % (_invalid("design.canvas", raw["canvas"], None), CANVAS_URL_PREFIX))
+    return design, warnings
+
+
+def valid_canvas(value: Any) -> bool:
+    """null, or a URL that starts with https://claude.ai/ and has more after it.
+
+    The URL has no whitespace and no control character.
+    """
+    if value is None:
+        return True
+    if not isinstance(value, str) or not value.startswith(CANVAS_URL_PREFIX) or value == CANVAS_URL_PREFIX:
+        return False
+    return not _has_control(value) and not any(ch.isspace() for ch in value)
+
+
+def screen_id(name: str) -> Optional[str]:
+    """The screen ID of a file name in docs.screens, or None when the file is not a screen."""
+    for extension in SCREEN_EXTENSIONS:
+        if name.endswith(extension):
+            stem = name[:-len(extension)]
+            return stem if SCREEN_ID_RE.fullmatch(stem) else None
+    return None
+
+
+def list_screens(top: str, screens_dir: str) -> Tuple[List[str], List[str]]:
+    """The screens in docs.screens as sorted paths from the git top level, and warnings.
+
+    Only files directly in the directory count; a missing directory has no
+    screens. Two files with one screen ID add a warning; the first path in
+    sorted order is the screen.
+    """
+    try:
+        names = sorted(os.listdir(os.path.join(top, screens_dir)))
+    except OSError:
+        return [], []
+    screens: Dict[str, str] = {}
+    warnings: List[str] = []
+    for name in names:
+        sid = screen_id(name)
+        if sid is None or not os.path.isfile(os.path.join(top, screens_dir, name)):
+            continue
+        path = posixpath.join(screens_dir, name)
+        if sid in screens:
+            warnings.append("%s and %s have the same screen ID '%s'; %s is the screen, keep one file per screen ID"
+                            % (screens[sid], path, sid, screens[sid]))
+            continue
+        screens[sid] = path
+    return sorted(screens.values()), warnings
+
+
+def design_state(top: str, cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    """The `design` object of the state (LOOM_SPEC.md 9.14.1): canvas, style, screens."""
+    docs = cfg["docs"]
+    screens, warnings = list_screens(top, docs["screens"])
+    design = {
+        "canvas": cfg["design"]["canvas"],
+        "style": os.path.isfile(os.path.join(top, docs["style"])),
+        "screens": screens,
+    }
+    return design, warnings
 
 
 def docs_change_paths(cfg: Dict[str, Any]) -> List[str]:
@@ -1721,6 +1857,7 @@ def compute_state(cwd: str, with_pr: bool = False, for_line: bool = False) -> Op
         "rounds": cfg["rounds"],
         "implement": cfg["implement"],
         "hooks": cfg["hooks"],
+        "design": None,
         "task": None,
         "artifacts": [],
         "implementation": None,
@@ -1730,6 +1867,9 @@ def compute_state(cwd: str, with_pr: bool = False, for_line: bool = False) -> Op
         "next": None,
         "warnings": warnings,
     }
+    # The style guide and the screens (LOOM_SPEC.md 9.14.1), also without a task.
+    state["design"], w = design_state(top, cfg)
+    warnings.extend(w)
     tree, w = working_tree_status(top, cfg)
     state["workingTree"] = tree
     warnings.extend(w)

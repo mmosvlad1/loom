@@ -16,8 +16,10 @@ discount tiers to order pricing"). Commit dates and identities are fixed, so
 the commit hashes are the same on every run.
 
 Scenarios:
-  research-full     full mode, branch feat/7-..., 01-research-questions.md approved
-  design-full       full mode, research approved
+  research-full     full mode, branch feat/7-..., 01-research-questions.md approved; a style guide and one
+                    HTML screen at the default paths, and a `## Screens` section in the ticket
+  design-full       full mode, research approved; the style guide, the screen, and the ticket section
+                    of research-full
   implement-manual  quick mode, plan approved; implementation phase 1 has a Manual line
   guard-main        on main with a staged change and no task
   describe-pr-quick quick mode, both implementation phases done and committed, no remote, no PR;
@@ -255,6 +257,82 @@ Run the checks with `make check`.
 '''
 
 GITIGNORE = ".loom/\n__pycache__/\n"
+
+# UI design files at the default paths of the docs roles `style` and `screens` (LOOM_SPEC.md 9.14.1),
+# for research-full and design-full. The screen is a plain HTML page with inline styles (9.14.3).
+STYLE_GUIDE_PATH = "docs/design/DESIGN.md"
+SCREEN_PATH = "docs/design/screens/order-summary.html"
+
+STYLE_GUIDE_MD = '''\
+# Style guide
+
+## Direction
+
+Plain ledger. Calm and quiet, like a printed paper slip; numbers line up in one column.
+
+## Colors
+
+- `ink: #1f2933`: text
+- `paper: #fdfcf8`: page background
+- `accent: #2f6f4f`: discount lines
+- `rule: #d9d4c7`: separators
+
+## Typography
+
+- Families: `"IBM Plex Mono", monospace`
+- `body`: 14px/20px, 400
+- `total`: 18px/24px, 600
+
+## Spacing and shape
+
+- Spacing scale: `space-1` 4px, `space-2` 8px, `space-3` 16px
+- Radius: none. Borders: 1px `rule`. No shadows.
+
+## States
+
+- Empty: one muted line "No items".
+- Error: the line in `ink`, with an icon.
+
+## Rules
+
+- Do: right-align every amount.
+- Do not: use more than one accent color.
+'''
+
+# The marker phrase of the research-full grader screen-content-absent: it occurs only in this
+# screen file (tests/test_evals.py checks this). It sits on the line of the bulk discount, so a
+# content search for "bulk" or "discount" that reaches the screen puts it into the trace.
+SCREEN_MARKER = "Quillfeather Stationers"
+
+SCREEN_HTML = '''\
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Order summary</title>
+<style>
+  body { background: #fdfcf8; color: #1f2933; font: 14px/20px "IBM Plex Mono", monospace; }
+  .slip { max-width: 360px; margin: 16px auto; border: 1px solid #d9d4c7; padding: 16px; }
+  .line { display: flex; justify-content: space-between; }
+  .accent { color: #2f6f4f; }
+  .total { font-size: 18px; line-height: 24px; font-weight: 600; }
+</style>
+</head>
+<body>
+<main class="slip">
+  <div class="line"><span>Notebook x 12</span><span>42.00</span></div>
+  <div class="line"><span>Pen x 40</span><span>50.00</span></div>
+  <div class="line accent" title="{marker}"><span>Bulk discount: -10%</span><span>-9.20</span></div>
+  <div class="line total"><span>Total</span><span>89.42</span></div>
+</main>
+</body>
+</html>
+'''.replace("{marker}", SCREEN_MARKER)
+
+DESIGN_FILES = {STYLE_GUIDE_PATH: STYLE_GUIDE_MD, SCREEN_PATH: SCREEN_HTML}
+
+# The `## Screens` section of the issue format (LOOM_SPEC.md 9.14.4), appended to the ticket body.
+TICKET_SCREENS = "\n## Screens\n\n- `%s`\n" % SCREEN_PATH
 
 # ---------------------------------------------------------------------------
 # Task artifacts (in .loom/, ignored by git)
@@ -678,10 +756,11 @@ def build_repo(config: Optional[Dict[str, Any]] = None, loom_json: bool = True,
     git("commit", "-q", "-m", "chore: initial shop library")
 
 
-def ticket(mode: str) -> None:
+def ticket(mode: str, screens: bool = False) -> None:
+    """`screens=True` adds the `## Screens` section (research-full and design-full only)."""
     fields = {"task": TASK, "phase": "ticket", "mode": mode, "size": "M", "issue": "7", "url": ISSUE_URL}
     write(os.path.join(TASK_DIR, "00-ticket.md"),
-          frontmatter(fields) + TICKET_BODY.format(mode=mode, url=ISSUE_URL))
+          frontmatter(fields) + TICKET_BODY.format(mode=mode, url=ISSUE_URL) + (TICKET_SCREENS if screens else ""))
 
 
 def artifact(name: str, phase: str, based_on: str, body: str, **extra: str) -> None:
@@ -697,9 +776,9 @@ def research(based_on: str) -> None:
 
 
 def scenario_research_full() -> None:
-    build_repo()
+    build_repo(extra=DESIGN_FILES)
     git("switch", "-q", "-c", BRANCH)
-    ticket("full")
+    ticket("full", screens=True)
     artifact("01-research-questions.md", "research-questions", "[00-ticket.md]", RESEARCH_QUESTIONS_BODY)
 
 
@@ -776,7 +855,8 @@ KICKOFF_SETTINGS = {
         ],
         "ask": [
             "Bash(git push *)", "Bash(gh pr create *)", "Bash(gh pr edit *)", "Bash(gh pr merge *)",
-            "Bash(gh issue create *)", "Bash(gh label create *)", "Bash(gh api *)",
+            "Bash(gh issue create *)", "Bash(gh issue edit *)", "Bash(gh label create *)",
+            "Bash(gh api *)",
         ],
     },
 }
@@ -872,7 +952,7 @@ ONBOARDING_QUESTIONS_BODY = """\
 7. **loom requirements.** For each item, does it exist today, and where:
    - one root command that runs lint, typecheck, and unit tests; separate commands for each;
    - a CI job that runs that command on pull requests and on pushes to the main branch;
-   - a document in each docs role: `vision` (what the product is, for whom, non-goals), `overview` (components and data flow), `decisions` (decision records), `conventions` (code style, testing rules, module layout), `tasks` (notes on past work);
+   - a document in each of the docs roles `vision` (what the product is, for whom, non-goals), `overview` (components and data flow), `decisions` (decision records), `conventions` (code style, testing rules, module layout), and `tasks` (notes on past work);
    - tests, and the result of the latest CI run on the main branch;
    - `.claude/settings.json`, and its keys;
    - a git ignore rule that covers `.claude/`, `CLAUDE.md`, or a document of a docs role (`git check-ignore -v`).
@@ -1001,7 +1081,7 @@ Question: loom requirements.
 | `conventions` document | does not exist | — |
 | `tasks` document | does not exist | — |
 | Tests | exists | `tests/`, 7 tests; the latest CI run on `main` passed |
-| `.claude/settings.json` | exists | the kickoff settings: `$schema`, `extraKnownMarketplaces`, `enabledPlugins`, and `permissions` (`.claude/settings.json:2-14`); the whole file has no `Bash(make *)` rule and no `statusLine` (`.claude/settings.json:1-56`) |
+| `.claude/settings.json` | exists | the kickoff settings: `$schema`, `extraKnownMarketplaces`, `enabledPlugins`, and `permissions` (`.claude/settings.json:2-14`); the whole file has no `Bash(make *)` rule and no `statusLine` (`.claude/settings.json:1-57`) |
 | An ignore rule for `.claude/`, `CLAUDE.md`, or a document of a docs role | does not exist | `git check-ignore -v` matched none |
 
 #### Testing patterns

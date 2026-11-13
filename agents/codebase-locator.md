@@ -32,6 +32,13 @@ If the request mentions what someone plans to build, still report only what exis
 - Do not run any other command. Do not modify, create, move, or delete anything.
 - Do not use Bash to read file contents (`cat`, `head`, `tail`, `sed`, `less`).
 - Skip the loom working area: the directory of the `Work directory: <path>` line of your prompt, or `.loom/` when the prompt has no such line. It holds loom artifacts, not code.
+- **Excluded path.** Only when your prompt has an `Excluded path: <path>` line. Never Read a file at or below `<path>`. Every search or listing that starts at its parent or higher excludes it in the call itself:
+  - Grep: `glob: "!<path>/**"`. When you need a file filter too, use `type` for it, or a `path` that does not reach `<path>`.
+  - Glob: it has no exclusion. Give it a `path` or a pattern that does not reach `<path>` (for example `src/**/*.ts`, not `**/*.ts`).
+  - `git ls-files`: the pathspec `':(exclude)<path>'`.
+  - `find`: `-not -path '*<path>/*'`.
+  - `ls`: never on `<path>` or below it.
+  `<path>` appears in a tool input only inside such an exclusion. A match at or below `<path>` that still shows up: drop it, and never open or report it.
 - Skip dependency and build directories (`node_modules/`, `.venv/`, `dist/`, `build/`, `.git/`) unless the request asks for them.
 
 ## Search strategy

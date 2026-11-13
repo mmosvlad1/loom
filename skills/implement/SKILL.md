@@ -39,9 +39,9 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 ### Configuration
 
-The state holds the resolved configuration: `mainBranch`, the check commands (`checks`), the doc paths (`docs`), `implement.maxFixAttempts`, `implement.autoAdvance`, and `hooks.maxCheckAttempts`. Take every value from there, never from `.claude/loom.json`. Pass `checks`, `docs.conventions`, and `mainBranch` to the agents as the configuration lines of `implementation-loop.md`.
+The state holds the resolved configuration: `mainBranch`, the check commands (`checks`), the doc paths (`docs`), `implement.maxFixAttempts`, `implement.autoAdvance`, and `hooks.maxCheckAttempts`. Take every value from there, never from `.claude/loom.json`. Pass `checks`, `docs.conventions`, and `mainBranch` to the agents as the configuration lines of `implementation-loop.md`. When `design.style` is `true`, also pass `docs.style` (the `Style guide:` line). When `design.screens` is not empty, also pass `docs.screens` (the `Screens:` line).
 
-**A phase that changes `.claude/loom.json`.** The state above holds the values from before the change. When the implementer's `Files changed` lists `.claude/loom.json`, or `git status --porcelain -- .claude/loom.json` shows it changed, run `loom-state --json` again (step 3 of `implementation-loop.md`). Take the configuration from that output (`checks`, `docs`, `mainBranch`, `implement`, `hooks`) for your own check run, the reviewer prompt, the fix attempts, and the later implementation phases.
+**A phase that changes `.claude/loom.json`.** The state above holds the values from before the change. When the implementer's `Files changed` lists `.claude/loom.json`, or `git status --porcelain -- .claude/loom.json` shows it changed, run `loom-state --json` again (step 3 of `implementation-loop.md`). Take the configuration from that output (`checks`, `docs`, `design`, `mainBranch`, `implement`, `hooks`) for your own check run, the reviewer prompt, the fix attempts, and the later implementation phases.
 
 Below, `<n>` is `task.number` and `<task dir>` is `task.dir`.
 
@@ -134,7 +134,7 @@ For implementation phase N:
 1. **Start.** Append `## Phase N — in-progress` to `<task dir>/log.md` (create the file if it is missing), in the form of `log-format.md`. Skip this when the last entry of phase N is already `in-progress` (a resumed phase).
 2. **Loop.** Run the shared `implementation-loop.md` in phase mode:
    - Reference: the plan path `<task dir>/04-plan.md` and phase N. oneshot: the ticket path `<task dir>/00-ticket.md`; the reviewer compares the diff with the ticket.
-   - Configuration: the `Checks:` line (`checks` from the state) and the `Conventions:` line (`docs.conventions`) in the implementer prompt; the `Conventions:` and `Main branch:` (`mainBranch`) lines in the reviewer prompt.
+   - Configuration: the `Checks:` line (`checks` from the state) and the `Conventions:` line (`docs.conventions`) in the implementer prompt; the `Conventions:` and `Main branch:` (`mainBranch`) lines in the reviewer prompt. The `Style guide:` line (`docs.style`, when `design.style` is `true`) and the `Screens:` line (`docs.screens`, when `design.screens` is not empty) follow each `Conventions:` line.
    - Checks: the `SubagentStop` hook enforces `checks.check` on the implementer, and you run `checks.check` once more after it returns. Failing checks mean the hook gave up after `hooks.maxCheckAttempts` attempts: the phase is blocked.
    - Fix attempts: only `blocking` reviewer items go back, at most `implement.maxFixAttempts` times.
 3. **Blocked.** If the result is blocked:

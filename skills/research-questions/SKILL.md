@@ -56,6 +56,7 @@ If `01-research-questions.md` already exists with status `in-review` or `approve
 - Read every file the arguments mention, in full.
 - Do not read other artifacts in the task directory.
 - While you read, collect every concrete pointer: links (URLs, issues, docs), repositories, packages and dependencies, file paths, directories. Copy them verbatim.
+- **Screens.** Never open a screen: a file at or below `docs.screens`. A screen shows what will be built. So leave the paths of the ticket's `## Screens` section out of the pointers. When `design.screens` is not empty, your own calls follow the rule of the `Excluded path:` line too: never Read a file at or below `docs.screens`; a Grep that starts at its parent or higher carries `glob: "!<docs.screens>/**"`; a Glob gets a `path` or a pattern that does not reach it.
 
 ## 3. Do light research
 
@@ -68,7 +69,7 @@ Spawn agents in parallel by their namespaced name. Use only these agents. Do not
 - `loom:codebase-pattern-finder`: finds similar implementations and conventions.
 - `loom:web-search-researcher`: only if the ticket depends on an external library, API, or service.
 
-Tell each agent what to find, not how to search. Every prompt to `loom:codebase-locator`, `loom:codebase-analyzer`, or `loom:codebase-pattern-finder` carries the line `Work directory: <workDir>` (`workDir` from the state). The agent skips that directory: it holds the loom artifacts, the ticket too. Wait for all agents before you write.
+Tell each agent what to find, not how to search. Every prompt to `loom:codebase-locator`, `loom:codebase-analyzer`, or `loom:codebase-pattern-finder` carries the line `Work directory: <workDir>` (`workDir` from the state). The agent skips that directory: it holds the loom artifacts, the ticket too. When `design.screens` in the state is not empty, every such prompt also carries the line `Excluded path: <docs.screens>`. Never name a screen in a prompt. Wait for all agents before you write.
 
 ## 4. Write the questions
 
@@ -102,6 +103,8 @@ If the task may involve frontend or visual components, even when the ticket does
 - Which component library or design system does the UI use?
 - What patterns exist for colors (with hex codes), typography, spacing, borders, and shadows?
 - Which theming system exists, if any?
+
+When the ticket has a `## Screens` section, add one descriptive question: which UI components, styles, and tokens exist in the code, and where.
 
 ## 5. Finish
 

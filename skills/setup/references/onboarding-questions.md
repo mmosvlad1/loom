@@ -36,7 +36,7 @@ updated: YYYY-MM-DD
 7. **loom requirements.** For each item, does it exist today, and where:
    - one root command that runs lint, typecheck, and unit tests; separate commands for each;
    - a CI job that runs that command on pull requests and on pushes to the main branch;
-   - a document in each docs role: `vision` (what the product is, for whom, non-goals), `overview` (components and data flow), `decisions` (decision records), `conventions` (code style, testing rules, module layout), `tasks` (notes on past work);
+   - a document in each of the docs roles `vision` (what the product is, for whom, non-goals), `overview` (components and data flow), `decisions` (decision records), `conventions` (code style, testing rules, module layout), and `tasks` (notes on past work);
    - tests, and the result of the latest CI run on the main branch;
    - `.claude/settings.json`, and its keys;
    - a git ignore rule that covers `.claude/`, `CLAUDE.md`, or a document of a docs role (`git check-ignore -v`).
