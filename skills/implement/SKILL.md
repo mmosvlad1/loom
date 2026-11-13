@@ -181,7 +181,7 @@ Run `loom-state --json` after your last write. Use the `final-answer.md` format:
 - `Warning:` lines from section 1, and one `Warning:` line per blocking deviation you could not record elsewhere.
 - `Next:` from `loom-state`:
   - After the last phase, map `next.command` as `final-answer.md` describes, for example `/clear, then /loom:describe-pr`, or `/clear, then /loom:finish-task` with an open PR.
-  - With manual steps, write `run the manual steps, then /clear, then /loom:next` (after the last phase: `then /clear, then /loom:describe-pr`). If a manual step fails, the user runs `/loom:iterate <feedback>`.
+  - With manual steps, write `run the manual steps, then ` before the mapped command: normally `run the manual steps, then /clear, then /loom:implement`; after the last phase `/clear, then /loom:describe-pr`, or `/clear, then /loom:finish-task` with an open PR. If a manual step fails, the user runs `/loom:iterate <feedback>`.
   - Blocked: `/loom:iterate <fix>`; the user may add hints, e.g. `/loom:iterate the test needs the fixture from phase 1`.
   - Blocked with a `settings:` reason: `Next: change .claude/settings.json yourself, then /clear, then /loom:iterate`. No loom agent can change a settings file.
 

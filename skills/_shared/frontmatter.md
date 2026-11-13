@@ -64,7 +64,7 @@ A gate is a phase that cannot start until a previous artifact is `approved`.
 
 - `plan` (full mode) starts only when `03-design.md` is `approved`.
 - `implement` starts only when `04-plan.md` is `approved`. In oneshot mode there is no plan; `implement` works from `00-ticket.md`.
-- Research questions and research never block the next phase. If research is `in-review`, `/loom:next` prints "research not reviewed" and continues.
+- Research questions and research never block the next phase. If research is `in-review`, `next`, `design`, and `plan` print `Warning: research not reviewed; approve it with /loom:iterate approve research` and continue. If the research questions are `in-review`, `research` prints `Warning: research questions not reviewed; approve them with /loom:iterate approve research-questions` and continues.
 
 ## Ticket frontmatter
 

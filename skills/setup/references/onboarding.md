@@ -129,13 +129,13 @@ Use the `final-answer.md` format:
 ```text
 Result: onboarding kickoff on <branch> (<kickoff commit short hash>) for issue #<n>; 01-research-questions.md approved
 Warning: <one line per warning, if any>
-Next: /clear, then /loom:next
+Next: /clear, then <next.command>
 ```
 
 - Add `Labels: <created labels, or skipped>` after `Result:` when this run created labels.
 - `<kickoff commit short hash>` is `git rev-parse --short HEAD` right after the commit.
 - A private repository: add the `Warning:` line of the skill about the ruleset.
-- `/loom:next` then runs research.
+- `Next:` comes from `next.command`, mapped as `final-answer.md` describes: normally `/clear, then /loom:research`.
 
 ---
 

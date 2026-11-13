@@ -569,6 +569,10 @@ class GraderRegexTest(unittest.TestCase):
         example = read(os.path.join(ROOT, "skills", "_shared", "final-answer.md")).split(
             "Implementation phase that needs manual verification:", 1)[1]
         self.assertIsNotNone(rx.search(example))
+        # The fixture has implementation phase 2 left, so the line names the phase command (LOOM_SPEC.md 7.4).
+        self.assertTrue(rx.pattern.endswith("then /clear, then /loom:implement"))
+        self.assertIsNone(rx.search("Manual verification:\n- x\nNext: run the manual steps, then /clear, then /loom:next"))
+        self.assertIsNotNone(rx.search("Manual verification:\n- x\nNext: run the manual step, then /clear, then /loom:implement"))
 
     def test_commit_count_pattern(self):
         g = graders(os.path.join(EVALS, "implement-manual"))["one-commit"]

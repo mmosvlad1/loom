@@ -135,8 +135,8 @@ Use the `final-answer.md` format:
 ```text
 Artifact: <task dir>/00-ticket.md
 Status: <mode> mode, branch <branch>
-Next: /clear, then /loom:next
+Next: <next.command, mapped as final-answer.md describes>
 ```
 
-- `Next:` comes from `next.command`, mapped as `final-answer.md` describes (normally `/clear, then /loom:next`).
+- `Next:` comes from `next.command`, mapped as `final-answer.md` describes. For a new task it is the first phase of the mode: `/clear, then /loom:research-questions` (full), `/clear, then /loom:research` (quick), or `/clear, then /loom:implement` (oneshot). After a restore, or a switch to an existing branch, the task has its own state, and the command can be any other.
 - Omit the `Open questions` line: the ticket has none.

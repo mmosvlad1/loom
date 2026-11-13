@@ -18,4 +18,4 @@
 
 ## Workflow
 
-This project uses the loom plugin. Work starts from a GitHub issue: `/loom:start-task #<n>`, then `/clear` and `/loom:next` between phases. Never commit on `<main>`.
+This project uses the loom plugin. Work starts from a GitHub issue: `/loom:start-task #<n>`, then `/clear` and the command of the last `Next:` line between phases (`/loom:next` when you do not have that line). Never commit on `<main>`.
