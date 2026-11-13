@@ -332,6 +332,19 @@ class SuiteLayoutTest(unittest.TestCase):
     def test_spec_layout_lists_evals(self):
         self.assertIn("├── evals/", read(os.path.join(ROOT, "LOOM_SPEC.md")))
 
+    def test_spec_20_2_lists_every_case(self):
+        """The §20.2 tree and grader list name every case directory, and the case counts are true."""
+        spec = read(os.path.join(ROOT, "LOOM_SPEC.md")).split("### 20.2 Evals", 1)[1].split("### 20.3", 1)[0]
+        tree = spec.split("```", 2)[1]
+        cases = {os.path.basename(d) for d in case_dirs()}
+        self.assertEqual(set(re.findall(r"(?m)^[├└]── ([\w-]+)/", tree)), cases | {"_fixture", "results"})
+        for name in sorted(cases):
+            with self.subTest(case=name):
+                self.assertRegex(spec, r"(?m)^  - `%s` \(" % re.escape(name))
+        self.assertEqual(re.findall(r"all (\d+) cases", spec), [str(len(cases))])
+        latest = re.findall(r"passed (\d+) of (\d+) cases", spec)[-1]
+        self.assertEqual(latest, (str(len(cases)), str(len(cases))))
+
 
 class CaseFileTest(unittest.TestCase):
     def test_case_files(self):

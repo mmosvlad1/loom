@@ -14,6 +14,22 @@ This file lists the notable changes of every loom version. The format follows [K
 - `loom-state --json` validates these keys, reports invalid values in `warnings`, and outputs the resolved `docs`, `checks`, `ci`, and `pullRequest` in every output, also without a task.
 - `finish-task` also reads the classic branch protection of the main branch (read-only `gh api` GET). It skips the ruleset offer when a ruleset or the protection already requires the check.
 - Glossary terms **docs role** and **docs map**.
+- Milestone M9b: onboarding of a repository with code (LOOM_SPEC.md §9.13). `/loom:setup` now takes one of two paths.
+  - **Fast setup** (an empty or new repository, or `/loom:setup --oneshot`): the `oneshot` setup task, as before.
+  - **Onboarding** (a repository with code): a setup task in `full` mode, the *onboarding task*. `setup` does only the kickoff: the issue, the branch `chore/<n>-loom-setup`, the ticket, a minimal `.claude/loom.json`, the kickoff settings of `.claude/settings.json`, the kickoff commit `chore(loom): start loom setup (#<n>)`, and a fixed list of 7 research questions.
+  - `research` answers the fixed questions. It reads GitHub facts and local git facts, runs each candidate check command once (exit status, run time), and records which instruction files Claude Code loads.
+  - `design` discusses the project with the user: drafts of vision and overview, project rules against loom rules, docs roles (map, migrate, or create), gaps, the check command, the required CI check, the PR sections, the agent instruction files, and the status line.
+  - `plan` copies the small loom templates into its Changes. `implement` writes the full `.claude/loom.json` first in implementation phase 1. `describe-pr` proposes every `Follow-up:` line of the design as an issue.
+  - The setup PR closes only the gaps that loom needs; every other gap becomes a follow-up issue.
+- `loom-state --setup-path <main>` chooses the setup path (`switch`, `rerun`, `fast`, `onboarding`, `onboarding-rerun`, `fast-resume`) and prints it as JSON with its reason.
+- `task.setup` in the state. The slug `loom-setup` is reserved for the setup task. For a setup task, `next` routes to `/loom:setup` while the setup run is not finished, and never to `/loom:research-questions`; `research-questions` stops on a setup task. `iterate` refuses a mode change on a setup task, and `finish-task` takes the setup task from `task.setup`.
+- With `AGENTS.md` (or `.claude/AGENTS.md`) and no `CLAUDE.md`, the new `CLAUDE.md` imports it with the line `@AGENTS.md` (or `@.claude/AGENTS.md`): once a `CLAUDE.md` exists, Claude Code no longer loads `AGENTS.md` by itself.
+- `implement` and `iterate` read the state again after an implementation phase changed `.claude/loom.json`, so the checks, the reviewer prompt, and the later phases use the new values.
+- Settings files stay out of the implementer's hands: in auto permission mode Claude Code denies a subagent's edit of `.claude/settings.json`. `implement` applies a settings change of the plan itself before the phase, after it showed the `diff` and got one confirmation; `iterate` does the same before it fixes a blocked phase without a commit. A fix of a settings file never goes to the implementer.
+- The CI item of the PR body: `describe-pr` writes a checklist item about the CI result as `` - [ ] CI check `<ci.requiredCheck>` passes on this PR ``, and `finish-task` ticks it before the merge when the check passed. `_shared/pr-update.md` writes it unticked again when it rewrites the body. `loom-state --pr` reports `pr.bodyInSync`, so the tick never overwrites a body that was edited on GitHub.
+- Glossary terms **setup task** and **onboarding task**.
+- Eval case `design-onboarding`: `/loom:design` on the onboarding task (6 cases in all).
+- On the fast path, `setup` checks that a reused CI workflow runs `checks.check`.
 - `loom-state` outputs `workDir`, `rounds`, `implement`, and `hooks` with validation, so skills no longer read `.claude/loom.json`. Unknown top-level keys in `loom.json` get a warning.
 - `loom-state --pr` reports `pr.requiredCheck`, the state of the check named `ci.requiredCheck`, and routes on it; other failing checks are a warning.
 - `loom-state` reports `rebaseInProgress`, keeps the task during a stopped rebase of the task branch, and routes to `/loom:iterate rebase`.
@@ -28,6 +44,7 @@ This file lists the notable changes of every loom version. The format follows [K
 
 ### Changed
 
+- `loom-state --pr` adds no warning when the branch has no PR and the ticket has no valid `pr:`: that is the normal state before `describe-pr`.
 - Skills take every doc path from `docs` in the state and never build one from `docsDir`: `setup` writes the docs skeleton by docs role; `backlog`, `design`, `plan`, `describe-pr` (and its templates), and `_shared/pr-update.md` read and write the mapped paths. `describe-pr` numbers ADRs by `docs.decisions.pattern`.
 - `implement` and `iterate` pass the resolved check commands and `docs.conventions` in the implementer prompt, and `docs.conventions` in the reviewer prompt. The implementer no longer reads `.claude/loom.json`; it skips a `null` check and never invents a command for it.
 - The ruleset that `finish-task` offers requires `ci.requiredCheck` instead of a fixed `check`.

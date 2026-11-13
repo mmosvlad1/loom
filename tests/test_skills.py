@@ -2203,20 +2203,85 @@ class GlossaryTermsTest(unittest.TestCase):
 
 
 class MilestoneMarkersTest(unittest.TestCase):
-    """M9a is done: its Planned markers are gone, M9b keeps its own (§9.13)."""
+    """M9a and M9b are done: no Planned marker is left, both are implemented and not released (§9.13)."""
 
     def test_status_line(self):
+        heading = next(l for l in spec_text().splitlines() if l.startswith("### 9.13 "))
+        self.assertEqual(heading, "### 9.13 Onboarding an existing repository")
         status = spec_section("### 9.13 Onboarding an existing repository", "#### 9.13.1")
-        self.assertIn("Milestone M9a (config keys and their use in existing skills) is implemented", status)
-        self.assertIn("Milestone M9b (the onboarding flow) is planned", status)
+        self.assertIn("**Status:** implemented in two milestones (§9.13.8), M9a (config keys and their use in "
+                      "existing skills) and M9b (the onboarding flow). Both are not released yet (`CHANGELOG.md`, "
+                      "`[Unreleased]`)", status)
+        self.assertNotIn("is planned", status)
 
-    def test_no_m9a_planned_markers(self):
+    def test_milestone_rows_are_done(self):
+        milestones = spec_section("#### 9.13.8 Implementation milestones", "## 10. Subagents")
+        for name in ("M9a", "M9b"):
+            with self.subTest(milestone=name):
+                self.assertRegex(milestones, r"(?m)^\| \*\*%s\*\* \(done\) — " % name)
+
+    def test_no_m9_planned_markers(self):
         spec = spec_text()
-        for marker in re.findall(r"\*\*Planned \(M9[^)]*\):\*\*[^\n]*", spec):
-            for m9a in ("requiredSections", "`docs` in the state", "classic branch protection",
-                        "may be `null`", "docs roles and the docs map", "new optional keys", "workingTreeDocsOnly"):
-                with self.subTest(marker=marker[:60], m9a=m9a):
-                    self.assertNotIn(m9a, marker)
+        self.assertEqual(re.findall(r"\*\*Planned \(M9[^\n]*", spec), [])
+        self.assertNotIn("(planned, M9)", spec)
+        # The former markers are normal labels now.
+        for label in ("**Setup task (§9.13.1):** `setup` fixes the mode of the setup task",
+                      "- `task.setup` (§9.13): `true` when the task is the setup task",
+                      "- `--setup-path <main>` (§9.13.1): `loom-state --setup-path <main>` prints the setup path",
+                      "The slug `loom-setup` is reserved for the setup task (§9.13.1)",
+                      "**Two setup paths (§9.13.1):** setup takes one of two paths.",
+                      "**Setup tasks (§9.13.1).** `setup` owns the ticket and the first steps of a setup task",
+                      "**A phase that changes `.claude/loom.json`** (§9.13.5).",
+                      "**A phase that changes `.claude/settings.json`** (§9.13.5).",
+                      "**One exception (§9.13.2).** `setup` writes the fixed `01-research-questions.md`",
+                      "**The fast set and CI-only steps (§9.13.4):**",
+                      "**Several stacks (§9.13.4 topic 5).**"):
+            with self.subTest(label=label):
+                self.assertIn(label, spec)
+        self.assertGreaterEqual(spec.count("**Onboarding (§9.13."), 7)
+        self.assertEqual(spec.count("**Setup task (§9.13."), 3)
+
+
+class SpecLayoutTest(unittest.TestCase):
+    """The §4.1 tree names every skill and every reference file, the onboarding ones included."""
+
+    @staticmethod
+    def names(name: str, text: str) -> bool:
+        # `onboarding.md` must not match inside `setup-issue-onboarding.md`.
+        return re.search(r"(?<![\w.-])%s(?![\w-])" % re.escape(name), text) is not None
+
+    def tree(self) -> str:
+        return spec_section("### 4.1 Plugin repository layout", "### 4.2 Project-side footprint")
+
+    def test_every_skill_line_names_its_reference_files(self):
+        tree = self.tree()
+        for skill in sorted(os.listdir(SKILLS_DIR)):
+            if skill in ("_shared", "setup") or not os.path.isdir(os.path.join(SKILLS_DIR, skill)):
+                continue
+            line = next((l for l in tree.splitlines() if re.match(r"^│   [├└]── %s/ " % re.escape(skill), l)), "")
+            refs = sorted(glob.glob(os.path.join(SKILLS_DIR, skill, "references", "*")))
+            for name in ["SKILL.md"] + [os.path.basename(p) for p in refs]:
+                with self.subTest(skill=skill, file=name):
+                    self.assertTrue(self.names(name, line), line)
+
+    def test_setup_block_names_its_reference_files(self):
+        block = self.tree().split("├── setup/", 1)[1].split("├── backlog/", 1)[0]
+        refs = os.path.join(SKILLS_DIR, "setup", "references")
+        expected = [os.path.basename(p) for p in glob.glob(os.path.join(refs, "*.md"))]
+        expected += ["stacks/" + os.path.basename(p) for p in glob.glob(os.path.join(refs, "stacks", "*.md"))]
+        for entry in sorted(os.listdir(os.path.join(refs, "templates"))):
+            if os.path.isdir(os.path.join(refs, "templates", entry)):
+                expected.append(entry + "/*")
+            elif re.match(r"ci\..+\.yml$", entry):
+                expected.append("ci.*.yml")
+            else:
+                expected.append(entry)
+        self.assertIn("onboarding.md", expected)
+        self.assertIn("onboarding-questions.md", expected)
+        self.assertIn("setup-issue-onboarding.md", expected)
+        for name in expected:
+            with self.subTest(file=name):
+                self.assertTrue(self.names(name, block), name)
 
 
 class HardeningTest(unittest.TestCase):
@@ -2703,7 +2768,8 @@ class OnboardingSetupSkillTest(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, reused)
         self.assertIn("[Reused workflow](#reused-workflow)", body)
-        self.assertIn("**Planned (M9, §9.13.4):** `setup` checks that the workflow runs `checks.check`",
+        self.assertIn("reuses an existing one after the user confirms it. `setup` checks that the workflow runs "
+                      "`checks.check`; on onboarding, the design verifies the existing workflow (§9.13.4).",
                       spec_section("### 17.1 Single entry point", "### 17.2"))
         for recipe in ("python-uv.md", "node.md"):
             with self.subTest(recipe=recipe):
