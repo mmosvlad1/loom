@@ -425,5 +425,47 @@ class MetricsDurationTest(unittest.TestCase):
         self.assertEqual(ls.events_metrics(events)["subagentSeconds"], 30)
 
 
+class ScreenIdTest(unittest.TestCase):
+    """Screen file names (LOOM_SPEC.md 9.14.3)."""
+
+    def test_screens(self):
+        cases = {
+            "sign-in.dc.html": "sign-in",
+            "sign-in.html": "sign-in",
+            "reading-list--empty.dc.html": "reading-list--empty",
+            "sign-in--error-2.png": "sign-in--error-2",
+            "a.jpg": "a",
+            "404.jpeg": "404",
+            "home-v2.webp": "home-v2",
+            "logo.svg": "logo",
+        }
+        for name, expected in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(ls.screen_id(name), expected)
+
+    def test_not_screens(self):
+        for name in ("Sign-in.html", "sign-in.HTML", "sign-in.Dc.html", "sign--in--error.html", "sign---in.html",
+                     "-a.html", "a-.html", "a--.html", "--a.html", "a_b.html", "a b.html", "a.b.html", ".html",
+                     ".dc.html", "a.gif", "a.md", "a.html.bak", "a", "café.html", "a\n.html"):
+            with self.subTest(name=name):
+                self.assertIsNone(ls.screen_id(name))
+
+
+class CanvasUrlTest(unittest.TestCase):
+    """design.canvas (LOOM_SPEC.md 9.14.1)."""
+
+    def test_valid(self):
+        for value in (None, "https://claude.ai/code/artifact/0b5e7c1a", "https://claude.ai/x?y=1#z"):
+            with self.subTest(value=value):
+                self.assertTrue(ls.valid_canvas(value))
+
+    def test_invalid(self):
+        for value in ("", "https://claude.ai/", "https://claude.ai", "http://claude.ai/x", "https://claude.aix/y",
+                      "https://claude.ai/a b", "https://claude.ai/a b", "https://claude.ai/a\x7f",
+                      " https://claude.ai/x", 0, False, [], {}):
+            with self.subTest(value=value):
+                self.assertFalse(ls.valid_canvas(value))
+
+
 if __name__ == "__main__":
     unittest.main()

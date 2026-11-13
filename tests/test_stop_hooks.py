@@ -470,6 +470,17 @@ class StopLintTest(RepoTestCase):
         write(self.path("notes", "other.md"), "x\n")  # next to a mapped path, not below it
         self.assertEqual(self.run_lint().returncode, 2)
 
+    def test_style_guide_and_screens_skip_lint(self):
+        self.write_config({"checks": {"lint": "exit 1"}, "hooks": {"stopLint": True},
+                           "docs": {"style": "ui/STYLE.md", "screens": "ui/screens"}})
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "config")
+        write(self.path("ui", "STYLE.md"), "# Style guide\n")
+        write(self.path("ui", "screens", "home.dc.html"), "<div></div>\n")
+        self.assertEqual(self.run_lint().returncode, 0)
+        write(self.path("ui", "app.css"), "x\n")  # next to the mapped paths, not below them
+        self.assertEqual(self.run_lint().returncode, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

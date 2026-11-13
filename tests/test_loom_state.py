@@ -63,6 +63,7 @@ DEFAULT_DOCS = {
     "dir": "docs", "vision": "docs/product/vision.md", "overview": "docs/architecture/overview.md",
     "decisions": {"dir": "docs/architecture/decisions", "pattern": "<NNNN>-<slug>.md"},
     "conventions": "docs/conventions.md", "tasks": "docs/tasks",
+    "style": "docs/design/DESIGN.md", "screens": "docs/design/screens",
 }
 DEFAULT_CHECKS = {"lint": "make lint", "typecheck": "make typecheck", "test": "make test", "check": "make check"}
 
@@ -116,6 +117,7 @@ class ResolvedConfigTest(RepoTestCase):
             "dir": "docs", "vision": "README.md", "overview": "ARCHITECTURE.md",
             "decisions": {"dir": "docs/adr", "pattern": "ADR-<NNN>-<slug>.md"},
             "conventions": "CONTRIBUTING.md", "tasks": "docs/loom-tasks",
+            "style": "docs/design/DESIGN.md", "screens": "docs/design/screens",
         })
         self.assertEqual(data["ci"], {"requiredCheck": "test (3.12)"})
         self.assertEqual(data["pullRequest"], {"requiredSections": ["## Test plan", "### Risk"]})
@@ -238,7 +240,7 @@ class ResolvedConfigTest(RepoTestCase):
         self.assertEqual(cfg["docs"]["tasks"], "notes/tasks")
         self.assertEqual(ls.docs_change_paths(cfg), [
             "docs", "docs/architecture/decisions", "docs/product/vision.md", "docs/architecture/overview.md",
-            "docs/conventions.md", "notes/tasks"])
+            "docs/conventions.md", "docs/design/DESIGN.md", "notes/tasks", "docs/design/screens"])
 
 
 class TodayTest(RepoTestCase):
@@ -616,6 +618,18 @@ class WorkingTreeTest(RepoTestCase):
         write(self.path("notes", "todo.md"), "x\n")  # next to a mapped path, not at or below it
         self.assertEqual(self.state()["workingTreeDocsOnly"], False)
 
+    def test_docs_only_flag_counts_the_style_guide_and_the_screens(self):
+        self.write_config({"docs": {"style": "ui/STYLE.md", "screens": "ui/screens"}})
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "docs map")
+        for path in ("ui/STYLE.md", "ui/screens/home.dc.html", "ui/screens/assets/logo.png"):
+            write(self.path(*path.split("/")), "changed\n")
+            with self.subTest(path=path):
+                s = self.state()
+                self.assertEqual((s["workingTree"], s["workingTreeDocsOnly"]), ("dirty", True))
+        write(self.path("ui", "app.css"), "x\n")  # next to the mapped paths, not at or below them
+        self.assertEqual(self.state()["workingTreeDocsOnly"], False)
+
     def test_all_done_docs_only_dirty_routes_to_describe_pr(self):
         write(os.path.join(self.dir, "log.md"), "## Phase 1 — done — abc1234\n")
         write(self.path("docs", "tasks", "42-x.md"), "# summary\n")
@@ -968,15 +982,258 @@ class DocsOverlapTest(RepoTestCase):
         self.assertEqual(docs["vision"], "docs/tasks/vision.md")
         self.assertEqual(warnings, [
             ".claude/loom.json: 'docs.vision' (docs/tasks/vision.md) is at or below 'docs.tasks' (docs/tasks); "
-            "keep role files outside the task summary and decision directories",
+            "keep role files outside the task summary, decision, and screens directories",
             ".claude/loom.json: 'docs.conventions' (docs/adr/conventions.md) is at or below 'docs.decisions.dir' "
-            "(docs/adr); keep role files outside the task summary and decision directories",
+            "(docs/adr); keep role files outside the task summary, decision, and screens directories",
         ])
 
     def test_neighbours_do_not_overlap(self):
         _, warnings = self.resolved({"tasks": "docs/task", "decisions": {"dir": "docs/tasks-adr"},
                                      "vision": "docs/tasks.md"})
         self.assertEqual(warnings, [])
+
+    def test_three_directories_must_not_overlap(self):
+        for tasks, decisions, screens, pair in (
+            ("docs/tasks", "docs/adr", "docs/tasks", ("docs.tasks", "docs/tasks", "docs.screens", "docs/tasks",
+                                                      "task summaries and screens")),
+            ("docs/tasks", "docs/adr", "docs/adr/screens", ("docs.decisions.dir", "docs/adr", "docs.screens",
+                                                            "docs/adr/screens", "decision records and screens")),
+            ("ui/screens/tasks", "docs/adr", "ui/screens", ("docs.tasks", "ui/screens/tasks", "docs.screens",
+                                                            "ui/screens", "task summaries and screens")),
+            ("docs/tasks", "UI/Screens/adr", "ui/screens", ("docs.decisions.dir", "UI/Screens/adr", "docs.screens",
+                                                            "ui/screens", "decision records and screens")),
+        ):
+            with self.subTest(tasks=tasks, decisions=decisions, screens=screens):
+                docs, warnings = self.resolved({"tasks": tasks, "decisions": {"dir": decisions}, "screens": screens})
+                self.assertEqual((docs["tasks"], docs["decisions"]["dir"], docs["screens"]),
+                                 (tasks, decisions, screens))  # the values stay
+                self.assertEqual(warnings, [".claude/loom.json: '%s' (%s) and '%s' (%s) overlap; %s would mix" % pair])
+        docs, warnings = self.resolved({"tasks": "docs/x", "decisions": {"dir": "docs/x"}, "screens": "docs/x"})
+        self.assertEqual(len(warnings), 3, warnings)  # every pair
+
+    def test_role_file_below_the_screens_directory(self):
+        docs, warnings = self.resolved({"screens": "docs/design", "vision": "docs/design/vision.md"})
+        self.assertEqual((docs["screens"], docs["vision"]), ("docs/design", "docs/design/vision.md"))
+        self.assertEqual(warnings, [
+            ".claude/loom.json: 'docs.vision' (docs/design/vision.md) is at or below 'docs.screens' (docs/design); "
+            "keep role files outside the task summary, decision, and screens directories",
+            ".claude/loom.json: 'docs.style' (docs/design/DESIGN.md) is at or below 'docs.screens' (docs/design); "
+            "keep role files outside the task summary, decision, and screens directories",
+        ])
+        _, warnings = self.resolved({"style": "docs/tasks/DESIGN.md"})
+        self.assertEqual(len(warnings), 1, warnings)
+        self.assertIn("'docs.style' (docs/tasks/DESIGN.md) is at or below 'docs.tasks'", warnings[0])
+
+    def test_style_shares_its_file_with_no_other_role(self):
+        for role in ("vision", "overview", "conventions"):
+            with self.subTest(role=role):
+                docs, warnings = self.resolved({role: "README.md", "style": "readme.md"})
+                self.assertEqual((docs[role], docs["style"]), ("README.md", "readme.md"))  # the values stay
+                self.assertEqual(warnings, [
+                    ".claude/loom.json: 'docs.style' (readme.md) is also 'docs.%s'; the style guide needs a file "
+                    "of its own" % role])
+        _, warnings = self.resolved({"vision": "README.md", "overview": "README.md", "conventions": "README.md",
+                                     "style": "README.md"})
+        self.assertEqual(len(warnings), 3, warnings)
+        _, warnings = self.resolved({"vision": "README.md", "style": "docs/README.md"})
+        self.assertEqual(warnings, [])
+
+    def test_new_roles_at_or_below_work_dir(self):
+        self.write_config({"workDir": "work/design", "docsDir": "work"})
+        cfg, warnings = ls.load_config(self.repo)
+        self.assertEqual((cfg["docs"]["style"], cfg["docs"]["screens"]), ("work/design/DESIGN.md", "work/design/screens"))
+        self.assertEqual(len(warnings), 2, warnings)
+        self.assertTrue(all("is at or below workDir" in w for w in warnings), warnings)
+        self.write_config({"workDir": "work/tasks", "docs": {"style": "work/tasks/DESIGN.md", "screens": "work/tasks/s"}})
+        cfg, warnings = ls.load_config(self.repo)
+        self.assertEqual((cfg["docs"]["style"], cfg["docs"]["screens"]), ("docs/design/DESIGN.md", "docs/design/screens"))
+        self.assertEqual(len(warnings), 2, warnings)
+
+
+class DesignConfigTest(RepoTestCase):
+    """The docs roles `style` and `screens` and the loom.json key `design` (LOOM_SPEC.md 9.14.1)."""
+
+    loom_config = {}
+
+    def resolved(self, config=None):
+        if config is not None:
+            self.write_config(config)
+        proc = run_loom_state(self.repo, "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        data = json.loads(proc.stdout)
+        return data, data["warnings"]
+
+    def test_defaults(self):
+        data, warnings = self.resolved()
+        self.assertEqual(warnings, [])
+        self.assertEqual((data["docs"]["style"], data["docs"]["screens"]), ("docs/design/DESIGN.md", "docs/design/screens"))
+        self.assertEqual(data["design"], {"canvas": None, "style": False, "screens": []})
+        data, warnings = self.resolved({"docsDir": "documentation", "design": {}})
+        self.assertEqual(warnings, [])
+        self.assertEqual((data["docs"]["style"], data["docs"]["screens"]),
+                         ("documentation/design/DESIGN.md", "documentation/design/screens"))
+        self.assertEqual(data["design"]["canvas"], None)
+
+    def test_custom_values(self):
+        canvas = "https://claude.ai/code/artifact/0b5e7c1a-design"
+        data, warnings = self.resolved({"docs": {"style": " ./ui/STYLE.MD ", "screens": "ui/screens/"},
+                                        "design": {"canvas": canvas}})
+        self.assertEqual(warnings, [])
+        self.assertEqual((data["docs"]["style"], data["docs"]["screens"]), ("ui/STYLE.MD", "ui/screens"))
+        self.assertEqual(data["design"]["canvas"], canvas)
+        data, warnings = self.resolved({"design": {"canvas": None}})
+        self.assertEqual((data["design"]["canvas"], warnings), (None, []))
+
+    def test_invalid_paths_take_their_default(self):
+        cases = {
+            "style": ["", "  ", "/abs/DESIGN.md", "../DESIGN.md", ".", "DESIGN.txt", "docs/design", ".loom/DESIGN.md",
+                      ".claude/DESIGN.md", ".git/DESIGN.md", ".loom/tasks/DESIGN.md", "DES\nIGN.md", 5, None, ["a.md"]],
+            "screens": ["", "/tmp/screens", "a/../..", ".", ".loom/tasks/screens", ".loom", ".claude/screens", ".git",
+                        "scr\teens", 3, None, {"dir": "x"}],
+        }
+        defaults = {"style": "docs/design/DESIGN.md", "screens": "docs/design/screens"}
+        for role, values in cases.items():
+            for value in values:
+                with self.subTest(role=role, value=value):
+                    data, warnings = self.resolved({"docs": {role: value}})
+                    self.assertEqual(data["docs"][role], defaults[role])
+                    self.assertEqual(len(warnings), 1, warnings)
+                    self.assertIn("'docs.%s'" % role, warnings[0])
+
+    def test_design_not_an_object(self):
+        for value in (None, [], "https://claude.ai/x", 5, True):
+            with self.subTest(value=value):
+                data, warnings = self.resolved({"design": value})
+                self.assertEqual(data["design"]["canvas"], None)
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn("invalid 'design'", warnings[0])
+
+    def test_unknown_key_in_design(self):
+        data, warnings = self.resolved({"design": {"canvas": "https://claude.ai/x", "check": "make design"}})
+        self.assertEqual(data["design"]["canvas"], "https://claude.ai/x")
+        self.assertEqual(warnings, [".claude/loom.json: unknown key 'design.check' ignored"])
+
+    def test_invalid_canvas(self):
+        for value in ("", "  ", "https://claude.ai/", "http://claude.ai/x", "https://claude.ai", "https://example.com/x",
+                      "https://claude.ai.evil.com/x", "HTTPS://claude.ai/x", " https://claude.ai/x",
+                      "https://claude.ai/x ", "https://claude.ai/a b", "https://claude.ai/a\tb",
+                      "https://claude.ai/a\nb", "https://claude.ai/a\x00", "https://claude.ai/a b",
+                      5, True, False, ["https://claude.ai/x"], {"url": "https://claude.ai/x"}):
+            with self.subTest(value=value):
+                data, warnings = self.resolved({"design": {"canvas": value}})
+                self.assertEqual(data["design"]["canvas"], None)
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn("invalid 'design.canvas'", warnings[0])
+                self.assertIn("using the default null", warnings[0])
+
+    def test_design_is_a_known_top_level_key(self):
+        cfg, warnings = ls.load_config(self.repo)
+        self.assertEqual((cfg["design"], warnings), ({"canvas": None}, []))
+        self.assertIn("design", ls.CONFIG_KEYS)
+
+
+class DesignStateTest(RepoTestCase):
+    """`design.style` and `design.screens` on fixture repositories (LOOM_SPEC.md 9.14.1, 9.14.3)."""
+
+    loom_config = {}
+
+    def screens_dir(self, *parts):
+        return self.path("docs", "design", "screens", *parts)
+
+    def design(self, cwd=None):
+        s = self.state(cwd)
+        return s["design"], s["warnings"]
+
+    def test_style(self):
+        design, _ = self.design()
+        self.assertFalse(design["style"])
+        os.makedirs(self.path("docs", "design", "DESIGN.md"))  # a directory, not the file
+        self.assertFalse(self.design()[0]["style"])
+        os.rmdir(self.path("docs", "design", "DESIGN.md"))
+        write(self.path("docs", "design", "DESIGN.md"), "# Style guide\n")
+        self.assertTrue(self.design()[0]["style"])
+        self.write_config({"docs": {"style": "ui/STYLE.md"}})
+        self.assertFalse(self.design()[0]["style"])  # the default path no longer counts
+        write(self.path("ui", "STYLE.md"), "")  # an empty file exists: only existence counts
+        self.assertTrue(self.design()[0]["style"])
+
+    def test_every_extension_and_a_state(self):
+        names = ["sign-in.dc.html", "reading-list.html", "a1.png", "b-2.jpg", "c.jpeg", "d.webp", "e.svg",
+                 "reading-list--empty.dc.html", "sign-in--error-2.png"]
+        for name in names:
+            write(self.screens_dir(name), "x\n")
+        design, warnings = self.design()
+        self.assertEqual(warnings, [])
+        self.assertEqual(design["screens"], sorted("docs/design/screens/" + n for n in names))
+
+    def test_files_that_are_not_screens(self):
+        write(self.screens_dir("sign-in.dc.html"), "x\n")
+        for name in ("Sign-In.html", "SIGN.png", "sign-in.HTML", "sign--in--error.html", "sign---in.html",
+                     "-sign.html", "sign-.html", "sign-in--.html", "sign_in.html", "sign in.html", "sign.in.html",
+                     "notes.md", "sign-in.gif", ".DS_Store", ".html", "sign-in.dc", "sign-in.html.bak",
+                     "home.DC.html", "café.html"):
+            # No name differs from another only in case: macOS file systems ignore case.
+            write(self.screens_dir(name), "x\n")
+        os.makedirs(self.screens_dir("assets"))
+        write(self.screens_dir("assets", "logo.svg"), "<svg/>\n")  # in a subdirectory: an asset
+        os.makedirs(self.screens_dir("dir-screen.html"))  # a directory with a screen name
+        design, warnings = self.design()
+        self.assertEqual(warnings, [])
+        self.assertEqual(design["screens"], ["docs/design/screens/sign-in.dc.html"])
+
+    def test_two_files_with_one_screen_id(self):
+        for name in ("sign-in.png", "sign-in.dc.html", "sign-in.html", "about.svg"):
+            write(self.screens_dir(name), "x\n")
+        design, warnings = self.design()
+        # Sorted: sign-in.dc.html < sign-in.html < sign-in.png; the first one is the screen.
+        self.assertEqual(design["screens"], ["docs/design/screens/about.svg", "docs/design/screens/sign-in.dc.html"])
+        self.assertEqual(warnings, [
+            "docs/design/screens/sign-in.dc.html and docs/design/screens/sign-in.html have the same screen ID "
+            "'sign-in'; docs/design/screens/sign-in.dc.html is the screen, keep one file per screen ID",
+            "docs/design/screens/sign-in.dc.html and docs/design/screens/sign-in.png have the same screen ID "
+            "'sign-in'; docs/design/screens/sign-in.dc.html is the screen, keep one file per screen ID",
+        ])
+
+    def test_missing_or_empty_directory(self):
+        self.assertEqual(self.design(), ({"canvas": None, "style": False, "screens": []}, []))
+        os.makedirs(self.screens_dir())
+        self.assertEqual(self.design()[0]["screens"], [])
+        os.rmdir(self.screens_dir())
+        write(self.path("docs", "design", "screens"), "a file, not a directory\n")
+        self.assertEqual(self.design(), ({"canvas": None, "style": False, "screens": []}, []))
+
+    def test_custom_screens_directory(self):
+        self.write_config({"docs": {"screens": "ui/mockups"}, "design": {"canvas": "https://claude.ai/c/1"}})
+        write(self.screens_dir("old.html"), "x\n")
+        write(self.path("ui", "mockups", "home.dc.html"), "x\n")
+        design, warnings = self.design()
+        self.assertEqual(warnings, [])
+        self.assertEqual(design, {"canvas": "https://claude.ai/c/1", "style": False,
+                                  "screens": ["ui/mockups/home.dc.html"]})
+
+    def test_present_without_and_with_a_task(self):
+        write(self.path("docs", "design", "DESIGN.md"), "# Style guide\n")
+        write(self.screens_dir("home.html"), "x\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "design")
+        expected = {"canvas": None, "style": True, "screens": ["docs/design/screens/home.html"]}
+        for branch in (None, "spike/x"):
+            if branch:
+                git(self.repo, "switch", "-q", "-c", branch)
+            with self.subTest(branch=branch):
+                proc = run_loom_state(self.repo, "--json")
+                data = json.loads(proc.stdout)
+                self.assertIsNone(data["task"])
+                self.assertEqual(data["design"], expected)
+        git(self.repo, "switch", "-q", "-c", "feat/42-x")
+        self.ticket(self.task_dir("42-x"))
+        data = json.loads(run_loom_state(self.repo, "--json").stdout)
+        self.assertEqual(data["task"]["number"], 42)
+        self.assertEqual(data["design"], expected)
+        sub = self.path("src")
+        os.makedirs(sub)
+        self.assertEqual(self.design(sub)[0], expected)  # paths stay relative to the git top level
+        self.assertEqual(run_loom_state(self.repo, "--line").stdout, "#42 · full · ticket\n")
 
 
 class SettingsTest(RepoTestCase):
