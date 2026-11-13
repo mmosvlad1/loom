@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: design-onboarding
+description: >-
+  The onboarding task (a setup task in full mode) after the kickoff, research approved. The fixture
+  has an AGENTS.md that allows push and PRs without confirmation, no CLAUDE.md, and a CI job named
+  test. /loom:design reads its onboarding reference and writes 03-design.md in review with round 1,
+  an empty Resolved Decisions table, a question that names AGENTS.md, and ci.requiredCheck, and never
+  reads 01-research-questions.md (LOOM_SPEC.md 9.13.4, 9.13.8, 20.2).
+tags: [design, full, onboarding]
+runs: 1
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: haiku
+  max_turns: 60
+  timeout_seconds: 1200
+  allowed_tools: [Read, Glob, Grep, Skill, Agent]
+  prompt: /loom:design

@@ -56,6 +56,7 @@ If nothing is uncertain, use the heading `## Open Questions` with the single lin
 <!--
 A file tree of the files this implementation phase creates, changes, or deletes (with `new:` / `changed:` comments),
 then key signatures and `diff` blocks for changed shapes. Include the tests to add or change, following the research's testing patterns.
+A change of `.claude/settings.json`: the heading #### `.claude/settings.json`, a line that says `implement` applies the change and the implementer does not, and one `diff` block.
 -->
 
 ### Verification

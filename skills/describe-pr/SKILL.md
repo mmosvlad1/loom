@@ -41,7 +41,7 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 ### Configuration
 
-Take every configuration value from the state, never from `.claude/loom.json`: `mainBranch`, `checks.check`, the doc paths (`docs`, the docs map), and `pullRequest.requiredSections`. Never build a doc path yourself.
+Take every configuration value from the state, never from `.claude/loom.json`: `mainBranch`, `checks.check`, the doc paths (`docs`, the docs map), `pullRequest.requiredSections`, and `ci.requiredCheck`. Never build a doc path yourself.
 
 Below, `<main>` is `mainBranch`, `<n>` is `task.number`, `<slug>` is `task.slug`, and `<task dir>` is `task.dir`. The doc paths:
 
@@ -115,7 +115,7 @@ Write `<tasks>/<n>-<slug>.md` from `summary-template.md`:
 - **Process metrics**: if `task.metrics` in the state is not `null`, end the Implementation section with the line `Process metrics: <task.metrics.line>`. Copy `task.metrics.line` exactly. If `task.metrics` is `null`, write no Process metrics line. Never estimate the numbers yourself.
 - **Deviations from Plan**: from `log.md` (`Deviations:`, `Additions:`, `Fix:` lines, and `## Plan change` entries).
 - **Verification**: the checks and the manual steps. Mark a manual step as passed only if the user confirmed it.
-- **Follow-ups**: out-of-scope items, worthwhile nits, and open risks. Step 9 proposes them as issues.
+- **Follow-ups**: out-of-scope items, worthwhile nits, and open risks. Step 9 proposes them as issues. On the onboarding task (`task.setup` is `true` and `task.mode` is `full`), the Follow-ups include every `Follow-up:` line of the Out of Scope section of `03-design.md`: each gap that the onboarding design deferred to an issue.
 - Remove every guidance comment.
 
 ## 4. ADRs (quick and full)
@@ -167,6 +167,10 @@ Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`,
    - **Change outline** has one line per implementation phase (`1. <phase name> — <commit subject>`), then one visual: a file tree of the changed files only, or an interface `diff` block with only signatures and public API. Pick the one that shows the shape of the change better (`visual-conventions.md`). Omit unchanged parts.
    - Decisions links the new ADRs and the task summary by their repository paths.
    - **Required sections**: `pullRequest.requiredSections` from the state lists headings that the project's PR template or a CI check requires (empty by default). A required heading that the layout above already has (the same heading line, e.g. `## Verification`) is that section. Write every other required heading after Decisions (oneshot: after Verification), before `<details>`, in the order of the list, exactly as listed. Fill it from the task's artifacts, or write the single line None. (no backticks) when nothing applies.
+   - **CI item**: the PR does not exist yet, so you cannot verify the result of CI on it. A checklist item about that result has one fixed form: `` - [ ] CI check `<ci.requiredCheck>` passes on this PR ``, with the check name from the state.
+     - Write it only where a checklist names the CI result, for example in a required `## Test plan` section.
+     - Write at most one such line in the body, and no other unticked item about CI.
+     - `/loom:finish-task` ticks it after the check passed.
    - Remove every guidance comment. Add the user's notes from the argument where they fit.
 3. **Size**: count the characters of the body. If it is longer than 60,000, replace the plan inside `<details>` with its `## Phase Overview` section and the line `The full plan is longer than the PR body allows; only its Phase Overview is attached.`
 
@@ -186,7 +190,7 @@ Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`,
 
 ## 9. Follow-up issues
 
-1. Collect follow-ups: the task summary's Follow-ups (oneshot: worthwhile nits and open problems from `log.md`).
+1. Collect follow-ups: the task summary's Follow-ups (oneshot: worthwhile nits and open problems from `log.md`). On the onboarding task, check that every `Follow-up:` line of the design's Out of Scope is among them; add a missing one.
 2. If there are none, skip this step.
 3. Draft each follow-up as an issue in the format of `issue-format.md`: Context starts with `Follow-up from #<n>` and links the PR.
 4. Show the drafts. Ask the user which ones to create. Create only confirmed issues, with `gh issue create` as `issue-format.md` describes.

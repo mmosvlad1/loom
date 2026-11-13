@@ -83,3 +83,5 @@ Define a term the first time you use it. Then use it with that meaning only.
 | **checks** | The commands in `loom.json` → `checks` | "tests" when you mean all checks, "CI" |
 | **docs role** | One kind of durable document that loom reads or writes: `vision`, `overview`, `decisions`, `conventions`, `tasks` | "doc type", "doc kind" |
 | **docs map** | `loom.json` → `docs`: the path of each docs role; skills read it as `docs` from `loom-state` | "doc config", "doc layout" |
+| **setup task** | The task of the issue "Set up loom", on the branch `chore/<n>-loom-setup` | "setup issue" (the issue is only its GitHub issue), "bootstrap task" |
+| **onboarding task** | A setup task in `full` mode: the setup of a repository with code | "onboarding" alone for the task, "migration" |

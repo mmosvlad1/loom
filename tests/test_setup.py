@@ -349,6 +349,9 @@ class SettingsTemplateTest(unittest.TestCase):
             if not os.path.isfile(path):
                 continue
             for rule in re.findall(r"Bash\(loom-state [^)]*\)", read(path).split("\n---", 1)[0]):
+                if name == "setup" and rule == "Bash(loom-state --setup-path *)":
+                    # setup runs --setup-path before the project settings exist; §19.3 does not list it.
+                    continue
                 with self.subTest(skill=name, rule=rule):
                     self.assertIn(rule, allow)
 
@@ -380,6 +383,23 @@ class SetupIssueTemplateTest(unittest.TestCase):
         self.assertEqual(re.findall(r"(?m)^## (.+)$", text), ["Context", "Acceptance Criteria", "Out of Scope"])
         self.assertRegex(text, r"(?m)^- \[ \] ")
         self.assertIn("/loom:finish-task", text)
+
+    def test_onboarding_issue_format(self):
+        text = template("setup-issue-onboarding.md")
+        self.assertEqual(re.findall(r"(?m)^## (.+)$", text), ["Context", "Acceptance Criteria", "Out of Scope"])
+        criteria = text.split("## Acceptance Criteria", 1)[1].split("## Out of Scope", 1)[0]
+        self.assertGreaterEqual(len(re.findall(r"(?m)^- \[ \] ", criteria)), 5)
+        for needle in ("full mode", "`ci.requiredCheck`", "`checks.check`", "540 seconds", "`@AGENTS.md`",
+                       "docs role", "`.gitignore`"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+        out = text.split("## Out of Scope", 1)[1]
+        for needle in ("follow-up issue", "No migration of issues, labels, or branches", "/loom:finish-task"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, out)
+        self.assertNotRegex(text, r"<[a-z]")  # no placeholder: setup copies it as it is
+        self.assertIn("`templates/setup-issue-onboarding.md`",
+                      spec_section("#### 9.13.2 Kickoff (`setup`)", "#### 9.13.3"))
 
     def test_stack_recipes_name_existing_templates(self):
         for name in ("python-uv.md", "node.md"):
@@ -520,17 +540,303 @@ class SetupHandoverTest(RepoTestCase):
     def test_interrupted_states_route_to_a_recovery(self):
         # loom.json written, no task directory yet: start-task, which sends the setup issue back to /loom:setup.
         self.assertEqual(self.state()["next"]["command"], "/loom:start-task #3")
-        # Ticket and in-progress entry, commit done, no done entry: implement's resume flow finds the commit.
+        # Ticket and in-progress entry, commit done, no done entry: the setup task goes back to
+        # /loom:setup (§9.12 row 2c), whose fast-path resume finds the commit.
         self.write_ticket()
         self.log("## Phase 1 — in-progress\nStarted: 2026-11-09\n")
         self.commit()
         state = self.state()
-        self.assertEqual(state["next"]["command"], "/loom:implement")
+        self.assertTrue(state["task"]["setup"])
+        self.assertEqual(state["next"]["command"], "/loom:setup")
         self.assertEqual(state["implementation"]["inProgress"], 1)
 
     def test_loom_json_must_exist_for_loom_state(self):
         os.remove(self.path(".claude", "loom.json"))
         self.assertEqual(run_loom_state(self.repo, "--json").stdout, "")
+
+
+# ---------------------------------------------------------------------------
+# Onboarding kickoff (§9.13.2, §9.13.3)
+# ---------------------------------------------------------------------------
+
+ONBOARDING = os.path.join(SETUP, "references", "onboarding.md")
+QUESTIONS = os.path.join(SETUP, "references", "onboarding-questions.md")
+FOUND_PLACEHOLDERS = {"instructionFiles": "<found.instructionFiles>", "workflows": "<found.workflows>",
+                      "prTemplates": "<found.prTemplates>", "docsDirs": "<found.docsDirs>"}
+
+
+def fill_questions(number: int, today: str, found: Dict[str, List[str]], added: List[str] = ()) -> str:
+    """Fill onboarding-questions.md the way setup does (onboarding.md, "Research questions file")."""
+    text = read(QUESTIONS).replace("<n>-loom-setup", "%d-loom-setup" % number).replace("YYYY-MM-DD", today)
+    for key, placeholder in FOUND_PLACEHOLDERS.items():
+        paths = found.get(key) or []
+        text = text.replace(placeholder, ", ".join("`%s`" % p for p in paths) if paths else "None.")
+    for offset, question in enumerate(added, start=8):
+        text += "%d. %s\n" % (offset, question)
+    return text
+
+
+def kickoff_settings_text() -> str:
+    return read(ONBOARDING).split("### Kickoff settings", 1)[1].split("\n### ", 1)[0]
+
+
+def kickoff_left_out() -> List[str]:
+    """The template rules that the kickoff leaves out, as the reference names them ("leave out `<rule>`")."""
+    return re.findall(r"[Ll]eave out `(Bash\([^`]+\))`", kickoff_settings_text())
+
+
+def kickoff_keys() -> List[str]:
+    """The top-level template keys that the kickoff writes, as the "**The kickoff settings**" line names them."""
+    tpl = json.loads(template("settings.json"))
+    line = next(l for l in kickoff_settings_text().splitlines() if l.startswith("- **The kickoff settings**"))
+    keys = []
+    for name in re.findall(r"`([^`]+)`", line):
+        key = name.split(".", 1)[0]
+        if key in tpl and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def kickoff_left_out_keys() -> List[str]:
+    """The template keys that the kickoff leaves out, as the "**Left out**" list names them ("The `<key>`.")."""
+    part = kickoff_settings_text().split("- **Left out**", 1)[1].split("\n- ", 1)[0]
+    return re.findall(r"(?m)^  - The `(\w+)`\.$", part)
+
+
+def kickoff_settings() -> Dict:
+    """A new .claude/settings.json of the kickoff, built by the reference's rules from the template."""
+    tpl = json.loads(template("settings.json"))
+    skipped = set(kickoff_left_out())
+    keys = kickoff_keys()
+    data: Dict = {}
+    if "the `$schema` line of the template" in kickoff_settings_text():
+        data["$schema"] = tpl["$schema"]
+    for key in tpl:  # template order
+        if key == "permissions" and key in keys:
+            data[key] = {"allow": [r for r in tpl[key]["allow"] if r not in skipped], "ask": list(tpl[key]["ask"])}
+        elif key in keys:
+            data[key] = tpl[key]
+    return data
+
+
+# Places where the questions file differs from §9.13.3 on purpose: the project has no spec,
+# so its references become words (each pair: spec text, template text).
+QUESTION_ADAPTATIONS = [
+    ("(the check runs rule below)", "(the check runs rule of research)"),
+    ("(the instruction files rule below)", "(the instruction files rule of research)"),
+    ("a document in each docs role (§15);",
+     "a document in each docs role: `vision` (what the product is, for whom, non-goals), `overview` (components "
+     "and data flow), `decisions` (decision records), `conventions` (code style, testing rules, module layout), "
+     "`tasks` (notes on past work);"),
+]
+
+
+def normalized_questions(text: str) -> str:
+    """The numbered questions, with whitespace collapsed (markup kept: backticks and bold are content)."""
+    return " ".join(text.split())
+
+
+def question_items(text: str) -> List[str]:
+    """Top-level numbered items under `## Questions`."""
+    part = text.split("## Questions", 1)[1]
+    return re.findall(r"(?m)^(\d+)\. ", part)
+
+
+class OnboardingQuestionsTemplateTest(unittest.TestCase):
+    def text(self) -> str:
+        return read(QUESTIONS)
+
+    def test_frontmatter(self):
+        fm = ls.parse_frontmatter(self.text())
+        self.assertEqual(list(fm), ["task", "phase", "status", "based_on", "updated"])
+        self.assertEqual((fm["phase"], fm["status"], fm["based_on"]), ("research-questions", "approved", []))
+        spec_keys = re.findall(r"(?m)^(\w+):", re.search(r"```yaml\n(.*?)```", spec_section(
+            "### 13.1 Frontmatter and gates", "### 13.2"), re.DOTALL).group(1))
+        self.assertTrue(set(fm) <= set(spec_keys), fm)
+        self.assertIn("`setup` writes the fixed `01-research-questions.md` of the onboarding task as `approved`",
+                      spec_section("### 13.1 Frontmatter and gates", "### 13.2"))
+
+    def test_layout_matches_13_2(self):
+        block = re.search(r"\*\*`01-research-questions\.md`\*\* \(full\)\n```markdown\n(.*?)```",
+                          spec_section("### 13.2 Working artifacts", "### 13.3"), re.DOTALL).group(1)
+        expected = [re.sub(r"\s+←.*$", "", l)[3:].strip() for l in block.splitlines() if l.startswith("## ")]
+        self.assertEqual(re.findall(r"(?m)^## (.+)$", self.text()), expected)
+        self.assertEqual(re.findall(r"(?m)^# (.+)$", ls.split_frontmatter(self.text())[1]), ["Research Questions"])
+        research_questions = read(os.path.join(SKILLS, "research-questions", "references", "template.md"))
+        self.assertIn("# Research Questions", research_questions)
+
+    def test_seven_questions_match_9_13_3(self):
+        spec = spec_section("#### 9.13.3 Research: the fixed question list", "#### 9.13.4")
+        spec_titles = re.findall(r"(?m)^\d\. \*\*(.+?)\*\*", spec)
+        titles = re.findall(r"(?m)^\d\. \*\*(.+?)\*\*", self.text())
+        self.assertEqual(len(spec_titles), 7)
+        self.assertEqual(titles, spec_titles)
+        self.assertEqual(question_items(self.text()), [str(i) for i in range(1, 8)])
+        self.assertIn("The fixed list has 7 questions", spec)
+        # Sub-items per question, as in the spec (questions 4, 6, and 7).
+        def sub_items(text: str) -> List[int]:
+            parts = re.split(r"(?m)^\d\. \*\*", text.split("## Questions", 1)[-1])[1:]
+            return [len(re.findall(r"(?m)^   - ", p)) for p in parts]
+        self.assertEqual(sub_items(self.text()), sub_items(spec.split("Rules for the onboarding research", 1)[0]))
+
+    def test_question_text_matches_9_13_3(self):
+        spec = spec_section("#### 9.13.3 Research: the fixed question list", "#### 9.13.4")
+        spec_list = spec[spec.index("1. **Stacks"):spec.index("Rules for the onboarding research")]
+        for old, new in QUESTION_ADAPTATIONS:
+            self.assertEqual(spec_list.count(old), 1, old)
+            spec_list = spec_list.replace(old, new)
+        mine = self.text().split("## Questions", 1)[1]
+        self.assertEqual(normalized_questions(mine), normalized_questions(spec_list))
+
+    def test_questions_are_descriptive(self):
+        questions = self.text().split("## Questions", 1)[1]
+        for word in (r"\bshould\b", r"\bmust\b", r"\bhow (would|do) we\b", r"\bmissing\b", r"\bneeds? to\b"):
+            with self.subTest(word=word):
+                self.assertNotRegex(questions, r"(?i)" + word)
+        self.assertNotIn("§", self.text())  # spec references mean nothing in the project
+        self.assertNotIn("<!--", self.text())
+
+    def test_key_context_pointers_name_found(self):
+        pointers = self.text().split("## Key Context Pointers", 1)[1].split("## Questions", 1)[0]
+        self.assertEqual(re.findall(r"<found\.(\w+)>", pointers), list(FOUND_PLACEHOLDERS))
+        self.assertEqual(set(ls.found_paths([])), set(FOUND_PLACEHOLDERS))
+        self.assertIn("`found` lists paths for the Key Context Pointers",
+                      spec_section("### 8.2 Interface", "### 8.3 Rules"))
+
+    def test_filled_file_has_no_placeholder(self):
+        text = fill_questions(3, "2026-11-12", {"instructionFiles": ["AGENTS.md"]}, ["How does `src/x` start?"])
+        self.assertNotRegex(text, r"<[a-zA-Z.]+>")
+        self.assertNotIn("YYYY", text)
+        self.assertEqual(question_items(text), [str(i) for i in range(1, 9)])
+        self.assertIn("- Instruction files: `AGENTS.md`", text)
+        self.assertIn("- Workflows: None.", text)
+
+
+class OnboardingKickoffTest(RepoTestCase):
+    """The kickoff of §9.13.2 on a fixture repository with code: loom-state reads it as setup describes it."""
+
+    loom_config = None  # the kickoff writes loom.json itself
+    initial_commit = False
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.number = 3
+        self.branch = "chore/%d-loom-setup" % self.number
+        self.task = self.path(".loom", "tasks", "%d-loom-setup" % self.number)
+        for rel, text in {"README.md": "# x\n", "src/app.py": "x = 1\n", "AGENTS.md": "Push without confirmation.\n",
+                          ".github/workflows/ci.yml": "on: push\n", "docs/index.md": "x\n"}.items():
+            write(self.path(*rel.split("/")), text)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "initial")
+        remote = os.path.join(self.tmp, "origin.git")
+        git(self.tmp, "init", "-q", "--bare", "-b", "main", remote)
+        git(self.repo, "remote", "add", "origin", remote)
+        git(self.repo, "push", "-q", "-u", "origin", "main")
+
+    def setup_path(self) -> Dict:
+        proc = run_loom_state(self.repo, "--setup-path", "main")
+        self.assertEqual((proc.returncode, proc.stderr), (0, ""))
+        return json.loads(proc.stdout)
+
+    def minimal_config(self) -> Dict:
+        steps = read(ONBOARDING).split("### Kickoff steps", 1)[1]
+        block = re.search(r"```json\n(.*?)```", steps, re.DOTALL).group(1)
+        return json.loads(re.sub(r"(?m)^ {3}", "", block).replace("<main>", "main"))
+
+    def subject(self) -> str:
+        m = re.search(r"only the subject `(chore\(loom\): start loom setup \(#<n>\))`", read(ONBOARDING))
+        return m.group(1).replace("<n>", str(self.number))
+
+    def kickoff(self) -> Dict:
+        """Kickoff steps 5-9: branch, ticket, minimal loom.json, permission rules, kickoff commit."""
+        found = self.setup_path()
+        self.assertEqual(found["path"], "onboarding")
+        git(self.repo, "switch", "-q", "-c", self.branch)
+        write(os.path.join(self.task, "00-ticket.md"), fill_ticket(
+            "%d-loom-setup" % self.number, "full", self.number, size="M", title="Set up loom",
+            labels="type:chore, size:M, mode:full", body=template("setup-issue-onboarding.md")))
+        os.makedirs(self.path(".claude"))
+        with open(self.path(".claude", "loom.json"), "w", encoding="utf-8") as fh:
+            json.dump(self.minimal_config(), fh, indent=2)
+        with open(self.path(".claude", "settings.json"), "w", encoding="utf-8") as fh:
+            json.dump(kickoff_settings(), fh, indent=2)
+        git(self.repo, "add", "--", ".claude/loom.json", ".claude/settings.json")
+        write(os.path.join(self.task, "commit-msg.txt"), self.subject() + "\n")
+        git(self.repo, "commit", "-q", "-F", os.path.join(self.task, "commit-msg.txt"))
+        return found["found"]
+
+    def test_kickoff_routes_to_research(self):
+        found = self.kickoff()
+        self.assertEqual(found["instructionFiles"], ["AGENTS.md"])
+        self.assertEqual(found["workflows"], [".github/workflows/ci.yml"])
+        # Before the questions file: the kickoff did not finish, so loom-state names /loom:setup (row 2c).
+        state = self.state()
+        self.assertTrue(state["task"]["setup"])
+        self.assertEqual(state["next"]["command"], "/loom:setup")
+        self.assertEqual(self.setup_path()["path"], "onboarding-rerun")
+        # Kickoff step 10: the fixed list, approved with the plan confirmation.
+        write(os.path.join(self.task, "01-research-questions.md"), fill_questions(self.number, "2026-11-12", found))
+        state = self.state()
+        self.assertEqual(state["warnings"], [])
+        self.assertEqual(state["workingTree"], "clean")
+        self.assertEqual((state["task"]["mode"], state["task"]["size"]), ("full", "M"))
+        self.assertEqual([(a["file"], a["phase"], a["status"], a["openQuestions"]) for a in state["artifacts"]],
+                         [("01-research-questions.md", "research-questions", "approved", 0)])
+        self.assertEqual(state["next"]["command"], "/loom:research")
+        self.assertEqual(self.setup_path()["path"], "onboarding-rerun")
+
+    def test_minimal_config_takes_the_defaults(self):
+        self.kickoff()
+        self.assertEqual(self.minimal_config(), {"version": 1, "mainBranch": "main"})
+        state = self.state()
+        self.assertEqual(state["warnings"], [])
+        self.assertEqual(state["checks"], ls.DEFAULT_CONFIG["checks"])
+        self.assertEqual(state["ci"], {"requiredCheck": "check"})
+        self.assertIs(state["hooks"]["stopLint"], False)
+
+    def test_kickoff_commit_has_no_phase_line(self):
+        self.kickoff()
+        self.assertEqual(git(self.repo, "log", "-1", "--format=%s"), ls.KICKOFF_SUBJECT % self.number)
+        self.assertEqual(git(self.repo, "log", "-1", "--format=%b"), "")
+        self.assertEqual(git(self.repo, "log", "--format=%h", "--grep=^Phase", "origin/main..HEAD"), "")
+        self.assertEqual(sorted(git(self.repo, "diff", "--name-only", "origin/main..HEAD").splitlines()),
+                         [".claude/loom.json", ".claude/settings.json"])
+
+    def test_kickoff_settings(self):
+        tpl = json.loads(template("settings.json"))
+        # The reference leaves out exactly the check-command rules of the template (§9.13.2 step 8).
+        self.assertEqual(kickoff_left_out(), ["Bash(make *)"])
+        self.assertEqual([r for r in tpl["permissions"]["allow"] if r.startswith("Bash(make ")], ["Bash(make *)"])
+        self.assertIn("every other rule that runs a check command (for Node, one rule per check command)",
+                      kickoff_settings_text())
+        # It writes every key of the template but the `statusLine`; a new file gets $schema (§9.13.2 step 8).
+        self.assertEqual(kickoff_keys(), ["extraKnownMarketplaces", "enabledPlugins", "permissions"])
+        self.assertEqual(kickoff_left_out_keys(), ["statusLine"])
+        self.assertEqual(set(kickoff_keys()) | set(kickoff_left_out_keys()) | {"$schema"}, set(tpl))
+        self.assertIn("the `$schema` line of the template", kickoff_settings_text())
+        data = kickoff_settings()
+        self.assertEqual(list(data), ["$schema", "extraKnownMarketplaces", "enabledPlugins", "permissions"])
+        self.assertEqual(data["extraKnownMarketplaces"], tpl["extraKnownMarketplaces"])
+        self.assertEqual(data["enabledPlugins"], {"loom@loom": True})
+        self.assertNotIn("statusLine", data)
+        allow, ask = data["permissions"]["allow"], data["permissions"]["ask"]
+        self.assertEqual(ask, tpl["permissions"]["ask"])
+        # The phases of the onboarding task run these without a prompt (§9.13.2 step 8, §9.13.3 GitHub
+        # facts); gh api and git push stay ask rules.
+        for command in ("loom-state --json", "loom-state --json --pr", "git status --porcelain", "git log --oneline",
+                        "gh repo view --json name", "gh label list", "gh issue list", "gh run list", "gh run view 1"):
+            with self.subTest(command=command):
+                self.assertTrue(any(r == "Bash(%s)" % command or (r.endswith(" *)") and
+                                    (command + " ").startswith(r[5:-3] + " ")) for r in allow), command)
+        self.assertIn("Bash(gh api *)", ask)
+        self.assertIn("Bash(git push *)", ask)
+        self.assertFalse(any(r.startswith("Bash(make") for r in allow))
+        # The merge into an existing file follows the skill's own rules.
+        for needle in ("\"Merge settings.json\" in step 7 of the skill", "Append the missing rules",
+                       "Keep the existing rules and their order", "Keep every other key as it is",
+                       "Never replace the file, and never remove a key."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, kickoff_settings_text())
 
 
 # ---------------------------------------------------------------------------
@@ -558,7 +864,19 @@ class SlugTest(unittest.TestCase):
         "Straße für Æsir": "strasse-fur-aesir",
         "Søren's œuvre in Łódź": "soren-s-oeuvre-in-lodz",
         "a " + "y" * 50 + " word": "a",  # accepted quirk (§8.2)
+        # The slug loom-setup is reserved for the setup task (§8.2, §9.13.1).
+        "Loom setup": "loom-setup-task",
+        "  LOOM: Setup! ": "loom-setup-task",
+        "Loom-setup": "loom-setup-task",
+        "Loom setup notes": "loom-setup-notes",
+        "Loom setup task": "loom-setup-task",
     }
+
+    def test_reserved_setup_slug_on_the_cli(self):
+        proc = subprocess.run([sys.executable, LOOM_STATE, "--slug", "Loom setup"],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "loom-setup-task\n", ""))
+        self.assertFalse(ls.SETUP_BRANCH_RE.match("chore/1-%s" % ls.slugify("Loom setup")))
 
     def test_cases(self):
         for title, slug in self.CASES.items():

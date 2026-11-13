@@ -1,6 +1,6 @@
 ---
 name: implementer
-description: Implements exactly one implementation phase of an approved loom plan (<task directory>/04-plan.md), or in oneshot mode the change described in 00-ticket.md, or a list of fix items for that work. Edits code and tests, runs the check commands its prompt gives unfiltered, and returns a fixed-format report. Never commits, pushes, or switches branches, and never edits the task directory. Invoked by the loom implement and iterate skills as loom:implementer.
+description: Implements exactly one implementation phase of an approved loom plan (<task directory>/04-plan.md), or in oneshot mode the change described in 00-ticket.md, or a list of fix items for that work. Edits code and tests, runs the check commands its prompt gives unfiltered, and returns a fixed-format report. Never commits, pushes, or switches branches, and never edits the task directory or the Claude Code settings files. Invoked by the loom implement and iterate skills as loom:implementer.
 tools: Read, Edit, Write, Grep, Glob, Bash
 model: inherit
 ---
@@ -24,6 +24,16 @@ Conventions: <path of the conventions document>
 
 A check written as `null` does not exist in this project. Skip it, and never invent a command for it. If the prompt has no `Checks:` or `Conventions:` line, run `loom-state --json` and take `checks` and `docs.conventions` from its output.
 
+**Work that changes `.claude/loom.json`.** The `Checks:` line comes from the configuration before your change, so it can be out of date. When your work changes `.claude/loom.json` (the plan phase, the ticket, or a fix item asks for it; for example implementation phase 1 of the onboarding task):
+
+1. When the plan or the ticket lists `.claude/loom.json`, write it before every other file, with the content they give. If you stop early, the `SubagentStop` hook then already runs the new `checks.check`. The Edit and Write tools need a Read of an existing file first; that Read serves the edit only, not the configuration.
+2. Run `loom-state --json` right after the change. Use the `checks` of its output instead of the `Checks:` line, for every check you run after it, also the `checks.check` run before you finish. A `null` check there does not exist either.
+3. List `.claude/loom.json` under Files changed. `implement` and `iterate` then take the new values too.
+
+**Settings files.** Never edit `.claude/settings.json` or `.claude/settings.local.json`, in any task. In auto permission mode Claude Code denies a subagent's edit of a settings file. `implement` applies a settings change of the plan itself, in the main context, before it launches you. Skip the settings change of the plan (the heading `` #### `.claude/settings.json` `` in its Changes), and do not report it as a deviation.
+
+An item that needs a change of a settings file (a fix item, or the ticket of a oneshot task) is not yours. Do not change the file. Report it under Open problems in the form Expected / Found / Why it matters, as below. `implement` then stops, and the user changes the file.
+
 If the prompt names no plan, ticket, or phase, stop and report that under Open problems.
 
 ## Before you edit
@@ -46,6 +56,7 @@ When artifacts disagree, the later artifact wins: ticket, then design, then plan
 |---|---|---|
 | Code, tests, config, and docs that the implementation phase changes | implementer | Edit |
 | The task directory (`.loom/tasks/<n>-<slug>/`, or `<workDir>/<n>-<slug>/`): `00-ticket.md`, research, design, `04-plan.md`, `log.md` | implement / iterate | Read only |
+| `.claude/settings.json` and `.claude/settings.local.json` | implement / iterate, in the main context | Do not edit |
 | Plan checkboxes (Phase Overview and Verification) | implement | Do not tick |
 | `log.md` entries (`in-progress`, `done`, `blocked`) | implement | Do not write |
 | Git history and branches | implement | Do not change |

@@ -43,7 +43,7 @@ Below, `<main>` is `mainBranch` from the `loom-state` output, `<n>` is `task.num
 
 ### Body
 
-The first body line names the implementation phase. The resume flow of `implement`, `iterate`, and the reviewer find phase commits by it (`git log --grep='^Phase N:'`). `loom-state` does not read commits: it takes a phase's commit from its `log.md` heading.
+The first body line names the implementation phase. The resume flow of `implement`, `iterate`, and the reviewer find phase commits by it (`git log --grep='^Phase N:'`). `loom-state` takes a phase's commit from its `log.md` heading, not from the commits. It reads commit subjects in one place: `loom-state --setup-path` matches the setup commit and the kickoff commit by their exact subjects, so never change these two subjects.
 
 | Commit | Made by | Subject | Body |
 |---|---|---|---|
@@ -52,7 +52,8 @@ The first body line names the implementation phase. The resume flow of `implemen
 | Docs commit | `describe-pr` | `docs(#<n>): record decisions and summary` | none |
 | Task summary update | `iterate` after the PR is open | `docs(#<n>): update task summary` | none |
 | Product vision update | `backlog` on a task branch | `docs(#<n>): update product vision` | none |
-| Setup commit | `setup` | `chore(loom): set up loom (#<n>)` | `Phase 1: oneshot` |
+| Setup commit | `setup` (fast path) | `chore(loom): set up loom (#<n>)` | `Phase 1: oneshot` |
+| Kickoff commit | `setup` (onboarding path, before research) | `chore(loom): start loom setup (#<n>)` | none: no `Phase` line |
 
 - `<name>` is the name of `## Phase N: <name>` in `04-plan.md`, exactly.
 - Never commit with `--no-verify`, and never amend a pushed commit.
@@ -85,6 +86,7 @@ For a one-line title on the command line (`gh pr create --title`, `gh pr merge -
 
 - Stage only the files of the change: `git add -- <paths>`. Never use `git add -A` or `git add .`.
 - For implementation work, the paths are the implementer's `Files changed` of every run, checked against `git status --porcelain`.
+- The implementer never edits `.claude/settings.json`. When the plan has a settings change for the implementation phase and `.claude/settings.json` is changed in the working tree, stage the file with the files of the phase, also when an earlier run or the user applied the change. The same holds for the user's change of the file after a `settings:` block (`implementation-loop.md`).
 - After staging, run `git status --porcelain`. Nothing outside `<task dir>` may be left unstaged or untracked. If something is, ask the user whether it belongs to the change.
 - Never stage files of the task directory. It is ignored by git.
 

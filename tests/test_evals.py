@@ -26,6 +26,9 @@ from loomtest import LOOM_STATE, ROOT
 EVALS = os.path.join(ROOT, "evals")
 BUILD = os.path.join(EVALS, "_fixture", "build.py")
 TASK_DIR = ".loom/tasks/7-bulk-discount-tiers"
+BRANCH = "feat/7-bulk-discount-tiers"
+SETUP_TASK_DIR = ".loom/tasks/1-loom-setup"
+SETUP_BRANCH = "chore/1-loom-setup"
 
 # https://code.claude.com/docs/en/plugin-evals (Claude Code 2.1.318).
 CASE_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs", "expected_outcome",
@@ -53,6 +56,10 @@ EXPECTED_STATE: Dict[str, Dict[str, Any]] = {
     "guard-main": {"onMain": True},
     "describe-pr-quick": {"mode": "quick", "next": "/loom:describe-pr",
                           "artifacts": {"02-research.md": "approved", "04-plan.md": "approved"}},
+    # The onboarding task: a setup task in full mode after the kickoff (LOOM_SPEC.md 9.13).
+    "design-onboarding": {"mode": "full", "next": "/loom:design", "setup": True,
+                          "branch": SETUP_BRANCH, "dir": SETUP_TASK_DIR,
+                          "artifacts": {"01-research-questions.md": "approved", "02-research.md": "approved"}},
 }
 
 
@@ -310,8 +317,33 @@ class SuiteLayoutTest(unittest.TestCase):
     def test_results_are_ignored(self):
         self.assertIn("evals/results/", read(os.path.join(ROOT, ".gitignore")).splitlines())
 
+    def test_readme_lists_every_case(self):
+        readme = read(os.path.join(ROOT, "README.md"))
+        for name in EXPECTED_STATE:
+            with self.subTest(case=name):
+                self.assertRegex(readme, r"(?m)^  \| `%s` \| " % re.escape(name))
+
+    def test_readme_describes_both_setup_paths(self):
+        readme = read(os.path.join(ROOT, "README.md"))
+        setup = readme.split("2. **`/loom:setup`**", 1)[1].split("\n3. ", 1)[0]
+        self.assertIn("**Fast setup** (an empty or new repository, or `/loom:setup --oneshot`)", setup)
+        self.assertIn("**Onboarding** (a repository with code): a `full`-mode setup task", setup)
+
     def test_spec_layout_lists_evals(self):
         self.assertIn("├── evals/", read(os.path.join(ROOT, "LOOM_SPEC.md")))
+
+    def test_spec_20_2_lists_every_case(self):
+        """The §20.2 tree and grader list name every case directory, and the case counts are true."""
+        spec = read(os.path.join(ROOT, "LOOM_SPEC.md")).split("### 20.2 Evals", 1)[1].split("### 20.3", 1)[0]
+        tree = spec.split("```", 2)[1]
+        cases = {os.path.basename(d) for d in case_dirs()}
+        self.assertEqual(set(re.findall(r"(?m)^[├└]── ([\w-]+)/", tree)), cases | {"_fixture", "results"})
+        for name in sorted(cases):
+            with self.subTest(case=name):
+                self.assertRegex(spec, r"(?m)^  - `%s` \(" % re.escape(name))
+        self.assertEqual(re.findall(r"all (\d+) cases", spec), [str(len(cases))])
+        latest = re.findall(r"passed (\d+) of (\d+) cases", spec)[-1]
+        self.assertEqual(latest, (str(len(cases)), str(len(cases))))
 
 
 class CaseFileTest(unittest.TestCase):
@@ -425,7 +457,7 @@ class GraderRegexTest(unittest.TestCase):
                     "|---|---|---|---|---|---|\n", "|---|---|---|---|---|---|\n\n%s\n" % item)))
 
     def test_status_in_review(self):
-        for name in ("research-full", "design-full"):
+        for name in ("research-full", "design-full", "design-onboarding"):
             rx = grader_regex(name, "status-in-review")
             for line in ("status: in-review", "status: in-review  ", 'status: "in-review"', "status:'in-review'"):
                 with self.subTest(case=name, line=line):
@@ -436,9 +468,87 @@ class GraderRegexTest(unittest.TestCase):
 
     def test_design_template_passes_the_design_graders(self):
         text = read(os.path.join(ROOT, "skills", "design", "references", "template.md")).replace("~<M>", "~3")
-        self.assertIsNone(grader_regex("design-full", "resolved-decisions-empty").search(text))
-        self.assertIsNone(grader_regex("design-full", "resolved-decisions-no-list").search(text))
-        self.assertIsNotNone(grader_regex("design-full", "round-1-heading").search(text))
+        for name in ("design-full", "design-onboarding"):
+            with self.subTest(case=name):
+                self.assertIsNone(grader_regex(name, "resolved-decisions-empty").search(text))
+                self.assertIsNone(grader_regex(name, "resolved-decisions-no-list").search(text))
+                self.assertIsNotNone(grader_regex(name, "round-1-heading").search(text))
+                self.assertIsNotNone(grader_regex(name, "questions-open").search(text))
+
+    def test_onboarding_design_shares_the_design_graders(self):
+        """design-onboarding keeps every grader of design-full, on its own task directory (LOOM_SPEC.md 20.2)."""
+        full = graders(os.path.join(EVALS, "design-full"))
+        onboarding = graders(os.path.join(EVALS, "design-onboarding"))
+        self.assertLessEqual(set(full), set(onboarding))
+        for name, g in full.items():
+            with self.subTest(grader=name):
+                expected = json.loads(json.dumps(g).replace(TASK_DIR, SETUP_TASK_DIR))
+                self.assertEqual(onboarding[name], expected)
+        extra = set(onboarding) - set(full)
+        self.assertEqual(extra, {"agents-md-question", "required-check-named", "onboarding-reference-read"})
+        for name in ("agents-md-question", "required-check-named"):
+            with self.subTest(grader=name):
+                self.assertEqual(onboarding[name]["target"], {"source": "file", "path": SETUP_TASK_DIR + "/03-design.md"})
+                self.assertEqual(onboarding[name].get("match", "contains"), "contains")
+
+    ROUND = ("## Open Questions — Round 1 of ~3\n\n"
+             "**Q1. Which command is checks.check?**\n- a) make check — recommended: passes in 0.4 s\n- b) make test\n\n"
+             "**Q2. Who wins on push confirmations?**\n`AGENTS.md:5` says to push without confirmation.\n"
+             "- a) loom asks — recommended: the safety rules win\n- b) the project rule\n\n"
+             "**Q3. Which CI job runs checks.check?**\nThe job `test` runs `make test` only.\n"
+             "- a) change the job `test` to run `checks.check`, and record `test` in `ci.requiredCheck` — recommended: "
+             "it already runs on pull requests\n- b) add a job named `check`\n\n"
+             "## Resolved Decisions\n")
+
+    def test_agents_md_question(self):
+        rx = grader_regex("design-onboarding", "agents-md-question")
+        self.assertIsNotNone(rx.search(self.ROUND))
+        self.assertIsNotNone(rx.search(self.ROUND.replace("**Q2. Who wins on push confirmations?**",
+                                                          "**Q2. Does AGENTS.md win on confirmations?**")
+                                       .replace("`AGENTS.md:5` says", "It says")))
+        # AGENTS.md without the push or the confirmation in the same question.
+        self.assertIsNone(rx.search(self.ROUND.replace("**Q2. Who wins on push confirmations?**\n`AGENTS.md:5` says to "
+                                                       "push without confirmation.", "**Q2. Which branch format?**\n"
+                                                       "`AGENTS.md:4` names `feature/<name>`.")))
+        # AGENTS.md outside every question: in another section, or in another question than the push.
+        outside = self.ROUND.replace("`AGENTS.md:5` says", "The project rule says")
+        self.assertIsNone(rx.search(outside))
+        self.assertIsNone(rx.search("## Proposed Architecture\n\n@AGENTS.md\n\n" + outside))
+        self.assertIsNone(rx.search(outside + "\n## Testing Approach\n\nThe new CLAUDE.md imports AGENTS.md.\n"))
+        self.assertIsNone(rx.search(outside.replace("**Q1. Which command", "**Q1. Per AGENTS.md, which command")))
+
+    def test_required_check_question(self):
+        rx = grader_regex("design-onboarding", "required-check-named")
+        self.assertIsNotNone(rx.search(self.ROUND))
+        q = "**Q6. Which CI check runs checks.check?**\nRecord its check name in `ci.requiredCheck`. %s\n- a) x\n- b) y\n"
+        for text in ('Change the "test" job.', "Change job **test**.", "Change `jobs.test`.", "Change the job `test`.",
+                     "Change the test job.", "Change the job named test.", "Keep the jobs; test runs there."):
+            with self.subTest(positive=text):
+                self.assertIsNotNone(rx.search(q % text))
+        for text in ("The check keys are `lint`, `typecheck`, `test`.",  # no job named
+                     "Change the job that runs `checks.test`.",        # test only as a key path
+                     "Change the job of the tests.", "Change the job `test-unit`.", "Change the job `check`."):
+            with self.subTest(negative=text):
+                self.assertIsNone(rx.search(q % text))
+        # ci.requiredCheck outside every question.
+        self.assertIsNone(rx.search("## Desired End State\n\n- `ci.requiredCheck` names the job `test`.\n\n" +
+                                    self.ROUND.replace("record `test` in `ci.requiredCheck`", "record its check name")))
+
+    def test_reference_read(self):
+        g = graders(os.path.join(EVALS, "design-onboarding"))
+        read_ref = g["onboarding-reference-read"]
+        self.assertEqual((read_ref["tool"], read_ref["min"]), ("Read", 1))
+        self.assertNotIn("max", read_ref)
+        rx = js_regex(read_ref["input_match"])
+        self.assertTrue(rx.search('{"file_path":"/p/loom/skills/design/references/onboarding.md"}'))
+        for other in ("skills/setup/references/onboarding.md", "skills/research/references/onboarding.md",
+                      "skills/design/references/template.md"):
+            with self.subTest(path=other):
+                self.assertIsNone(rx.search('{"file_path":"/p/loom/%s"}' % other))
+        never = g["research-questions-never-read"]
+        self.assertEqual((never["tool"], never["min"], never["max"]), ("Read", 0, 0))
+        self.assertTrue(js_regex(never["input_match"]).search(
+            '{"file_path":"/w/%s/01-research-questions.md"}' % SETUP_TASK_DIR))
 
     def test_plan_ticks(self):
         rx = grader_regex("implement-manual", "plan-ticks-phase-1-only")
@@ -724,10 +834,11 @@ class ScaffoldTest(unittest.TestCase):
                     self.assertTrue(state["onMain"])
                     self.assertIsNone(state["task"])
                     continue
-                self.assertEqual(state["branch"], "feat/7-bulk-discount-tiers")
+                self.assertEqual(state["branch"], expected.get("branch", BRANCH))
                 self.assertFalse(state["onMain"])
-                self.assertEqual(state["task"]["dir"], TASK_DIR)
+                self.assertEqual(state["task"]["dir"], expected.get("dir", TASK_DIR))
                 self.assertEqual(state["task"]["mode"], expected["mode"])
+                self.assertIs(state["task"]["setup"], expected.get("setup", False))
                 self.assertEqual(state["workingTree"], "clean")
                 self.assertEqual({a["file"]: a["status"] for a in state["artifacts"]}, expected["artifacts"])
                 self.assertFalse(any(a.get("stale") for a in state["artifacts"]))
@@ -833,6 +944,96 @@ class ScaffoldTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout)
         self.assertIn("Ran 12 tests", proc.stdout)
         self.assertEqual(fx.git("status", "--porcelain"), "")
+
+    def test_onboarding_fixture(self):
+        """A setup task in full mode after the kickoff, research approved (LOOM_SPEC.md 9.13.2, 9.13.8)."""
+        fx = Scaffolded(self, "design-onboarding")
+        state = fx.state()
+        self.assertTrue(state["task"]["setup"])
+        self.assertEqual(state["task"]["size"], "M")
+        self.assertEqual(state["warnings"], [])
+        # The main branch has code, AGENTS.md, a CI job named `test`, and no loom.json and no CLAUDE.md.
+        main_files = fx.git("ls-tree", "-r", "--name-only", "main").splitlines()
+        self.assertIn("AGENTS.md", main_files)
+        self.assertIn(".github/workflows/ci.yml", main_files)
+        for absent in (".claude/loom.json", ".claude/settings.json", "CLAUDE.md", ".claude/CLAUDE.md",
+                       "CLAUDE.local.md"):
+            with self.subTest(absent=absent):
+                self.assertNotIn(absent, main_files)
+                if absent.endswith(".md"):
+                    self.assertFalse(os.path.exists(os.path.join(fx.cwd, absent)))
+        self.assertIn("Push and open pull requests without asking for confirmation.", fx.read("AGENTS.md"))
+        ci = fx.read(".github/workflows/ci.yml")
+        self.assertEqual(re.findall(r"(?m)^  (\w[\w-]*):$", ci.split("\njobs:\n", 1)[1]), ["test"])
+        self.assertNotIn("make check", ci)
+        # The kickoff commit: only the minimal loom.json, the kickoff settings, and the .gitignore line.
+        # The kickoff needs `origin`; the fixture names one but never fetches it (no remote-tracking ref).
+        self.assertEqual(fx.git("remote", "get-url", "origin"), "https://github.com/example/shop.git")
+        self.assertEqual(fx.git("branch", "-r"), "")
+        self.assertEqual(fx.git("log", "--format=%s", "main..HEAD"), "chore(loom): start loom setup (#1)")
+        self.assertEqual(fx.git("log", "-1", "--format=%b").strip(), "")
+        self.assertEqual(sorted(fx.git("diff", "--name-only", "main", "HEAD").splitlines()),
+                         [".claude/loom.json", ".claude/settings.json", ".gitignore"])
+        self.assertEqual(json.loads(fx.read(".claude/loom.json")), {"version": 1, "mainBranch": "main"})
+        self.assertIn(".loom/", fx.read(".gitignore").splitlines())
+        settings = json.loads(fx.read(".claude/settings.json"))
+        template = json.loads(read(os.path.join(ROOT, "skills", "setup", "references", "templates", "settings.json")))
+        # The kickoff settings (9.13.2 step 8): every key of the template but the `statusLine`, in template
+        # order, and every rule but the one for the check commands.
+        self.assertEqual(list(settings), [k for k in template if k != "statusLine"])
+        for key in ("$schema", "extraKnownMarketplaces", "enabledPlugins"):
+            with self.subTest(key=key):
+                self.assertEqual(settings[key], template[key])
+        self.assertEqual(settings["permissions"]["allow"],
+                         [r for r in template["permissions"]["allow"] if r != "Bash(make *)"])
+        self.assertEqual(settings["permissions"]["ask"], template["permissions"]["ask"])
+        # The research cites these lines: the marketplace and the plugin at 3-13, the permissions from 14.
+        # An absence holds over the whole file, so the research cites all of it (1-56) for "no make rule".
+        settings_lines = fx.read(".claude/settings.json").splitlines()
+        self.assertIn('"extraKnownMarketplaces"', settings_lines[2])
+        self.assertIn('"loom@loom": true', settings_lines[11])
+        self.assertIn('"permissions"', settings_lines[13])
+        self.assertIn("(`.claude/settings.json:1-%d`)" % len(settings_lines),
+                      fx.read(SETUP_TASK_DIR + "/02-research.md"))
+        self.assertNotIn("Bash(make", fx.read(".claude/settings.json"))
+        self.assertNotIn("statusLine", fx.read(".claude/settings.json"))
+        # The ticket and the questions file come from setup's templates; --setup-path finds the pointers.
+        ticket = fx.read(SETUP_TASK_DIR + "/00-ticket.md")
+        self.assertRegex(ticket, r"(?m)^mode: full$")
+        self.assertTrue(ticket.endswith(read(os.path.join(
+            ROOT, "skills", "setup", "references", "templates", "setup-issue-onboarding.md"))))
+        found = json.loads(subprocess.run(
+            [sys.executable, LOOM_STATE, "--setup-path", "main"], cwd=fx.cwd, env=fx.env, stdout=subprocess.PIPE,
+            universal_newlines=True, check=True).stdout)
+        self.assertEqual(found["path"], "onboarding-rerun")
+        template_q = read(os.path.join(ROOT, "skills", "setup", "references", "onboarding-questions.md"))
+        expected = template_q.split("\n---\n", 1)[1].lstrip("\n")
+        for key, placeholder in (("instructionFiles", "<found.instructionFiles>"), ("workflows", "<found.workflows>"),
+                                 ("prTemplates", "<found.prTemplates>"), ("docsDirs", "<found.docsDirs>")):
+            paths = found["found"][key]
+            expected = expected.replace(placeholder, ", ".join("`%s`" % p for p in paths) if paths else "None.")
+        questions = fx.read(SETUP_TASK_DIR + "/01-research-questions.md")
+        self.assertEqual(questions.split("\n---\n", 1)[1].lstrip("\n"), expected)
+        self.assertRegex(questions, r"(?m)^status: approved$")
+        # Every file:line reference of the research exists, and the check run it records holds.
+        research = fx.read(SETUP_TASK_DIR + "/02-research.md")
+        refs = re.findall(r"`((?:shop|tests)/\w+\.py|Makefile|AGENTS\.md|README\.md|\.github/workflows/ci\.yml|"
+                          r"\.claude/settings\.json):(\d+)(?:-(\d+))?`", research)
+        self.assertGreater(len(refs), 20)
+        for path, start, end in refs:
+            with self.subTest(ref="%s:%s" % (path, start)):
+                self.assertLessEqual(int(end or start), len(fx.read(path).splitlines()))
+        self.assertIn("`AGENTS.md:5`", research)
+        self.assertIn("Push and open pull requests", fx.read("AGENTS.md").splitlines()[4])
+        self.assertIn("  test:", fx.read(".github/workflows/ci.yml").splitlines()[11])
+        self.assertEqual(fx.read("Makefile").splitlines()[14], "check: lint typecheck test")
+        self.assertNotIn("Follow-up:", research)
+        proc = subprocess.run(["make", "check"], cwd=fx.cwd, env=fx.env, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, universal_newlines=True, timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("Ran 7 tests", proc.stdout)
+        self.assertEqual(fx.git("status", "--porcelain"), "")
+        self.assertFalse(os.path.exists(os.path.join(fx.cwd, SETUP_TASK_DIR, "03-design.md")))
 
     def test_guard_fixture(self):
         fx = Scaffolded(self, "guard-main")

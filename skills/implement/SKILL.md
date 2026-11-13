@@ -41,6 +41,8 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 The state holds the resolved configuration: `mainBranch`, the check commands (`checks`), the doc paths (`docs`), `implement.maxFixAttempts`, `implement.autoAdvance`, and `hooks.maxCheckAttempts`. Take every value from there, never from `.claude/loom.json`. Pass `checks`, `docs.conventions`, and `mainBranch` to the agents as the configuration lines of `implementation-loop.md`.
 
+**A phase that changes `.claude/loom.json`.** The state above holds the values from before the change. When the implementer's `Files changed` lists `.claude/loom.json`, or `git status --porcelain -- .claude/loom.json` shows it changed, run `loom-state --json` again (step 3 of `implementation-loop.md`). Take the configuration from that output (`checks`, `docs`, `mainBranch`, `implement`, `hooks`) for your own check run, the reviewer prompt, the fix attempts, and the later implementation phases.
+
 Below, `<n>` is `task.number` and `<task dir>` is `task.dir`.
 
 ### The `Next:` line
@@ -75,6 +77,8 @@ Warnings (do not stop):
 ## 2. Resume flow
 
 Run this step if `workingTree` is `dirty` or `implementation.inProgress` is set. Otherwise go to section 3.
+
+Exception (quick and full only; oneshot has no plan): a dirty working tree whose only change is `.claude/settings.json`, while `implementation.inProgress` is not set. Read `04-plan.md` and `git diff -- .claude/settings.json`. If the change holds nothing but the settings change of the first implementation phase that is not `done` (all of it or a part; see "Settings change" in `implementation-loop.md`), make no offer to resume, stash, or discard. Go to section 3, and start the phase: "Settings change first" in section 4 adds the missing part.
 
 1. Find the interrupted work:
    - `implementation.inProgress` names phase N, or else N is the first implementation phase that is not `done`.
@@ -121,6 +125,12 @@ If the changed files clearly do not belong to phase N (an unrelated edit of the 
 
 For implementation phase N:
 
+**Settings change first.** If the `### Changes` of `## Phase N:` have the heading `` #### `.claude/settings.json` ``, apply that change yourself, as "Settings change" in `implementation-loop.md` describes. It comes before item 1: before the `in-progress` entry and before the implementer. The implementer never edits a settings file.
+
+- Show the `diff`, ask one confirmation, and use the Edit tool (Write for a new file), never a shell command. If nothing is missing in the file, skip it.
+- If the user or the permission system refuses the change, stop: nothing of phase N starts. The final message is the one of `implementation-loop.md`: `Result: implementation phase <N> not started: .claude/settings.json is unchanged`, the `diff`, and `Next: apply the change to .claude/settings.json yourself, then /clear, then /loom:implement`, plus `/loom:iterate <feedback>` to change the plan.
+- If earlier implementation phases of this run are done, name them first in the `Result:` line, for example `implementation phase 1 of 3 done (<hash>); implementation phase 2 not started: …`. Keep their `Manual verification:` steps in the message, also in run mode **all**. When there are manual steps, the `Next:` line starts with `run the manual steps, `: `Next: run the manual steps, apply the change to .claude/settings.json yourself, then /clear, then /loom:implement`.
+
 1. **Start.** Append `## Phase N — in-progress` to `<task dir>/log.md` (create the file if it is missing), in the form of `log-format.md`. Skip this when the last entry of phase N is already `in-progress` (a resumed phase).
 2. **Loop.** Run the shared `implementation-loop.md` in phase mode:
    - Reference: the plan path `<task dir>/04-plan.md` and phase N. oneshot: the ticket path `<task dir>/00-ticket.md`; the reviewer compares the diff with the ticket.
@@ -130,9 +140,9 @@ For implementation phase N:
 3. **Blocked.** If the result is blocked:
    - Do not commit. Leave the change in the working tree.
    - Append `## Phase N — blocked` and `Reason: <one line>` to `log.md`.
-   - Run `loom-state --json` and stop with the final message of section 6. `Next:` is normally `/loom:iterate <fix>`.
+   - Run `loom-state --json` and stop with the final message of section 6. `Next:` is normally `/loom:iterate <fix>`. A settings item blocks the phase with the reason `settings: <the item>` ("A fix of a settings file" in `implementation-loop.md`).
 4. **Commit.** If the result is done, commit the phase as the shared `git-flow.md` describes:
-   - Stage the implementer's `Files changed` of every run with `git add -- <paths>`, then check `git status --porcelain`.
+   - Stage the implementer's `Files changed` of every run with `git add -- <paths>`, then check `git status --porcelain`. When the plan has a settings change for phase N and `.claude/settings.json` is changed in the working tree, stage it with them, also when an earlier run or the user applied the change.
    - Subject: `<type>(<scope>): <summary of phase N> (#<n>)`. `<type>` is the branch type; `<scope>` and `<summary>` follow `git-flow.md`.
    - Body: `Phase N: <name>`, with `<name>` exactly as in `## Phase N: <name>`. oneshot: `Phase 1: oneshot`.
    - Write the message (subject, blank line, body) to `<task dir>/commit-msg.txt` with the Write tool; if the file exists, Read it first (`git-flow.md`). Run `git commit -F <task dir>/commit-msg.txt`.
@@ -173,5 +183,8 @@ Run `loom-state --json` after your last write. Use the `final-answer.md` format:
   - After the last phase, map `next.command` as `final-answer.md` describes, for example `/clear, then /loom:describe-pr`, or `/clear, then /loom:finish-task` with an open PR.
   - With manual steps, write `run the manual steps, then /clear, then /loom:next` (after the last phase: `then /clear, then /loom:describe-pr`). If a manual step fails, the user runs `/loom:iterate <feedback>`.
   - Blocked: `/loom:iterate <fix>`; the user may add hints, e.g. `/loom:iterate the test needs the fixture from phase 1`.
+  - Blocked with a `settings:` reason: `Next: change .claude/settings.json yourself, then /clear, then /loom:iterate`. No loom agent can change a settings file.
+
+A refused settings change ends with the `Result:` message of "Settings change first" in section 4, not with `Artifact` and `Status`.
 
 No recap of the code changes. `log.md` and the commits hold them.
