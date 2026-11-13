@@ -114,7 +114,7 @@ Write `<tasks>/<n>-<slug>.md` from `summary-template.md`:
 - **Implementation**: one line per implementation phase with its commit subject. Do not write hashes; the rebase and the squash merge change them.
 - **Process metrics**: if `task.metrics` in the state is not `null`, end the Implementation section with the line `Process metrics: <task.metrics.line>`. Copy `task.metrics.line` exactly. If `task.metrics` is `null`, write no Process metrics line. Never estimate the numbers yourself.
 - **Deviations from Plan**: from `log.md` (`Deviations:`, `Additions:`, `Fix:` lines, and `## Plan change` entries).
-- **Verification**: the checks and the manual steps. Mark a manual step as passed only if the user confirmed it.
+- **Verification**: the checks and the manual steps. Mark a manual step as passed only if the user confirmed it. When the ticket has a `## Screens` section, list each screen path with the result of its `Manual:` comparison.
 - **Follow-ups**: out-of-scope items, worthwhile nits, and open risks. Step 9 proposes them as issues. On the onboarding task (`task.setup` is `true` and `task.mode` is `full`), the Follow-ups include every `Follow-up:` line of the Out of Scope section of `03-design.md`: each gap that the onboarding design deferred to an issue.
 - Remove every guidance comment.
 
@@ -165,6 +165,7 @@ Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`,
    - **Why** is exactly one sentence of at most 25 words: the problem or need this PR answers (from `00-ticket.md`). It is not a list of what changed.
    - **Special things to note** has 1-3 list items, most important first: only what a reviewer must know and cannot see quickly in the diff. Candidates: a deviation or addition from `log.md`, a risk, a non-obvious decision, a migration or manual step (also a manual verification step the user has not confirmed), a known limit. If nothing qualifies, write the single line None. (plain text, no backticks); never add filler.
    - **Change outline** has one line per implementation phase (`1. <phase name> — <commit subject>`), then one visual: a file tree of the changed files only, or an interface `diff` block with only signatures and public API. Pick the one that shows the shape of the change better (`visual-conventions.md`). Omit unchanged parts.
+   - **Verification** lists each screen path of the ticket's `## Screens` section, if any: quick and full with the result of its `Manual:` comparison; oneshot (no plan, no `Manual:` line) only the paths.
    - Decisions links the new ADRs and the task summary by their repository paths.
    - **Required sections**: `pullRequest.requiredSections` from the state lists headings that the project's PR template or a CI check requires (empty by default). A required heading that the layout above already has (the same heading line, e.g. `## Verification`) is that section. Write every other required heading after Decisions (oneshot: after Verification), before `<details>`, in the order of the list, exactly as listed. Fill it from the task's artifacts, or write the single line None. (no backticks) when nothing applies.
    - **CI item**: the PR does not exist yet, so you cannot verify the result of CI on it. A checklist item about that result has one fixed form: `` - [ ] CI check `<ci.requiredCheck>` passes on this PR ``, with the check name from the state.
@@ -191,6 +192,7 @@ Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`,
 ## 9. Follow-up issues
 
 1. Collect follow-ups: the task summary's Follow-ups (oneshot: worthwhile nits and open problems from `log.md`). On the onboarding task, check that every `Follow-up:` line of the design's Out of Scope is among them; add a missing one.
+   - **Screens.** Only when the ticket has a `## Screens` section. For each of its screens that a Resolved Decision (`03-design.md`, `04-plan.md`) or a deviation in `log.md` names, add one follow-up titled `Design screens: update <screen ID>`, labeled `type:docs`. Its Context names the screen path and the difference, so the screen can follow the code. It has no `## Screens` section.
 2. If there are none, skip this step.
 3. Draft each follow-up as an issue in the format of `issue-format.md`: Context starts with `Follow-up from #<n>` and links the PR.
 4. Show the drafts. Ask the user which ones to create. Create only confirmed issues, with `gh issue create` as `issue-format.md` describes.

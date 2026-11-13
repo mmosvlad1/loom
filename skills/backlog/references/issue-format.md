@@ -20,12 +20,17 @@ Link the source: the task summary, PR, ADR, or file (`path:line`) that found it.
 - [ ] <An observable result that a check or a person can verify>
 - [ ] <One criterion per line; 1-6 criteria>
 
+## Screens
+
+- `<path of a screen from design.screens>`
+
 ## Out of Scope
 
 - <What this issue does not change, if a reader could expect it. Omit the section otherwise.>
 ```
 
 - Describe the problem and the expected result, not the implementation. The research and plan phases decide how.
+- **Screens** (optional): one line per screen that the issue implements, as its path from `design.screens` in the `loom-state --json` output, in backticks. A screen is one mockup file of the screens directory. Omit the section when the issue implements no screen. An issue whose title starts with `Design screens:` has no `## Screens` section: it changes screens, it does not implement them.
 - Dependencies: if the issue needs another open issue done first, end the Context with one line per dependency: `Depends on #<k>`. `backlog` reads these lines to prioritize.
 - A follow-up from `describe-pr` starts its Context with `Follow-up from #<n>` (the task issue) and links the PR.
 - Apply the shared `writing-style.md`.

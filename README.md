@@ -43,6 +43,7 @@ In a project that `/loom:setup` prepared, `.claude/settings.json` registers the 
 - Every loom subagent run is recorded in `.loom/tasks/<n>-<slug>/events.jsonl` (agent, phase, result, duration); `loom-state --json` sums it up as `task.metrics`
 - `/clear` → the command of the `Next:` line between phases; `/loom:next` when you do not have that line
 - Durable knowledge (task summaries, ADRs, architecture) committed to `docs/`; working artifacts stay local
+- Optional UI design files: a style guide (`docs/design/DESIGN.md`) and one mockup file per screen (`docs/design/screens/`). An issue names its screens in a `## Screens` section; design and plan read them, research never does, and the reviewer checks the tokens (unreleased, milestone M10a)
 
 ## Development
 
@@ -53,8 +54,8 @@ Run the working copy with `claude --plugin-dir /path/to/loom` in a sandbox repos
 
   | Case | Checks |
   |---|---|
-  | `research-full` | `/loom:research` writes `02-research.md` in review with `file:line` references and never reads `00-ticket.md`; the subagent events hook writes `events.jsonl` |
-  | `design-full` | `/loom:design` writes round 1 with every question open and an empty Resolved Decisions table |
+  | `research-full` | `/loom:research` writes `02-research.md` in review with `file:line` references and never reads `00-ticket.md` or the screen of the ticket; the subagent events hook writes `events.jsonl` |
+  | `design-full` | `/loom:design` writes round 1 with every question open and an empty Resolved Decisions table; it reads the screen of the ticket and names its path |
   | `implement-manual` | `/loom:implement` commits phase 1 and stops for manual verification before phase 2; `events.jsonl` has the reviewer's verdict and the implementer's checks result |
   | `design-onboarding` | `/loom:design` on the onboarding task reads its onboarding reference and writes round 1 with every question open, an empty Resolved Decisions table, a question that names `AGENTS.md` and the push or the confirmation, and a question that names `ci.requiredCheck` and the CI job `test`; it never reads `01-research-questions.md` |
   | `guard-main` | the hook blocks `git commit` on `main` |

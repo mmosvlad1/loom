@@ -275,6 +275,49 @@ class AgentPromptTest(unittest.TestCase):
         self.assertIn("If the prompt names none, skip this check; do not guess a path.", body)
         self.assertNotIn("docsDir", body)
 
+    def test_implementer_builds_ui_from_screens_with_the_style_guide(self):
+        """The implementer row of LOOM_SPEC.md 9.14.5."""
+        body = self.body("implementer")
+        self.assertIn("Conventions: <path of the conventions document>\nStyle guide: <path of the style guide>\n"
+                      "Screens: <directory of the screens>\n", body)
+        self.assertIn("The `Style guide:` line is there only when the project has a style guide, and the `Screens:` line "
+                      "only when it has screens (mockup files).", body)
+        self.assertIn("(and `docs.style` when `design.style` is `true`, `docs.screens` when `design.screens` is not empty)",
+                      body)
+        before = body.split("## Before you edit", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("Before you write UI code, read the style guide of the `Style guide:` line, and every screen of "
+                      "your phase: the screen paths in its Changes (oneshot: the ticket's `## Screens` section).", before)
+        rule = body.split("- **UI from a screen.**", 1)[1].split("\n", 1)[0]
+        for needle in ("Build it with the project's components and the tokens that the code defines.",
+                       "Never copy the markup or the inline styles of a screen.",
+                       "A value that the style guide and a screen give differently comes from the style guide; name "
+                       "the screen and the value under Deviations.",
+                       "Change the style guide or a screen (a file at or below the directory of the `Screens:` line) "
+                       "only when the plan (oneshot: the ticket) names that change."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, rule)
+
+    def test_reviewer_checks_states_tokens_and_design_file_changes(self):
+        """The implementation-reviewer row of LOOM_SPEC.md 9.14.5."""
+        body = self.body("implementation-reviewer")
+        self.assertIn("Conventions: <path of the conventions document>\nStyle guide: <path of the style guide>\n"
+                      "Screens: <directory of the screens>\nMain branch: <name of the main branch>", body)
+        self.assertIn("The `Style guide:` line is there only when the project has a style guide, and the `Screens:` line "
+                      "only when it has screens (mockup files).", body)
+        reference = body.split("### 1. Read the reference", 1)[1].split("### 2.", 1)[0]
+        # The token rule holds only with the Style guide: line (a project without a style guide sees no change).
+        self.assertIn("- Only when the prompt has a `Style guide:` line and the diff has UI code: read that style guide. "
+                      "A raw color or size where the code defines a token for it is a deviation.", reference)
+        self.assertIn("Do not judge the visual match with a screen: the `Manual:` check of the plan does that.", reference)
+        blocking = body.split("An item is `blocking` if it does any of these:", 1)[1].split("An item is a `nit`", 1)[0]
+        self.assertIn("A UI state that the reference names (empty, loading, error) and the diff lacks is such an item",
+                      blocking)
+        # The screens rule uses the Screens: line, so a screen that the ticket does not list counts too.
+        self.assertIn("changes the file of the `Style guide:` line, or a screen (a file at or below the directory of the "
+                      "`Screens:` line), when the reference does not name that change. Without these lines this check "
+                      "does not apply", blocking)
+        self.assertNotIn("such as one that the ticket lists", body)
+
     def test_reviewer_verdict_format_matches_spec(self):
         body = self.body("implementation-reviewer")
         spec = spec_section("### 10.2 Reviewer verdict format", "## 11. Hooks")

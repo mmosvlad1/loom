@@ -11,7 +11,7 @@ Below, `<main>` is `mainBranch` from the `loom-state` output, `<n>` is `task.num
 | Local commits, `git rebase`, `git branch -D` of a merged task branch | No |
 | `git push` (also `--force-with-lease` on the task branch) | Yes |
 | `gh pr create`, `gh pr edit`, `gh pr merge` | Yes |
-| `gh issue create` | Yes |
+| `gh issue create`, `gh issue edit` | Yes |
 | Repo settings, labels, rulesets: `gh api` calls that change something (`--method POST`, `PUT`, `PATCH`, `DELETE`), `gh label create` | Yes |
 | Read-only `gh api` GET calls (no `--method`, no `-f`/`-F` fields), e.g. reading rulesets | No question from the skill. The permission system always asks: `setup` writes `Bash(gh api *)` as an ask rule, so every `gh api` call prompts, also in auto mode. This is intended. |
 | `git stash`, discarding changes (`git restore`, `git clean`) | Yes |

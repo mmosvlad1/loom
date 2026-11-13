@@ -15,9 +15,12 @@ You orchestrate. The `loom:implementer` agent changes the code; it never commits
   ```text
   Checks: check = `<checks.check>`; lint = `<checks.lint>`; typecheck = `<checks.typecheck>`; test = `<checks.test>`
   Conventions: <docs.conventions>
+  Style guide: <docs.style>
+  Screens: <docs.screens>
   Main branch: <mainBranch>
   ```
   The implementer gets the `Checks:` and `Conventions:` lines. The reviewer gets the `Conventions:` and `Main branch:` lines.
+  The `Style guide:` line goes into a prompt only when `design.style` is `true`, and the `Screens:` line only when `design.screens` is not empty. Each one then follows the `Conventions:` line in every prompt that has that line, for both agents.
   A run that changes `.claude/loom.json` makes these values out of date: step 3 takes them again.
 
 ## Settings change

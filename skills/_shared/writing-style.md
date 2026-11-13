@@ -81,7 +81,12 @@ Define a term the first time you use it. Then use it with that meaning only.
 | **approve** | Set an artifact's status to `approved` | "accept" (the user accepts a recommendation), "sign off" |
 | **gate** | A phase that cannot start until a previous artifact is `approved` | "checkpoint", "blocker" |
 | **checks** | The commands in `loom.json` → `checks` | "tests" when you mean all checks, "CI" |
-| **docs role** | One kind of durable document that loom reads or writes: `vision`, `overview`, `decisions`, `conventions`, `tasks` | "doc type", "doc kind" |
+| **docs role** | One kind of durable document that loom reads or writes: `vision`, `overview`, `decisions`, `conventions`, `tasks`, and the optional `style` and `screens` | "doc type", "doc kind" |
 | **docs map** | `loom.json` → `docs`: the path of each docs role; skills read it as `docs` from `loom-state` | "doc config", "doc layout" |
 | **setup task** | The task of the issue "Set up loom", on the branch `chore/<n>-loom-setup` | "setup issue" (the issue is only its GitHub issue), "bootstrap task" |
 | **onboarding task** | A setup task in `full` mode: the setup of a repository with code | "onboarding" alone for the task, "migration" |
+| **style guide** | The document of the docs role `style`: the visual direction, the tokens, and the UI rules | "design" (it means the design phase), "design system", "theme" |
+| **screen** | One mockup file in the directory of the docs role `screens`; one screen in one state | "design" (it means the design phase), "mockup" alone, "wireframe" |
+| **screen ID** | The file name of a screen without its extension, e.g. `sign-in` or `reading-list--empty` | "screen name", "screen key" |
+
+The word "design" alone keeps one meaning: the design phase and its artifact `03-design.md`.

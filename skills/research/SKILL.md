@@ -78,7 +78,7 @@ The inputs depend on `task.mode`. Follow this rule exactly. An eval checks it.
 - Read `<task.dir>/01-research-questions.md` in full, without offset or limit. It is your only task input.
 - **Never read `00-ticket.md`.** Do not open it, grep it, cat it, or list its content.
 - Never fetch the issue (`gh issue view`) or read `03-design.md`, `04-plan.md`, `log.md`, or any `*.superseded.md` file.
-- Do not infer the goal of the task from the branch name, the task slug, or the issue title. Research the questions as they are written.
+- Do not infer the goal of the task from the branch name, the task slug, the issue title, or the screen IDs in `design.screens` of the state. Research the questions as they are written.
 - Tell your agents nothing from the ticket. Give them only the research questions, the Key Context Pointers, and what you found in the code.
 
 Research is blind to intent in full mode: it must describe the code without the bias of what will be built.
@@ -95,6 +95,7 @@ The onboarding task is full mode, and this rule holds unchanged. Its `01-researc
 ### Both modes
 
 - Read every file the arguments mention, in full.
+- **Never open a screen**: a file at or below `docs.screens`. In quick mode the ticket's `## Screens` section names screens: do not read them, and do not give their paths to an agent. When `design.screens` is not empty, your own calls follow the rule of the `Excluded path:` line too: never Read a file at or below `docs.screens`; a Grep that starts at its parent or higher carries `glob: "!<docs.screens>/**"`; a Glob gets a `path` or a pattern that does not reach it.
 - Read the inputs yourself, in the main context, before you spawn any agent.
 
 ## 3. Run the research agents
@@ -112,7 +113,7 @@ Spawn agents by their namespaced name. Use only these agents. Do not use `genera
 
 - Run agents in parallel when they search different areas.
 - Tell each agent what to find. Do not tell it how to search; each agent knows its job.
-- Every prompt to `loom:codebase-locator`, `loom:codebase-analyzer`, or `loom:codebase-pattern-finder` carries the line `Work directory: <workDir>` (`workDir` from the state). The agent skips that directory: it holds the loom artifacts, the ticket too. This includes the claim check.
+- Every prompt to `loom:codebase-locator`, `loom:codebase-analyzer`, or `loom:codebase-pattern-finder` carries the line `Work directory: <workDir>` (`workDir` from the state). The agent skips that directory: it holds the loom artifacts, the ticket too. When `design.screens` in the state is not empty, every such prompt also carries the line `Excluded path: <docs.screens>`. This includes the claim check.
 - Ask every codebase agent for `file:line` references.
 - Wait for **all** agents to finish before you synthesize.
 - If an answer is still missing, run one more targeted pass with at most 3 agents. After that pass, put what is still missing under **Not Found / Unclear**.

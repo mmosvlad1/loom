@@ -23,8 +23,12 @@ The prompt also gives the configuration, as resolved by `loom-state`. Do not rea
 
 ```text
 Conventions: <path of the conventions document>
+Style guide: <path of the style guide>
+Screens: <directory of the screens>
 Main branch: <name of the main branch>
 ```
+
+The `Style guide:` line is there only when the project has a style guide, and the `Screens:` line only when it has screens (mockup files).
 
 If the prompt has no `Main branch:` line, run `loom-state --json` and take `mainBranch` from its output.
 
@@ -53,6 +57,8 @@ If the prompt has no `Main branch:` line, run `loom-state --json` and take `main
   - the tests and verification items
 - Read the `## Resolved Decisions` of `04-plan.md` and, if it exists, of `<task directory>/03-design.md`. A diff that contradicts a resolved decision is a deviation.
 - Read the conventions document that the prompt names (`Conventions: <path>`) if it exists. A clear violation of a stated convention is a deviation. If the prompt names none, skip this check; do not guess a path.
+- Only when the prompt has a `Style guide:` line and the diff has UI code: read that style guide. A raw color or size where the code defines a token for it is a deviation.
+- Do not judge the visual match with a screen: the `Manual:` check of the plan does that.
 
 ### 2. Read the diff
 
@@ -109,7 +115,8 @@ Tag every item under Deviations, Additions, and Planned but missing as `blocking
 
 An item is `blocking` if it does any of these:
 
-- leaves out a planned change, test, or verification item, or does not resolve a fix item (Planned but missing is `blocking` by default)
+- leaves out a planned change, test, or verification item, or does not resolve a fix item (Planned but missing is `blocking` by default). A UI state that the reference names (empty, loading, error) and the diff lacks is such an item
+- changes the file of the `Style guide:` line, or a screen (a file at or below the directory of the `Screens:` line), when the reference does not name that change. Without these lines this check does not apply
 - changes behavior, a public interface, a data shape, or a file location differently from the reference
 - contradicts a Resolved Decision in the design or plan, or a rule in the conventions document
 - breaks an assumption that a later implementation phase depends on

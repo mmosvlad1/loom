@@ -29,6 +29,10 @@ TASK_DIR = ".loom/tasks/7-bulk-discount-tiers"
 BRANCH = "feat/7-bulk-discount-tiers"
 SETUP_TASK_DIR = ".loom/tasks/1-loom-setup"
 SETUP_BRANCH = "chore/1-loom-setup"
+# The UI design files of research-full and design-full (LOOM_SPEC.md 9.14.1, 20.2).
+STYLE_GUIDE_PATH = "docs/design/DESIGN.md"
+SCREEN_PATH = "docs/design/screens/order-summary.html"
+SCREEN_CASES = ("research-full", "design-full")
 
 # https://code.claude.com/docs/en/plugin-evals (Claude Code 2.1.318).
 CASE_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs", "expected_outcome",
@@ -478,6 +482,9 @@ class GraderRegexTest(unittest.TestCase):
     def test_onboarding_design_shares_the_design_graders(self):
         """design-onboarding keeps every grader of design-full, on its own task directory (LOOM_SPEC.md 20.2)."""
         full = graders(os.path.join(EVALS, "design-full"))
+        # The screen graders need the screen of the design-full fixture; the onboarding fixture has none.
+        for name in ("screen-read", "screen-path-named"):
+            full.pop(name)
         onboarding = graders(os.path.join(EVALS, "design-onboarding"))
         self.assertLessEqual(set(full), set(onboarding))
         for name, g in full.items():
@@ -549,6 +556,64 @@ class GraderRegexTest(unittest.TestCase):
         self.assertEqual((never["tool"], never["min"], never["max"]), ("Read", 0, 0))
         self.assertTrue(js_regex(never["input_match"]).search(
             '{"file_path":"/w/%s/01-research-questions.md"}' % SETUP_TASK_DIR))
+
+    def test_research_never_touches_the_screens(self):
+        """research-full: a tool input names the screens directory only inside an exclusion (LOOM_SPEC.md 9.14.5)."""
+        rx = grader_regex("research-full", "screens-never-touched")
+        uses = (
+            '"name":"Read","input":{"file_path":"/w/%s"}' % SCREEN_PATH,
+            '"name":"Grep","input":{"pattern":"color","path":"docs/design/screens"}',
+            '"name":"Grep","input":{"pattern":"color","glob":"docs/design/screens/*.html"}',
+            '"name":"Glob","input":{"pattern":"docs/design/screens/*.html"}',
+            '"name":"Bash","input":{"command":"ls docs/design/screens","description":"x"}',
+            '"name":"Bash","input":{"command":"find docs/design/screens -name \'*.html\'"}',
+            '"name":"Bash","input":{"command":"git ls-files docs/design/screens"}',
+            # An exclusion does not cover a second, plain use in the same call.
+            '"name":"Grep","input":{"pattern":"x","glob":"!docs/design/screens/**","path":"docs/design/screens"}',
+            '"name":"Bash","input":{"command":"find . -not -path \'*docs/design/screens/*\' -path \'./docs/design/screens/a\'"}',
+        )
+        for call in uses:
+            with self.subTest(use=call):
+                self.assertIsNotNone(rx.search(call))
+        exclusions = (
+            '"name":"Grep","input":{"pattern":"discount","glob":"!docs/design/screens/**","output_mode":"content"}',
+            '"name":"Bash","input":{"command":"rg -n discount --glob \'!docs/design/screens/**\' .","description":"x"}',
+            '"name":"Bash","input":{"command":"git ls-files \'*.html\' \':(exclude)docs/design/screens\'"}',
+            '"name":"Bash","input":{"command":"git ls-files \':!docs/design/screens\'"}',
+            '"name":"Bash","input":{"command":"find . -name \'*.html\' -not -path \'*docs/design/screens/*\'"}',
+            # Other paths and other tools do not count.
+            '"name":"Read","input":{"file_path":"/w/%s"}' % STYLE_GUIDE_PATH,
+            '"name":"Glob","input":{"pattern":"docs/**/*.md"}',
+            '"name":"Agent","input":{"prompt":"Work directory: .loom/tasks\\nExcluded path: docs/design/screens"}',
+        )
+        for call in exclusions:
+            with self.subTest(exclusion=call):
+                self.assertIsNone(rx.search(call))
+        # The agents' canonical forms are the ones the grader accepts.
+        for name in ("codebase-locator", "codebase-analyzer", "codebase-pattern-finder"):
+            text = read(os.path.join(ROOT, "agents", name + ".md"))
+            with self.subTest(agent=name):
+                self.assertIn('`glob: "!<path>/**"`', text)
+        locator = read(os.path.join(ROOT, "agents", "codebase-locator.md"))
+        self.assertIn("`':(exclude)<path>'`", locator)
+        self.assertIn("`-not -path '*<path>/*'`", locator)
+        g = graders(os.path.join(EVALS, "research-full"))["screen-content-absent"]
+        self.assertEqual((g["match"], g["target"]), ("not_contains", "trace"))
+
+    def test_design_reads_and_names_the_screen(self):
+        g = graders(os.path.join(EVALS, "design-full"))
+        read_screen = g["screen-read"]
+        self.assertEqual((read_screen["tool"], read_screen["min"]), ("Read", 1))
+        self.assertNotIn("max", read_screen)
+        rx = js_regex(read_screen["input_match"])
+        self.assertTrue(rx.search('{"file_path":"/w/cwd/%s"}' % SCREEN_PATH))
+        self.assertIsNone(rx.search('{"file_path":"/w/cwd/%s"}' % STYLE_GUIDE_PATH))
+        named = g["screen-path-named"]
+        self.assertEqual(named["target"], {"source": "file", "path": TASK_DIR + "/03-design.md"})
+        self.assertEqual(named.get("match", "contains"), "contains")
+        rx = grader_regex("design-full", "screen-path-named")
+        self.assertIsNotNone(rx.search("## Proposed Architecture\n\n- `%s` maps to `format_receipt`.\n" % SCREEN_PATH))
+        self.assertIsNone(rx.search("## Proposed Architecture\n\n- The order summary screen maps to `format_receipt`.\n"))
 
     def test_plan_ticks(self):
         rx = grader_regex("implement-manual", "plan-ticks-phase-1-only")
@@ -883,6 +948,60 @@ class ScaffoldTest(unittest.TestCase):
                             self.assertNotIn(marker, read(os.path.join(base, f)))
         self.assertNotIn(marker, read(os.path.join(EVALS, "research-full", "case.yaml")))
 
+    def test_design_files_only_in_the_screen_cases(self):
+        """research-full and design-full get a style guide, one HTML screen, and a ticket ## Screens section."""
+        for name in EXPECTED_STATE:
+            with self.subTest(case=name):
+                fx = Scaffolded(self, name)
+                ticket_dir = EXPECTED_STATE[name].get("dir", TASK_DIR)
+                ticket_path = os.path.join(fx.cwd, ticket_dir, "00-ticket.md")
+                ticket = read(ticket_path) if os.path.exists(ticket_path) else ""
+                if name not in SCREEN_CASES:
+                    self.assertNotIn("## Screens", ticket)
+                    self.assertFalse(os.path.exists(os.path.join(fx.cwd, "docs", "design")))
+                    continue
+                self.assertTrue(ticket.endswith("\n## Screens\n\n- `%s`\n" % SCREEN_PATH))
+                self.assertEqual(fx.git("ls-files", "docs"), "%s\n%s" % (STYLE_GUIDE_PATH, SCREEN_PATH))
+                guide = fx.read(STYLE_GUIDE_PATH)
+                headings = re.findall(r"(?m)^## (.+)$", guide)
+                self.assertEqual(headings, ["Direction", "Colors", "Typography", "Spacing and shape", "States", "Rules"])
+                screen = fx.read(SCREEN_PATH)
+                self.assertTrue(screen.startswith("<!doctype html>"))
+                self.assertIn("<style>", screen)
+                state = fx.state()
+                self.assertEqual(state["docs"]["style"], STYLE_GUIDE_PATH)
+                self.assertEqual(state["docs"]["screens"], os.path.dirname(SCREEN_PATH))
+                self.assertEqual(state["design"], {"canvas": None, "style": True, "screens": [SCREEN_PATH]})
+
+    def test_screen_marker_is_unique_to_the_screen(self):
+        """The screen-content-absent grader only works if its marker occurs nowhere but the screen file."""
+        marker = graders(os.path.join(EVALS, "research-full"))["screen-content-absent"]["pattern"]
+        ticket_marker = graders(os.path.join(EVALS, "research-full"))["ticket-content-absent"]["pattern"]
+        for name in SCREEN_CASES:
+            with self.subTest(case=name):
+                fx = Scaffolded(self, name)
+                found = []
+                for base, dirs, files in os.walk(fx.cwd):
+                    dirs[:] = [d for d in dirs if d != ".git"]
+                    for f in files:
+                        if marker in read(os.path.join(base, f)):
+                            found.append(os.path.relpath(os.path.join(base, f), fx.cwd))
+                self.assertEqual(found, [SCREEN_PATH])
+                # A content search for the feature reaches the marker: it is on the line of the bulk discount.
+                hits = [l for l in fx.read(SCREEN_PATH).splitlines() if re.search(r"(?i)bulk|discount", l)]
+                self.assertEqual(len(hits), 1)
+                self.assertIn(marker, hits[0])
+                self.assertNotIn(ticket_marker, fx.read(SCREEN_PATH))
+                self.assertNotIn(marker, json.dumps(fx.state()))
+        for d in ("skills", "agents", "scripts", "bin"):
+            for base, _, files in os.walk(os.path.join(ROOT, d)):
+                for f in files:
+                    if not f.endswith(".pyc"):
+                        with self.subTest(file=os.path.join(base, f)):
+                            self.assertNotIn(marker, read(os.path.join(base, f)))
+        for name in SCREEN_CASES:
+            self.assertNotIn(marker, read(os.path.join(EVALS, name, "case.yaml")))
+
     def test_design_fixture_research_references_are_real(self):
         fx = Scaffolded(self, "design-full")
         research = fx.read(TASK_DIR + "/02-research.md")
@@ -992,7 +1111,7 @@ class ScaffoldTest(unittest.TestCase):
                          [r for r in template["permissions"]["allow"] if r != "Bash(make *)"])
         self.assertEqual(settings["permissions"]["ask"], template["permissions"]["ask"])
         # The research cites these lines: the marketplace and the plugin at 3-13, the permissions from 14.
-        # An absence holds over the whole file, so the research cites all of it (1-56) for "no make rule".
+        # An absence holds over the whole file, so the research cites all of it (1-57) for "no make rule".
         settings_lines = fx.read(".claude/settings.json").splitlines()
         self.assertIn('"extraKnownMarketplaces"', settings_lines[2])
         self.assertIn('"loom@loom": true', settings_lines[11])

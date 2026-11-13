@@ -2,7 +2,7 @@
 
 > A Claude Code plugin for structured, agent-driven development: **Research → Plan → Implement**, with GitHub Issues as the backlog, artifacts as the hand-off between phases, and a full git flow from issue to squash merge.
 
-Status: **Draft, revision 2** · Last updated: 2026-11-12 · Describes plugin release **1.1.0**, the unreleased milestone M9a, and the unreleased hardening after M9a (`CHANGELOG.md`)
+Status: **Draft, revision 2** · Last updated: 2026-11-12 · Describes plugin release **1.1.0**, the unreleased milestones M9a and M10a, and the unreleased hardening after M9a (`CHANGELOG.md`)
 
 Changes in revision 2: fixes from the spec review (finish-task commands, agent `tools`, namespacing, versioning, config use, hook exit codes, oneshot conditions), decisions on the post-PR flow, setup bootstrap, approval gates, mode changes and resume, and new features: `loom-state`, `/loom:next`, enforced checks, harness evals, shared snippets, writing style.
 
@@ -97,10 +97,15 @@ Prompts and artifacts use these terms with exactly one meaning each (see §14).
 | **approve** | Set an artifact's status to `approved` |
 | **gate** | A phase that cannot start until a previous artifact is `approved` |
 | **checks** | The commands in `loom.json` → `checks` |
-| **docs role** | One kind of durable document that loom reads or writes: `vision`, `overview`, `decisions`, `conventions`, `tasks` (§15) |
+| **docs role** | One kind of durable document that loom reads or writes: `vision`, `overview`, `decisions`, `conventions`, `tasks`, and the optional `style` and `screens` (§15) |
 | **docs map** | `loom.json` → `docs`: the path of each docs role (§19.1) |
 | **setup task** | The task of the issue "Set up loom", on the branch `chore/<n>-loom-setup` (§9.13.1) |
 | **onboarding task** | A setup task in `full` mode: the setup of a repository with code (§9.13) |
+| **style guide** | The document of the docs role `style`: the visual direction, the tokens, and the UI rules (§9.14.2) |
+| **screen** | One mockup file in the directory of the docs role `screens`; one screen in one state (§9.14.3) |
+| **screen ID** | The file name of a screen without its extension, e.g. `sign-in` or `reading-list--empty` |
+
+The word "design" alone keeps one meaning: the design phase and its artifact `03-design.md`.
 
 ---
 
@@ -384,13 +389,16 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
   "workDir": ".loom/tasks",
   "docs": { "dir": "docs", "vision": "docs/product/vision.md", "overview": "docs/architecture/overview.md",
             "decisions": { "dir": "docs/architecture/decisions", "pattern": "<NNNN>-<slug>.md" },
-            "conventions": "docs/conventions.md", "tasks": "docs/tasks" },
+            "conventions": "docs/conventions.md", "tasks": "docs/tasks",
+            "style": "docs/design/DESIGN.md", "screens": "docs/design/screens" },
   "checks": { "lint": "make lint", "typecheck": "make typecheck", "test": "make test", "check": "make check" },
   "ci": { "requiredCheck": "check" },
   "pullRequest": { "requiredSections": [] },
   "rounds": { "cap": { "S": 2, "M": 3, "L": 5 } },
   "implement": { "maxFixAttempts": 2, "autoAdvance": true },
   "hooks": { "stopLint": false, "maxCheckAttempts": 3 },
+  "design": { "canvas": null, "style": true,
+              "screens": ["docs/design/screens/reading-list.dc.html", "docs/design/screens/sign-in.dc.html"] },
   "task": { "number": 42, "slug": "auth-flow", "dir": ".loom/tasks/42-auth-flow", "mode": "full",
             "size": "L", "archived": false, "url": "https://github.com/o/r/issues/42", "pr": null,
             "metrics": null },
@@ -414,7 +422,8 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 - `checks`: the resolved check commands `lint`, `typecheck`, `test`, and `check` (§19.1). A `null` check does not exist in the project. Skills take the check commands from here, and pass them to the implementer (§9.9).
 - `ci` and `pullRequest`: the resolved values of these `loom.json` keys (§19.1). Skills read them from here, not from `loom.json`. `pullRequest` (configuration) is not `pr` (the PR state of `--pr`).
 - `workDir`, `rounds`, `implement`, and `hooks`: the resolved values of these `loom.json` keys (§19.1). `workDir` is normalized (`./work/tasks/` → `work/tasks`); every `rounds`, `implement`, and `hooks` field is present, with its default when missing or invalid. Skills read them from here, not from `loom.json`. The hooks use the same validated values.
-- `workDir`, `docs`, `checks`, `ci`, `pullRequest`, `rounds`, `implement`, `hooks`, and `rebaseInProgress` are in every non-empty output, also without a task (`backlog` reads `docs` on the main branch, `finish-task` reads `ci` after the merge).
+- `design`: the style guide and the screens (§9.14.1). `canvas` is the resolved `design.canvas` of `loom.json` (§19.1). `style` is `true` when a file exists at `docs.style`. `screens` lists the screens in `docs.screens` (§8.3, §9.14.3) as paths from the git top level, sorted; a missing directory gives `[]`. Skills take the paths, `design.style`, and the list from here; no skill builds a path or lists the directory itself.
+- `workDir`, `docs`, `checks`, `ci`, `pullRequest`, `rounds`, `implement`, `hooks`, `design`, and `rebaseInProgress` are in every non-empty output, also without a task (`backlog` reads `docs` and `design` on the main branch, `finish-task` reads `ci` after the merge).
 - `rebaseInProgress` is `true` while a `git rebase` is stopped (HEAD is detached, and `rebase-merge/head-name` or `rebase-apply/head-name` in the worktree's git directory names a branch). `branch` is then the branch being rebased, the task lookup uses it, a warning is added, and `next` is `/loom:iterate rebase`. A detached HEAD without a rebase gives `branch: null` and `rebaseInProgress: false`.
 - `today` is the local date (`YYYY-MM-DD`). Skills use it for `updated` instead of injecting a `date` command (§9.0).
 - `task` is `null` when the branch matches no task directory. `task.mode` is `oneshot`, `quick`, or `full`, read ignoring case and surrounding whitespace (`Quick` → `quick`); another value is reported as written, with a warning. `task.pr` is the ticket's `pr` (`57` or `#57`); another value, also `0` or a negative number, adds a warning and gives `null`. `artifacts` lists only existing files of 01–04 (the ticket is reported through `task`; `*.superseded.md` files are ignored). An artifact's `phase` is its file name's phase; a different frontmatter `phase` adds a warning. `status` is `draft`, `in-review`, `approved`, or `null` (missing), read ignoring case and surrounding whitespace; any other value adds a warning and is reported and routed as `in-review`, so no route reruns the phase over the artifact.
@@ -434,7 +443,7 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
   - `subagentSeconds` sums, over all segments, the `duration_s` of the segment's last `stop` line. Parallel runs add up, and idle time between segments does not count; it is not wall-clock time.
   - `line` is the text for the task summary (§13.4). Parts with a count of 0 are left out (review rounds, changes-needed, checks retries, unfinished). The time is in rounded seconds below 60 seconds, else in rounded minutes.
   - Malformed lines are skipped. The `--line` output does not change.
-- `warnings` collects problems that did not stop the computation: unreadable `loom.json`; an unknown top-level key; invalid `mainBranch`, `workDir`, `docsDir`, `docs`, `checks`, `ci`, `pullRequest`, `rounds`, `implement`, or `hooks` values (§19.1); overlapping docs map roles and docs paths at or below `workDir`; a `checks.*` command that pipes into an output filter; missing or unknown status; a frontmatter `phase` that differs from the file name; invalid mode, size, or `pr`; unclosed code fence; failed stale check; failed `git status`; a stopped rebase; uncommitted changes or a phase in progress before the plan gate holds (§9.12 row 5); `gh` errors; failing PR checks besides `ci.requiredCheck`.
+- `warnings` collects problems that did not stop the computation: unreadable `loom.json`; an unknown top-level key; invalid `mainBranch`, `workDir`, `docsDir`, `docs`, `checks`, `ci`, `pullRequest`, `rounds`, `implement`, `hooks`, or `design` values (§19.1); overlapping docs map roles, a `docs.style` that shares its file with another role, and docs paths at or below `workDir`; two screen files with one screen ID (§8.3); a `checks.*` command that pipes into an output filter; missing or unknown status; a frontmatter `phase` that differs from the file name; invalid mode, size, or `pr`; unclosed code fence; failed stale check; failed `git status`; a stopped rebase; uncommitted changes or a phase in progress before the plan gate holds (§9.12 row 5); `gh` errors; failing PR checks besides `ci.requiredCheck`.
 - `--line`: one line for the statusline, e.g. `#42 · full · design:in-review · 3 open Q`, `#42 · full · impl 1/3`, or `#42 · archived`. Empty output when there is no task. Before implementation starts it shows the latest artifact of the mode's phases (after a change from full to quick, a leftover `03-design.md` does not show). It skips the stale research check and the docs-only `git status`, which the line does not use. The output is UTF-8 under any locale.
 - `--pr`: adds PR state from `gh pr view --json number,state,reviewDecision,statusCheckRollup,mergeStateStatus,body` as `{ number, state, reviewDecision, checks: passing|failing|pending|none, requiredCheck: passing|failing|pending|missing, mergeStateStatus, behindMain, bodyInSync }`; `behindMain` is computed with git after `git fetch origin <mainBranch>`. `requiredCheck` is the state of the `statusCheckRollup` entry named `ci.requiredCheck` (the `name` of a check run, the `context` of a status). For a repeated name, the latest `startedAt` wins, then the later entry. `missing` means no entry has that name. `bodyInSync` is `true` when the PR body on GitHub equals `<task dir>/pr-body.md`, `false` when they differ, and `null` without that file; the comparison ignores the line ending style and the whitespace at the start and the end. The body itself is not part of the output. This calls `gh` and the network, so it is not used by the `SessionStart` hook. If `gh` is missing or unauthenticated, the branch has no PR, or `gh` returns no JSON object, `pr` is `null` and a warning is added. One case adds no warning: `gh` reports `no pull requests found` and the ticket has no valid `pr:` (`task.pr` is `null`). That is the normal state before `describe-pr`, for example at the end of `implement`.
 - `--docs`: reserved for the docs freshness check (§23.1, planned for v1.2). Until then it prints "not implemented yet (planned for v1.2)" to stderr and exits 2.
@@ -462,6 +471,7 @@ The script is a silent no-op (exit 0, no output) outside a git repository and in
 - **Code fences:** lines inside fenced code blocks are ignored. Fences follow CommonMark (3+ backticks or tildes; closed only by the same character, at least as long, with nothing after it), except that any indentation is accepted. An unclosed fence adds a warning.
 - **Implementation progress:** read from plan Phase Overview checkboxes and `log.md` headings (§13.2); a `log.md` entry wins over the checkbox of the same phase. oneshot has one implicit phase, tracked only through `log.md`.
 - **Working tree:** `clean`, `dirty`, or `null` when `git status` fails or times out (with a warning); files under `workDir` are ignored. With `null`, `next` is never `/loom:describe-pr` or `/loom:finish-task` (§9.12).
+- **Screens:** a screen is a file directly in `docs.screens` whose name is a screen ID plus one extension of §9.14.3; `.dc.html` is tried before `.html`. Names and extensions are case-sensitive: `Sign-in.html` and `sign-in.PNG` are not screens. A subdirectory and the files in it are not screens. The directory is read from the file system, so an untracked screen counts. Two files with one screen ID add a warning; the first path in sorted order is the screen.
 - **Stale research:** `true` when files referenced in `02-research.md` (as `path:line` or `path`) changed on `main` between the research `git_commit` and `merge-base(HEAD, origin/main)`. The task's own commits do not count. Without `origin/<mainBranch>` the local main branch is used. If the check cannot run, `stale` is `false` and a warning is added.
 - **Next step:** computed by the decision table in §9.12.
 
@@ -548,6 +558,7 @@ Other untracked files of the empty repository (e.g. the files of `uv init`) go i
 - **Create issues** in the format of `references/issue-format.md`: title, context, acceptance criteria, labels. Shows the list and waits for confirmation before `gh issue create`.
 - **Prioritize:** answers "what next?" from issue dependencies and what is done.
 - Helps fill the vision when it is still a skeleton. The main branch takes no commits, so with an active task and a clean working tree it commits the vision on the task branch (`docs(#<n>): update product vision`); otherwise it offers a `type:docs` oneshot issue that carries the agreed text.
+- **Screens** (§9.14.4): when `design.style` is `true`, it reads the style guide with the other context. An issue for work that a screen shows gets a `## Screens` section with paths from `design.screens`. When `design.style` is `true` or `design.screens` is not empty, a screen that the work needs and `design.screens` lacks lands first, through its own task, and `backlog` says so. A project without design files hears nothing about screens. When `design.screens` is not empty, every activity starts with the attach step: it proposes an issue for each screen that no issue names, and edits the confirmed issues with `gh issue edit`.
 - Issue bodies are written to `<workDir>/_drafts/` (ignored by git), never elsewhere in the repository tree.
 - Without `.claude/loom.json` it points to `/loom:setup`. With an active task it says so; new issues do not change the task.
 
@@ -563,7 +574,7 @@ Other untracked files of the empty repository (e.g. the files of `uv init`) go i
 5. Builds the slug with `loom-state --slug '<title>'` (§8.2): issue title → lowercase ASCII, non-alphanumerics → `-`, at most 5 words / 40 characters (words are dropped from the end until it fits; a longer single word is cut; an empty result is `task`).
 6. Refuses if the working tree is dirty (offers stash). Then `git switch <mainBranch> && git pull --ff-only` (a main branch that cannot fast-forward stops it), then `git switch -c <type>/<n>-<slug>`.
 7. Creates `.loom/tasks/<n>-<slug>/00-ticket.md` from `references/ticket-template.md`: the §13.1 ticket frontmatter and a verbatim copy of the issue (title as the `# ` heading, labels, URL, body).
-8. Ends with a `Next:` line from `next.command` (§7.4). For a new task it is `/clear, then` the first phase of the mode: `/loom:research-questions` (full), `/loom:research` (quick), or `/loom:implement` (oneshot). A restored task, or an existing branch, has its own state, so the command can be any other.
+8. Ends with a `Next:` line from `next.command` (§7.4). For a new task it is `/clear, then` the first phase of the mode: `/loom:research-questions` (full), `/loom:research` (quick), or `/loom:implement` (oneshot). A restored task, or an existing branch, has its own state, so the command can be any other. When the issue has a `## Screens` section, each path that is not in `design.screens` of its final `loom-state --json` gets a `Warning:` line (§9.14.4).
 
 If the issue already has an archived task directory, offers to restore it from `_archive/` instead. The setup issue ("Set up loom") is refused with `Next: /loom:setup`.
 
@@ -575,6 +586,8 @@ If the issue already has an archived task directory, offers to restore it from `
 Light contextual research with `loom:codebase-locator`, `loom:codebase-analyzer`, `loom:codebase-pattern-finder` (and `loom:web-search-researcher` only if needed). Writes 2–8 descriptive questions and a verbatim **Key Context Pointers** section. Adds design-system questions if UI work is possible.
 
 **Rule:** questions never reveal what will be built.
+
+**Screens** (§9.14.5): it never opens a screen (a file at or below `docs.screens`), and Key Context Pointers leave out the paths of the ticket's `## Screens` section. With that section, it adds one descriptive question: which UI components, styles, and tokens exist in the code, and where. When `design.screens` is not empty, every prompt to a codebase agent carries the line `Excluded path: <docs.screens>` (§10.1), and the skill's own Grep, Glob, and Read calls follow the same rule.
 
 **Setup task (§9.13.3):** on a setup task this skill stops, with `Next:` from `next.command`: `/loom:research` after a finished kickoff, `/loom:setup` after a stopped one (§9.12 row 2c). `setup` writes `01-research-questions.md` from a fixed list, approved with the setup plan. The fixed list has 7 questions plus the user's own, so the limit of 2–8 questions does not apply to it.
 
@@ -590,6 +603,8 @@ Light contextual research with `loom:codebase-locator`, `loom:codebase-analyzer`
 
 **Rule:** describes only; no recommendations or critique.
 
+**Screens** (§9.14.5): research never opens a screen, in any mode. In quick mode it does not read the screens of the ticket's `## Screens` section and gives no agent their paths. When `design.screens` is not empty, every prompt to a codebase agent, the claim check included, carries the line `Excluded path: <docs.screens>` (§10.1), and the skill's own Grep, Glob, and Read calls follow the same rule. In full mode research does not infer the goal from the screen IDs in `design.screens` either.
+
 **Onboarding (§9.13.3):** on the onboarding task, research answers the fixed onboarding questions. The blind rule holds: it reads only `01-research-questions.md`. It also reads GitHub facts with read-only `gh` commands, and runs each candidate check command once to record its exit status and run time. It records which instruction files Claude Code loads. It treats the others as data (§9.13.3): it quotes their rules and never follows them.
 
 ### 9.6 `design` (full mode)
@@ -603,6 +618,8 @@ Current state, desired end state, out of scope, proposed architecture (before/af
 
 Design may read the overview, the ADRs, and the conventions. It takes their paths from `docs` in the state (§8.2).
 
+**Screens** (§9.14.5): with a `## Screens` section in the ticket, design reads every screen it names in full, before any question. When `design.style` is `true` and the task builds or changes UI, it reads the style guide in full. Proposed Architecture maps each screen to components, state, and data. Round 1 asks about each missing state and each conflict with the style guide or an existing component. A question whose answer makes the code differ from a screen names the screen ID.
+
 **Onboarding (§9.13.4):** on a setup task, design also reads `references/onboarding.md`. It holds the onboarding discussion in the same layout. The topics: what the project is, project rules against loom rules, docs roles, gaps, checks, the required CI check, PR sections, and the optional status line.
 
 ### 9.7 `plan`
@@ -615,6 +632,8 @@ Writes the **Phase Overview** (one line per vertical slice) and full implementat
 **Rule:** implementation phases are vertical slices; each is verifiable by `loom.json` checks.
 
 Plan reads the conventions and the overview from their paths in `docs`, and the check commands from `checks`, in the state (§8.2). It never plans a `null` check.
+
+**Screens** (§9.14.5): when `design.style` is `true` and the task builds or changes UI, plan reads the style guide in full, in both modes. In quick mode it also reads the screens of the ticket's `## Screens` section. With that section, each implementation phase that builds UI names its screens in its Changes and has one `Manual:` line per screen. A question whose answer makes the code differ from a screen names the screen ID.
 
 **Onboarding (§9.13.5):** on a setup task, the plan copies the content of every small loom template it uses into its Changes: the implementer reads only the plan and the project. `plan` writes the larger template `loom-statusline.py` unchanged to `<task dir>/templates/`, and the Changes name that copy. On a setup task whose mode is not `full`, `plan` stops with `Next:` from `next.command`.
 
@@ -640,6 +659,8 @@ The single skill for changing anything that already exists. It detects the targe
 | Mode change, or an invalid mode (`/loom:iterate mode <oneshot\|quick\|full>`) | §5.3 rules; an invalid mode is repaired at any time, with the mode the user names |
 | An unknown working tree (`workingTree: null`), with any argument (this row comes before every row that reads or changes the working tree or commits) | Stops: `git status failed`, `Next: fix the git error, then /loom:next`. Answers, approval, a mode change, and feedback on an artifact before implementation started still run: they change only the task directory |
 
+**Screens** (§9.14.5): `iterate` passes `docs.style` (when `design.style` is `true`) and `docs.screens` (when `design.screens` is not empty) to the implementer and the reviewer, as `implement` does; every fix-loop prompt names these lines. Its prompts to the codebase agents carry `Excluded path: <docs.screens>` under the condition of `research`, and an edit of `01-research-questions.md` or `02-research.md` never opens a screen. When the ticket has a `## Screens` section, a later round of `03-design.md` or `04-plan.md`, an edit on feedback, and a plan change keep the screen rules of `design` and `plan`. A question about a difference from a screen names the screen ID.
+
 **Onboarding (§9.13.4, §9.13.5):** on the onboarding task, `iterate` reads `design/references/onboarding.md` when it writes `03-design.md` (answers to a round, feedback on the design), and `plan/references/onboarding.md` when it writes or changes `04-plan.md`.
 
 ### 9.9 `implement`
@@ -653,9 +674,9 @@ The single skill for changing anything that already exists. It detects the targe
 
 **Per implementation phase:**
 1. Writes `in-progress` for the phase in `log.md`.
-2. Launches `loom:implementer` with a short prompt: plan path + phase number (oneshot: ticket path), plus the resolved `checks` and `docs.conventions` from the state (`_shared/implementation-loop.md`). The implementer never reads `.claude/loom.json`, skips a `null` check, and never commits.
+2. Launches `loom:implementer` with a short prompt: plan path + phase number (oneshot: ticket path), plus the resolved `checks` and `docs.conventions` from the state, `docs.style` when `design.style` is `true`, and `docs.screens` when `design.screens` is not empty (the `Style guide:` and `Screens:` lines after the `Conventions:` line, `_shared/implementation-loop.md`). The implementer never reads `.claude/loom.json`, skips a `null` check, and never commits.
 3. Checks are enforced by the `SubagentStop` hook (§11.4): the implementer cannot finish while `checks.check` fails. The hook lets the implementer stop after `hooks.maxCheckAttempts` failures, so `implement` runs `checks.check` once more itself. Failing checks there mean the phase is `blocked`; `implement` never commits on failing checks.
-4. Launches `loom:implementation-reviewer` with `docs.conventions` and `mainBranch` in its prompt (oneshot: compares the diff with the ticket). The verdict has the categories of §10.2. Only `blocking` items go back to the implementer. At most `implement.maxFixAttempts` fix attempts (from the state, default 2); then `blocked: <reason>` in `log.md` and stop.
+4. Launches `loom:implementation-reviewer` with `docs.conventions`, `docs.style` when `design.style` is `true`, `docs.screens` when `design.screens` is not empty, and `mainBranch` in its prompt (oneshot: compares the diff with the ticket). The verdict has the categories of §10.2. Only `blocking` items go back to the implementer. At most `implement.maxFixAttempts` fix attempts (from the state, default 2); then `blocked: <reason>` in `log.md` and stop.
 5. Commits: `<type>(<scope>): <summary> (#<n>)`, body `Phase N: <name>`; in oneshot mode the body is `Phase 1: oneshot`. `<type>` is the branch type; `<scope>` is the module that holds most of the change (`_shared/git-flow.md`).
 6. Ticks the phase checkboxes in `04-plan.md` (Phase Overview and `Automated:` lines; `Manual:` lines stay for the user) and writes `done` with commit hash, checks result, reviewer verdict, deviations, and additions to `log.md` (`implement/references/log-format.md`).
 7. **Auto-advance** if checks pass, no `blocking` items remain, and the phase lists no manual verification. Otherwise stops with a phase summary and the manual steps.
@@ -687,6 +708,8 @@ Steps 2–4 are `_shared/implementation-loop.md`; `iterate` runs the same loop f
 9. Proposes follow-ups from the summary as new issues, in the format of `${CLAUDE_PLUGIN_ROOT}/skills/backlog/references/issue-format.md` (confirmation required).
 
 describe-pr takes every doc path from `docs` in the state (§8.2, §15) and `pullRequest.requiredSections` from the state, never from `loom.json`.
+
+**Screens** (§9.14.5): when the ticket has a `## Screens` section, the Verification of the task summary and of the PR body lists each screen path with the result of its `Manual:` comparison. A oneshot PR body lists only the paths: a oneshot task has no plan and no `Manual:` line. Step 9 adds one follow-up `Design screens: update <screen ID>` for each of these screens that a Resolved Decision (`03-design.md`, `04-plan.md`) or a deviation in `log.md` names. It is labeled `type:docs` and has no `## Screens` section.
 
 **Onboarding (§9.13.5):** on the onboarding task, the follow-ups include every `Follow-up:` line of the design's Out of Scope.
 
@@ -1012,9 +1035,9 @@ Each milestone removed its **Planned** markers from this spec and added its `CHA
 
 ### 9.14 UI design: style guide and screens (planned, M10)
 
-**Status:** planned, milestone M10, in two milestones (§9.14.9). M10b builds on M9b: `task.setup`, the reserved slug, and row 2c of §9.12. No other section carries an M10 marker yet. §9.14.8 lists the sections that change; each milestone moves its text there when it ships.
+**Status:** milestone M10, in two milestones (§9.14.9). Milestone M10a (the style guide and the screens in the existing skills) is implemented and not released yet (`CHANGELOG.md`, `[Unreleased]`); the sections that §9.14.8 names for M10a carry its text. Milestone M10b (the `screens` skill) is planned. M10b builds on M9b: `task.setup`, the reserved slug, and row 2c of §9.12. No other section carries M10b text yet: its changes are listed only in §9.14.8, and M10b moves its text there when it ships. In this section, the `screens` skill, the screens task, the canvas, and local mode are M10b.
 
-Today loom has no place for UI design. A task that builds a screen gets its look from the ticket text and from the model. M10 adds design as optional work at the product level. The result is files in the repository: one style guide and one mockup file per screen. Issues name the screens they implement, and the phases read those files. A new skill, `screens`, produces the files with Claude Design (§9.14.7). A project can also add them by hand or from another tool.
+Before M10, loom had no place for UI design. A task that built a screen got its look from the ticket text and from the model. M10 adds design as optional work at the product level. The result is files in the repository: one style guide and one mockup file per screen. Issues name the screens they implement, and the phases read those files. A new skill, `screens`, produces the files with Claude Design (§9.14.7). A project can also add them by hand or from another tool.
 
 Principles:
 
@@ -1025,7 +1048,7 @@ Principles:
 5. **The style guide wins.** When a screen and the style guide disagree, the style guide controls.
 6. **No orphan screens.** `screens` draws a screen only for a feature that the vision or an issue names. `backlog` reports every screen that no issue names.
 
-Terms (M10a adds the first three to §3 and to the glossary of `_shared/writing-style.md`; M10b adds the others):
+Terms (M10a added the first three to §3 and to the glossary of `_shared/writing-style.md`; M10b adds the others):
 
 | Term | Meaning |
 |---|---|
@@ -1057,6 +1080,8 @@ Two optional docs roles join the docs map (§15):
 | `style` | `<docsDir>/design/DESIGN.md` | backlog, design, plan, implementer, implementation-reviewer, screens | screens, or a task whose ticket or plan names the change (§9.14.5) |
 | `screens` | directory `<docsDir>/design/screens` | backlog, design, plan, implementer, screens | the same |
 
+The `screens` skill in these columns is M10b. Until then §15 lists the roles without it.
+
 - Both roles are optional: `setup` writes no skeleton for them. A missing file or an empty directory means the project has no design of that kind.
 - `docs.style` follows the rules of `docs.vision` (§19.1), with one more: it shares its file with no other role. `screens` rewrites the file, so it cannot also be the vision or the conventions.
 - `docs.screens` follows the rules of `docs.tasks`. In the checks of the whole docs map, it is a directory like `docs.tasks` and `docs.decisions.dir`: none of the three may be at or below another, and no role file may lie at or below it.
@@ -1066,8 +1091,8 @@ New `loom.json` key (§19.1):
 
 | Key | Default | Rule | Invalid value |
 |---|---|---|---|
-| `design` | `{ "canvas": null }` | An object. An unknown key gets a warning and is ignored. | Not an object: warning, the default |
-| `design.canvas` | `null` | `null`, or the URL of the canvas: a string that starts with `https://claude.ai/`, without whitespace or control characters | Warning, `null` |
+| `design` | `{ "canvas": null }` | An object. An unknown key gets a warning and is ignored. | Not an object (also `null`): warning, the default |
+| `design.canvas` | `null` | `null`, or the URL of the canvas: a string that starts with `https://claude.ai/` and has more after it, without whitespace (Unicode included) or control characters. The prefix is case-sensitive. Surrounding whitespace is not stripped: it makes the URL invalid | Warning, `null` |
 
 `loom-state --json` (§8.2) adds the resolved paths to `docs` and one object:
 
@@ -1079,8 +1104,8 @@ New `loom.json` key (§19.1):
 }
 ```
 
-- `design.style` is `true` when the file at `docs.style` exists.
-- `design.screens` lists the screens (§9.14.3) as paths from the git top level, sorted. Two files with one screen ID add a warning; the first path in sorted order is the screen.
+- `design.style` is `true` when a file exists at `docs.style`.
+- `design.screens` lists the screens (§9.14.3) as paths from the git top level, sorted. A missing directory gives `[]`. `loom-state` reads the directory from the file system, so an untracked screen counts. Two files with one screen ID add a warning; the first path in sorted order is the screen.
 - Skills take the paths, `design.style`, and the list from the state. No skill builds a path or lists the directory itself.
 
 #### 9.14.2 The style guide
@@ -1102,8 +1127,9 @@ One Markdown file. It starts simple; a structured token format (Google's `DESIGN
 
 #### 9.14.3 Screens
 
-- A screen is one file directly in `docs.screens` whose name is a screen ID plus one extension of the table below. Other files there, and files in subdirectories, are not screens (assets can live in a subdirectory).
-- The screen ID is the file name without that extension: `sign-in.dc.html` → `sign-in`. It has lowercase letters, digits, and single hyphens. A state of a screen adds `--<state>`: `reading-list--empty`, `sign-in--error`. The ID without a state is the default state.
+- A screen is one file directly in `docs.screens` whose name is a screen ID plus one extension of the table below. Other files there, subdirectories, and files in subdirectories are not screens (assets can live in a subdirectory).
+- The screen ID is the file name without that extension: `sign-in.dc.html` → `sign-in` (`.dc.html` is tried before `.html`). It has lowercase letters, digits, and single hyphens. A state of a screen adds `--<state>`, with the same characters: `reading-list--empty`, `sign-in--error-2`. A name has at most one `--` (`a--b--c` is not a screen). The ID without a state is the default state.
+- Names and extensions are case-sensitive: `Sign-in.html` and `sign-in.PNG` are not screens.
 - One file per screen ID. Formats:
 
 | Extension | Source |
@@ -1128,9 +1154,9 @@ The issue format (`backlog/references/issue-format.md`) gets one optional sectio
 
 - One line per screen that the issue implements, as the path from the git top level. The section is left out when the issue has no screen.
 - The issue of a screens task (title `Design screens: …`, §9.14.6) has no `## Screens` section. It draws screens; it does not implement them.
-- `start-task` copies the issue into the ticket verbatim, so every phase that reads the ticket sees the paths. After the switch to the updated main branch, `start-task` runs `loom-state --json` again. A path that is not in that `design.screens` gets a `Warning:` line in its final message.
+- `start-task` copies the issue into the ticket verbatim, so every phase that reads the ticket sees the paths. Its final `loom-state --json` runs on the task branch, cut from the updated main branch. A path that is not in that `design.screens` gets the line `Warning: screen <path> is not in design.screens; add the screen file first, or fix the issue` in its final message.
 - `backlog` writes the section when it drafts an issue for work that a screen shows.
-- **Attach.** When `design.screens` is not empty, `backlog` reads the `## Screens` sections of all issues, open and closed. It lists every screen that no issue names. For each one it proposes: add it to an open issue (`gh issue edit`, confirmation), or draft a new issue.
+- **Attach.** When `design.screens` is not empty, `backlog` runs this step first, with every activity. It reads the `## Screens` sections of all issues, open and closed (`gh issue list --state all --limit 1000`; a repository with more issues is not covered). It lists every screen that no issue names. For each one it proposes: add it to an open issue, or draft a new issue. After one confirmation it writes each new body to `<workDir>/_drafts/issue-<k>-screens.md` and runs `gh issue edit <k> --body-file <file>` (§16.4). It changes nothing else in the body.
 - An issue that needs a new screen and has none: `backlog` says so. From M10b on it names `/loom:screens`.
 
 #### 9.14.5 Screens in the phases
@@ -1141,16 +1167,16 @@ A rule about screens applies only when the ticket has a `## Screens` section. A 
 |---|---|
 | `research-questions` | Never opens a screen. It leaves the `## Screens` paths out of Key Context Pointers: a screen shows what will be built (§2, principle 2). It adds one descriptive question: which UI components, styles, and tokens exist in the code, and where. |
 | `research` | Never opens a screen, in any mode. |
-| `research-questions`, `research`, and the agents `codebase-locator`, `codebase-analyzer`, `codebase-pattern-finder` | When `design.screens` is not empty, both skills name `docs.screens` in every agent prompt as an excluded path. An agent never reads, searches, or lists a file at or below an excluded path. Without this rule, a search for colors would find the inline styles of a screen. |
-| `design` | Reads the style guide and every screen of the ticket in full, before any question. Proposed Architecture maps each screen to components (reused or new), state, and data. An open question for each state or behavior that the task needs and no screen shows: empty, loading, error, long content, narrow width. An open question for each conflict between a screen and the style guide, or between a screen and an existing component. |
-| `plan` | Quick mode: reads the style guide and the screens as `design` does. Each implementation phase that builds UI names its screens in Changes, as paths. When the code has no tokens yet, the first such phase defines them, under the names of the style guide. Verification gets one `Manual:` line per screen: compare the running screen with the screen. The line names the file and, for a `.dc.html` screen, the artboard of that screen ID on the canvas (`design.canvas`), where it renders. |
-| `implement`, `iterate` | Pass `docs.style` to the implementer and the reviewer when `design.style` is `true`, like `docs.conventions` (§9.9). |
+| `research-questions`, `research`, and the agents `codebase-locator`, `codebase-analyzer`, `codebase-pattern-finder` | When `design.screens` is not empty, both skills name `docs.screens` in every agent prompt as an excluded path (`Excluded path: <docs.screens>`), and their own Grep, Glob, and Read calls follow the agents' rule. An agent never reads a file at or below that path. Every search or listing that starts at its parent or higher excludes the path in the call itself: Grep with `glob: "!<path>/**"`, `git ls-files` with the pathspec `':(exclude)<path>'`, `find` with `-not -path '*<path>/*'`. Glob has no exclusion, so it gets a `path` or a pattern that does not reach the path; `ls` never runs on the path or below it. The path appears in a tool input only inside such an exclusion. A match below it that still shows up is dropped and never opened. Without the exclusion a search from the git top level reaches the screens: they are tracked files, unlike the ignored `workDir`. Without this rule, a search for colors or for the feature would find the inline styles and the text of a screen. |
+| `design` | Reads every screen of the ticket in full, with the Read tool, before any question. Reads the style guide in full when the task builds or changes UI. Proposed Architecture maps each screen, by its path, to components (reused or new), state, and data. An open question for each state or behavior that the task needs and no screen shows: empty, loading, error, long content, narrow width. An open question for each conflict between a screen and the style guide, or between a screen and an existing component; the recommendation takes the value of the style guide. A question whose answer makes the code differ from a screen names that screen ID, so its Resolved Decision names it too. |
+| `plan` | Reads the style guide in full when the task builds or changes UI, in both modes: the token rule below needs its names. Quick mode: also reads the screens as `design` does. Each implementation phase that builds UI names its screens in Changes, as paths. When the code has no tokens yet, the first such phase defines them, under the names of the style guide. Verification gets one `Manual:` line per screen: compare the running screen with the screen. The line names the file and, for a `.dc.html` screen, the artboard of that screen ID on the canvas (`design.canvas`), where it renders. When `design.canvas` is `null`, the line says `canvas URL not recorded`. A question whose answer makes the code differ from a screen names that screen ID. |
+| `implement`, `iterate` | Pass `docs.style` to the implementer and the reviewer when `design.style` is `true`, as the line `Style guide: <docs.style>`, and `docs.screens` when `design.screens` is not empty, as the line `Screens: <docs.screens>`, both after the `Conventions:` line (§9.9). `iterate` names both lines in every fix-loop prompt. `iterate` keeps the screen rules of `design` and `plan` when it writes a later round of `03-design.md` or `04-plan.md`, edits them on feedback, or changes the plan: a question about a difference from a screen names the screen ID. |
 | `implementer` | Reads the style guide and the screens of its phase before it writes UI code (oneshot: the screens of the ticket). It builds with the project's components and the tokens that the code defines. It never copies the markup or the inline styles of a screen. A value that the style guide and a screen give differently comes from the style guide; the report names the screen and the value under Deviations. |
-| `implementation-reviewer` | A state that the plan names and the diff lacks is `blocking` (planned but missing). A raw color or size where the code has a token for it is a deviation. A change to the style guide or to a screen that the plan (oneshot: the ticket) does not name is `blocking`. The reviewer does not judge the visual match; the `Manual:` check does. |
-| `describe-pr` | The task summary and the PR body list the screens under Verification. It proposes one follow-up issue, `Design screens: update <screen ID>`, for each screen that a Resolved Decision or a `log.md` deviation names. |
+| `implementation-reviewer` | A state that the plan names and the diff lacks is `blocking` (planned but missing). With the `Style guide:` line, a raw color or size where the code has a token for it is a deviation. A change to the file of the `Style guide:` line, or to a screen (a file at or below the directory of the `Screens:` line, also one that the ticket does not list), that the plan (oneshot: the ticket) does not name is `blocking`. The reviewer does not judge the visual match; the `Manual:` check does. |
+| `describe-pr` | The task summary and the PR body list the screens under Verification. It proposes one follow-up issue, `Design screens: update <screen ID>`, for each screen that a Resolved Decision or a `log.md` deviation names. The follow-up is labeled `type:docs` and has no `## Screens` section: it changes a screen, it does not implement one. |
 
 - **Who changes the files.** A task changes the style guide or a screen only when its ticket or its plan names that change. The usual route is a screens task (§9.14.6). A file made by hand or by another tool comes in through an ordinary task, for example a `type:docs` issue "Add the screens of the checkout".
-- **A task that differs from its screen.** A task that implements a screen does not change the screen. A planned difference is a Resolved Decision in `03-design.md` (quick mode: in `04-plan.md`) that names the screen. The follow-up issue brings the screen back in line. Until M10b, that issue is an ordinary task whose ticket names the change; from M10b on, a screens task covers it (§9.14.6).
+- **A task that differs from its screen.** A task that implements a screen does not change the screen. A planned difference is a Resolved Decision in `03-design.md` (quick mode: in `04-plan.md`) that names the screen ID: `design`, `plan`, and `iterate` write the question with it. The follow-up issue brings the screen back in line. Until M10b, that issue is an ordinary task whose ticket names the change; from M10b on, a screens task covers it (§9.14.6).
 - **Visual check.** The comparison is manual in M10. A comparison by a model is not reliable enough to block a phase (§9.14.10).
 
 #### 9.14.6 The `screens` skill
@@ -1270,21 +1296,23 @@ Known limits:
 
 #### 9.14.8 Changes to other sections
 
+M10a is done: its changes are in the sections below (the Milestone column says "M10a, done"). The M10b changes are still planned: no section outside §9.14 carries them yet.
+
 | Section | Change | Milestone |
 |---|---|---|
-| §3, `_shared/writing-style.md` | The terms of this section | M10a, M10b |
+| §3, `_shared/writing-style.md` | The terms of this section | M10a, done (style guide, screen, screen ID); M10b (the others) |
 | §4.1 | `skills/screens/` (SKILL.md, `references/brief-template.md`, `references/style-guide-template.md`) | M10b |
 | §5.3 | No mode change on a screens task | M10b |
 | §6.1 | `/loom:screens` between `backlog` and `start-task`, marked optional | M10b |
-| §8.2, §8.3 | `docs.style`, `docs.screens`, the `design` object; `task.screens`, the reserved slug | M10a; M10b |
+| §8.2, §8.3 | `docs.style`, `docs.screens`, the `design` object; `task.screens`, the reserved slug | M10a, done; M10b |
 | §9.0 | `screens` in the model and effort table: inherit, default | M10b |
-| §9.2, §9.3 | `backlog`: the `## Screens` section and attach; `start-task`: the warning, and the refusal of a screens issue | M10a; M10b |
-| §9.4–§9.10, §10.1 | The rules of §9.14.5, the excluded path of the research agents included | M10a |
+| §9.2, §9.3 | `backlog`: the `## Screens` section and attach; `start-task`: the warning, and the refusal of a screens issue | M10a, done; M10b |
+| §9.4–§9.10, §10.1 | The rules of §9.14.5, the excluded path of the research agents included | M10a, done |
 | §9.8–§9.12 | A screens task in `iterate`, `implement`, `describe-pr`, `finish-task`, and `next`; rows 2, 2b, and 2d | M10b |
-| §13.2 | Key Context Pointers leave out the `## Screens` paths; the brief of a screens task | M10a; M10b |
-| §15, §19.1 | The two docs roles; the `design` key | M10a |
-| §16.2, §16.4, §19.3 | The landing commits; `gh issue edit` asks for confirmation | M10b; M10a |
-| §20.2 | The eval changes of §9.14.9 | M10a, M10b |
+| §13.2 | Key Context Pointers leave out the `## Screens` paths; the brief of a screens task | M10a, done; M10b |
+| §15, §19.1 | The two docs roles; the `design` key | M10a, done (M10b adds the `screens` skill to the roles of §15) |
+| §16.2, §16.4, §19.3 | The landing commits; `gh issue edit` asks for confirmation | M10b; M10a, done |
+| §20.2 | The eval changes of §9.14.9 | M10a, done; M10b |
 
 #### 9.14.9 Implementation milestones
 
@@ -1292,7 +1320,7 @@ M10a makes loom read design files, whatever produced them. M10b adds the produce
 
 | Milestone | Changes | Tests and evals |
 |---|---|---|
-| **M10a** — style guide and screens in the existing skills | `bin/loom-state`: the docs roles `style` and `screens` with their validation, the `design` key, and the `design` object. The issue format and `backlog` (§9.14.4). `start-task`: the warning. The rules of §9.14.5 in `research-questions`, `research`, `design`, `plan`, `implement`, `iterate`, `_shared/implementation-loop.md`, `describe-pr`, and the agents `codebase-locator`, `codebase-analyzer`, `codebase-pattern-finder`, `implementer`, and `implementation-reviewer`. The glossary terms **style guide**, **screen**, and **screen ID**. | Unit tests: defaults, custom and invalid values, the overlap rules, a shared `docs.style` file, `design.style` and `design.screens` on fixture repositories (two files with one screen ID, a file that is not a screen); lints that no skill builds these paths. No new eval case. The fixtures of `research-full` and `design-full` get a style guide, one HTML screen, and a `## Screens` section in the ticket. New graders: in `research-full`, no Read, Grep, Glob, or Bash input names `docs/design/screens`, and the trace never holds a phrase that occurs only in the screen; `design-full` has a Read of the screen and names its path in `03-design.md`. Rerun `research-full`, `design-full`, `implement-manual`, `describe-pr-quick`. |
+| **M10a** (done) — style guide and screens in the existing skills | `bin/loom-state`: the docs roles `style` and `screens` with their validation, the `design` key, and the `design` object. The issue format and `backlog` (§9.14.4). `start-task`: the warning. The rules of §9.14.5 in `research-questions`, `research`, `design`, `plan`, `implement`, `iterate`, `_shared/implementation-loop.md`, `describe-pr`, and the agents `codebase-locator`, `codebase-analyzer`, `codebase-pattern-finder`, `implementer`, and `implementation-reviewer`. The ask rule `Bash(gh issue edit *)` in the `settings.json` template of `setup` (§19.3). The glossary terms **style guide**, **screen**, and **screen ID**. | Unit tests: defaults, custom and invalid values, the overlap rules, a shared `docs.style` file, `design.style` and `design.screens` on fixture repositories (two files with one screen ID, a file that is not a screen); lints that no skill builds these paths. No new eval case. The fixtures of `research-full` and `design-full` get a style guide, one HTML screen, and a `## Screens` section in the ticket. New graders: in `research-full`, no Read, Grep, Glob, or Bash input names `docs/design/screens` except inside an exclusion (Grep `glob: "!<path>/**"`, the pathspecs `':(exclude)<path>'` and `':!<path>'`, `find -not -path '*<path>/*'`), and the trace never holds a phrase that occurs only in the screen, on the line of the feature's text, so a content search that reaches the screen fails; `design-full` has a Read of the screen and names its path in `03-design.md`. Rerun `research-full`, `design-full`, `implement-manual`, `describe-pr-quick`. |
 | **M10b** — the `screens` skill | `skills/screens/` with its templates. `bin/loom-state`: `task.screens`, the reserved slug `loom-screens`, rows 2 and 2b for screens tasks, row 2d. The refusals and stops of §9.14.6 in `start-task`, `iterate`, `implement`, `describe-pr`, and `finish-task`; the `Closes #<k>` lines in `describe-pr` and `_shared/pr-update.md`; `next` names `/loom:screens`; `backlog` names `/loom:screens` for a missing screen. The glossary terms **screens task**, **canvas**, and **local mode**. | Unit tests: `task.screens`, the reserved slug, rows 2, 2b, and 2d (phase 1 pending, a dirty tree after phase 1 is done, phase 1 `in-progress` again after a `done` entry); the skill texts. One new eval case, `screens-local`: a screens task with a brief that has one screen with its states in the Scope, the Audience, References `none`, and a chosen direction; no style guide. So stages 3 and 4 run without a question. Graders: `<task dir>/DESIGN.md` exists with the six headings of §9.14.2; `<task dir>/screens/<screen ID>.html` exists; the brief marks the screen `drafted`; no Bash `git commit`. The kickoff needs `gh`, and the canvas needs the `Artifact` tool; eval runs have neither. So: static tests, plus one live run on a sandbox repository with a canvas, from `/loom:screens` to `/loom:finish-task`. |
 
 #### 9.14.10 Later, and items to verify
@@ -1342,7 +1370,9 @@ Defined as `agents/*.md`, ported from HumanLayer's daemon-registered agents. Plu
 - All research agents carry the "document what exists, never critique" rule.
 - The agents with Bash (`codebase-locator`, `implementer`, `implementation-reviewer`) carry the one-command rule of §9.0 inline.
 - The implementer never edits `.claude/settings.json` or `.claude/settings.local.json`. `implement` applies a settings change of the plan itself, and the reviewer counts it as done when the file holds it. A fix of a settings file never goes to the implementer (§9.13.5).
-- The implementer gets the resolved `checks` and `docs.conventions` in its prompt, and the reviewer gets `docs.conventions` and `mainBranch` (the `Main branch:` line, for the phase commit lookup in fix mode; §9.9). Neither agent reads `.claude/loom.json`. The implementer skips a `null` check and never invents a command for it. Without these prompt lines, both read the values from `loom-state --json`.
+- The implementer gets the resolved `checks` and `docs.conventions` in its prompt, and the reviewer gets `docs.conventions` and `mainBranch` (the `Main branch:` line, for the phase commit lookup in fix mode; §9.9). Both get `docs.style` (the `Style guide:` line) when `design.style` is `true`, and `docs.screens` (the `Screens:` line) when `design.screens` is not empty; the reviewer recognizes a screen by that directory. Neither agent reads `.claude/loom.json`. The implementer skips a `null` check and never invents a command for it. Without the `Checks:`, `Conventions:`, or `Main branch:` line, the agent reads that value from `loom-state --json`. A missing `Style guide:` or `Screens:` line means the project has none, so no agent looks them up.
+- `codebase-locator`, `codebase-analyzer`, and `codebase-pattern-finder` take an optional `Excluded path: <path>` line in their prompt. They never read a file at or below that path. Every search or listing that starts at its parent or higher excludes the path in the call itself: Grep with `glob: "!<path>/**"`, `git ls-files` with the pathspec `':(exclude)<path>'`, `find` with `-not -path '*<path>/*'`. Glob has no exclusion, so it gets a `path` or a pattern that does not reach the path; `ls` never runs on the path or below it. The path appears in a tool input only inside such an exclusion. A match below it that still shows up is dropped and never opened. Without the exclusion a search from the git top level reaches the screens: they are tracked files, unlike the ignored `workDir`. `research-questions` and `research` name `docs.screens` there when `design.screens` is not empty (§9.14.5).
+- The implementer reads the style guide and the screens of its phase before it writes UI code, and builds the UI with the project's components and tokens; the reviewer checks tokens, UI states, and changes to the design files (§9.14.5).
 
 ### 10.2 Reviewer verdict format
 
@@ -1599,11 +1629,11 @@ A skill writes `draft` while it works and `in-review` when it finishes. `iterate
 
 ### 13.2 Working artifacts (`.loom/tasks/<n>-<slug>/`)
 
-**`00-ticket.md`** — copy of the issue: title, body, labels, URL; the `size:*` label is also stored as frontmatter `size`. Not edited by agents except frontmatter (`mode`, `pr`).
+**`00-ticket.md`** — copy of the issue: title, body, labels, URL; the `size:*` label is also stored as frontmatter `size`. Not edited by agents except frontmatter (`mode`, `pr`). An issue with a `## Screens` section (§9.14.4) keeps it in the ticket, verbatim.
 
 **`01-research-questions.md`** (full)
 ```markdown
-## Key Context Pointers      ← links, paths, packages from the ticket, verbatim
+## Key Context Pointers      ← links, paths, packages from the ticket, verbatim; never the paths of its Screens section
 ## Questions                 ← 2–8, descriptive only
 ```
 
@@ -1776,9 +1806,12 @@ docs/
 | `decisions` | directory `<docsDir>/architecture/decisions`, file name pattern `<NNNN>-<slug>.md` | design, describe-pr | setup (skeleton), describe-pr |
 | `conventions` | `<docsDir>/conventions.md` | design, plan, implementer, implementation-reviewer | setup (skeleton) |
 | `tasks` | `<docsDir>/tasks` (files `<n>-<slug>.md`) | backlog, `_shared/pr-update.md` | setup (skeleton), describe-pr, `_shared/pr-update.md` |
+| `style` (optional) | `<docsDir>/design/DESIGN.md` | backlog, design, plan, implementer, implementation-reviewer | a task whose ticket or plan names the change (§9.14.5) |
+| `screens` (optional) | directory `<docsDir>/design/screens` (files `<screen ID><extension>`, §9.14.3) | backlog, design, plan, implementer | a task whose ticket or plan names the change (§9.14.5) |
 
 - `CLAUDE.md` is not a docs role. It stays at the git top level.
-- Every skill that names a doc path takes it from `docs` in the state: `setup` (it writes the skeleton by docs role), `backlog`, `design`, `plan`, `implement` and `iterate` (they pass `docs.conventions` to the implementer and the reviewer), `describe-pr` with its templates, and `_shared/pr-update.md`. No skill builds a role path from `docsDir`, and no skill reads `docs` from `loom.json`; `tests/test_skills.py` checks both. Before `.claude/loom.json` exists, `setup` uses the default paths of its skeleton templates.
+- `style` and `screens` are optional: `setup` writes no skeleton for them, and the tree above leaves them out. A missing file or an empty directory means the project has no design of that kind (§9.14).
+- Every skill that names a doc path takes it from `docs` in the state: `setup` (it writes the skeleton by docs role), `backlog`, `research-questions` and `research` (they name `docs.screens` as an excluded path), `design`, `plan`, `implement` and `iterate` (they pass `docs.conventions`, `docs.style` when `design.style` is `true`, and `docs.screens` when `design.screens` is not empty, to the implementer and the reviewer), `describe-pr` with its templates, and `_shared/pr-update.md`. No skill builds a role path from `docsDir`, and no skill reads `docs` from `loom.json`; `tests/test_skills.py` checks both. Skills take the screens from `design.screens` in the state and never list the screens directory; no skill or agent builds a path below `docs/design` or reads `design` from `loom.json`. Before `.claude/loom.json` exists, `setup` uses the default paths of its skeleton templates.
 - `docsDir` stays for compatibility. It is the root of the default paths, and changes below it still count as docs changes (§8.2). A path in the map may lie outside `docsDir`, e.g. `ARCHITECTURE.md` or `adr/`.
 - loom writes its own ADR layout (§13.5) also in a mapped directory. Only the file name follows the project's pattern. The `NNNN` in the ADR title is the number of the file name, with the digit count of the pattern.
 - The task summary file name stays `<n>-<slug>.md`.
@@ -1815,7 +1848,7 @@ docs/
 | Local commits, rebase, `git branch -D` of a merged task branch | No |
 | `git push` (including `--force-with-lease` on a task branch) | Yes |
 | `gh pr create`, `gh pr edit`, `gh pr merge` | Yes |
-| `gh issue create` | Yes |
+| `gh issue create`, `gh issue edit` | Yes |
 | Repo settings, labels, ruleset (`gh api`, `gh label create`) | Yes |
 | Read-only `gh api` GET (e.g. listing rulesets, reading inline PR review comments) | No question from the skill; the permission system always asks (the `Bash(gh api *)` ask rule of §19.3), also in auto mode, by intent |
 | `git stash`, discarding changes | Yes. A stash runs `git check-ignore -q <task dir>` first: an ignored task directory takes the plain `git stash push --include-untracked` (a pathspec with an ignored path makes `git stash` exit 1 and leave the changes staged); otherwise the `':(exclude)<task dir>'` pathspec. |
@@ -1963,11 +1996,14 @@ Every component takes `mainBranch`, `workDir`, and `docsDir` from this file, dir
     "overview": "ARCHITECTURE.md",
     "decisions": { "dir": "docs/adr", "pattern": "ADR-<NNN>-<slug>.md" },
     "conventions": "CONTRIBUTING.md",
-    "tasks": "docs/loom-tasks"
+    "tasks": "docs/loom-tasks",
+    "style": "ui/STYLE.md",
+    "screens": "ui/screens"
   },
   "ci": { "requiredCheck": "test (3.12)" },
   "pullRequest": { "requiredSections": ["## Test plan"] },
-  "checks": { "lint": "make lint", "typecheck": null, "test": "make test", "check": "make check" }
+  "checks": { "lint": "make lint", "typecheck": null, "test": "make test", "check": "make check" },
+  "design": { "canvas": "https://claude.ai/code/artifact/<id>" }
 }
 ```
 
@@ -1977,8 +2013,8 @@ Every component takes `mainBranch`, `workDir`, and `docsDir` from this file, dir
 | `workDir` | `".loom/tasks"` | A relative directory path: not empty, not absolute, not `.`, no `..` segment, no control characters, not at or below `.git/` or `.claude/` (compared ignoring case); surrounding whitespace is stripped and the path is normalized | Warning, the default |
 | `docsDir` | `"docs"` | A relative directory path by the rules of `docs.tasks` (also not at or below `.loom/` or `workDir`) | Warning, the default |
 | `docs` | every role at its §15 default below `docsDir` | An object. Each key is optional. An unknown key gets a warning and is ignored. | Not an object (also `null`): warning, all defaults |
-| `docs.vision`, `docs.overview`, `docs.conventions` | §15 | A relative path to a `.md` file (`.md` in any case): not empty, not absolute, not `.` or the git top level, no `..` segment, no control characters (newline, tab, NUL, …), not at or below `workDir`, `.git/`, `.claude/`, or `.loom/` (compared ignoring case); surrounding whitespace is stripped | Warning, the default of that role |
-| `docs.tasks` | `<docsDir>/tasks` | A relative directory path, by the same rules | Warning, the default |
+| `docs.vision`, `docs.overview`, `docs.conventions`, `docs.style` | §15 | A relative path to a `.md` file (`.md` in any case): not empty, not absolute, not `.` or the git top level, no `..` segment, no control characters (newline, tab, NUL, …), not at or below `workDir`, `.git/`, `.claude/`, or `.loom/` (compared ignoring case); surrounding whitespace is stripped | Warning, the default of that role |
+| `docs.tasks`, `docs.screens` | `<docsDir>/tasks`, `<docsDir>/design/screens` | A relative directory path, by the same rules | Warning, the default |
 | `docs.decisions` | `{ "dir": "<docsDir>/architecture/decisions", "pattern": "<NNNN>-<slug>.md" }` | An object. `dir`: a relative directory path, by the same rules. `pattern`: a file name (no `/`, no control characters) that ends in `.md` (any case), has `<slug>` once, and has one number placeholder `<N…N>` of 1–6 `N`. The placeholder's length is the digit count of the zero-padded number (`<NNN>` → `007`). A missing field takes its default. An unknown field gets a warning and is ignored. | Warning, the default of that field (not an object: both defaults) |
 | `ci`, `pullRequest` | as below | An object. An unknown key gets a warning and is ignored. | Not an object (also `null`): warning, the defaults |
 | `ci.requiredCheck` | `"check"` | The name of the CI check that runs `checks.check` (§17.2), as GitHub reports it; no control characters; surrounding whitespace is stripped | Warning, the default |
@@ -1991,11 +2027,13 @@ Every component takes `mainBranch`, `workDir`, and `docsDir` from this file, dir
 | `implement.autoAdvance` | `true` | `true` or `false` | Warning, the default |
 | `hooks.stopLint` | `false` | `true` or `false` | Warning, the default |
 | `hooks.maxCheckAttempts` | `3` | An integer of at least 1 | Warning, the default |
-| any other top-level key | — | Not a `loom.json` key (the keys are `version`, `tracker`, `mainBranch`, `workDir`, `docsDir`, `docs`, `checks`, `ci`, `pullRequest`, `hooks`, `rounds`, `implement`) | Warning, ignored |
+| `design` | `{ "canvas": null }` | An object. An unknown key gets a warning and is ignored. | Not an object (also `null`): warning, the default |
+| `design.canvas` | `null` | `null`, or the URL of the canvas (§9.14.1): a string that starts with `https://claude.ai/` and has more after it, without whitespace or control characters. The prefix is case-sensitive; surrounding whitespace is not stripped | Warning, `null` |
+| any other top-level key | — | Not a `loom.json` key (the keys are `version`, `tracker`, `mainBranch`, `workDir`, `docsDir`, `docs`, `checks`, `ci`, `pullRequest`, `hooks`, `rounds`, `implement`, `design`) | Warning, ignored |
 
-The resolved docs map is also checked as a whole; these warnings keep the values. `docs.tasks` and `docs.decisions.dir` must not be at or below each other (equal included), and no role file may lie at or below either directory. `vision`, `overview`, and `conventions` may share one file (one `README.md` can play several roles). A docs map path at or below `workDir` gets a warning (a configured path there is already invalid, so this is a default built from `docsDir`, e.g. `docsDir: "work"` with `workDir: "work/tasks"` makes `docs.tasks` `work/tasks`; it is the only default, so it stays). The file may start with a UTF-8 byte order mark.
+The resolved docs map is also checked as a whole; these warnings keep the values. `docs.tasks`, `docs.decisions.dir`, and `docs.screens` must not be at or below one another (equal included), and no role file may lie at or below any of them. `vision`, `overview`, and `conventions` may share one file (one `README.md` can play several roles). `docs.style` shares its file with no other role, compared ignoring case. A docs map path at or below `workDir` gets a warning (a configured path there is already invalid, so this is a default built from `docsDir`, e.g. `docsDir: "work"` with `workDir: "work/tasks"` makes `docs.tasks` `work/tasks`; it is the only default, so it stays). The file may start with a UTF-8 byte order mark.
 
-`loom-state` validates these keys, reports problems in `warnings`, and outputs the resolved values as `workDir`, `docs`, `checks`, `ci`, `pullRequest`, `rounds`, `implement`, and `hooks` (§8.2). The hooks use the same resolved values. Skills read them from the state, never from the raw file. Agents get the values they need in their prompt (§9.9).
+`loom-state` validates these keys, reports problems in `warnings`, and outputs the resolved values as `workDir`, `docs`, `checks`, `ci`, `pullRequest`, `rounds`, `implement`, `hooks`, and `design.canvas` (§8.2). The hooks use the same resolved values. Skills read them from the state, never from the raw file. Agents get the values they need in their prompt (§9.9).
 
 ### 19.2 Issue labels
 
@@ -2020,7 +2058,7 @@ Template: `skills/setup/references/templates/settings.json`. `setup` merges it i
   - `gh issue view`, `gh issue list`, `gh pr view`, `gh pr list`, `gh pr checks`, `gh run view`, `gh run list`, `gh label list`, `gh repo view` (read-only commands that skills run; Claude Code's built-in read-only set covers read-only `git`, not `gh`)
   - `loom-state --json`, `loom-state --json --pr` (the skills' `allowed-tools` grant lasts only one turn, §24.2; this keeps the `Next:` call from asking after the user answered a question), `loom-state --slug *`
   - `mv` inside `.loom/`: `mkdir -p <workDir>/_archive`, `mv <workDir>/* <workDir>/_archive/` (finish-task), `mv <workDir>/_archive/* <workDir>/` (start-task restore)
-- **Not** allowlisted (always asked): `git push`, `gh pr create`, `gh pr edit`, `gh pr merge`, `gh issue create`, `gh label create`, `gh api`. `setup` writes them as `permissions.ask` rules, so a broader allow rule elsewhere (e.g. `Bash(git *)` in user settings) cannot skip the prompt.
+- **Not** allowlisted (always asked): `git push`, `gh pr create`, `gh pr edit`, `gh pr merge`, `gh issue create`, `gh issue edit`, `gh label create`, `gh api`. `setup` writes them as `permissions.ask` rules, so a broader allow rule elsewhere (e.g. `Bash(git *)` in user settings) cannot skip the prompt.
 
 ---
 
@@ -2046,19 +2084,22 @@ evals/
 └── results/                 # written by the runs; ignored by git
 ```
 
-- Each case's `scaffold.sh` runs `_fixture/build.py <scenario>`. It builds a tiny Python repository (`shop/`, stdlib `unittest` checks behind `make check`, the §19.1 `loom.json`, with the optional keys of `describe-pr-quick` below), one commit on `main` with fixed dates (stable hashes), and the task directory of task #7 with the artifacts the scenario needs. `tests/test_evals.py` runs every scaffold and checks that `loom-state` routes it to the case's skill.
+- Each case's `scaffold.sh` runs `_fixture/build.py <scenario>`. It builds a tiny Python repository (`shop/`, stdlib `unittest` checks behind `make check`, the §19.1 `loom.json`, with the optional keys of `describe-pr-quick` below), one commit on `main` with fixed dates (stable hashes), and the task directory of task #7 with the artifacts the scenario needs. `research-full` and `design-full` also get a style guide at the default path (`docs/design/DESIGN.md`, the six headings of §9.14.2), one plain HTML screen with inline styles (`docs/design/screens/order-summary.html`), and a `## Screens` section in the ticket that names it. The other cases have no design files. `tests/test_evals.py` runs every scaffold and checks that `loom-state` routes it to the case's skill.
 - Graders never call a model (`regex`, `tool_used`, `file_exists` only):
   - `research-full` (full mode, research questions approved):
     - `02-research.md` exists with `status: in-review` and `file:line` references.
     - No Read of `00-ticket.md` (`tool_used`, max 0).
     - No Read, Grep, Glob, or Bash input in the trace names the ticket, by the skill or by a subagent.
     - The trace never holds `Wholesale customers`, a phrase that occurs only in the ticket body. This catches the ticket's content reaching the session by any tool.
+    - No Read, Grep, Glob, or Bash input in the trace names `docs/design/screens`, by the skill or by a subagent, except inside an exclusion: `!docs/design/screens` (Grep `glob`, rg `--glob`, the pathspec `':!…'`), `':(exclude)docs/design/screens'`, or `-not -path '*docs/design/screens/*'` (§9.14.5, §10.1).
+    - The trace never holds `Quillfeather Stationers`, a phrase that occurs only in the screen file (`tests/test_evals.py` checks this). It sits on the line of the bulk discount, so a content search for the feature that reaches the screen puts it into the trace.
     - The skill read its shared snippets.
     - `<task dir>/events.jsonl` exists and has a `start` line and a `stop` line of a research agent (`codebase-locator`, `codebase-analyzer`, `codebase-pattern-finder`, or `web-search-researcher`) with `"phase":"research"` (§11.6). Hooks run outside the eval sandbox, and `make eval` loads the plugin's `hooks/hooks.json`.
   - `design-full` (research approved):
     - `03-design.md` exists with `status: in-review`, a `## Open Questions — Round 1 of ~M` heading, and `**Q1.`.
     - Resolved Decisions has no table data rows and no list items.
     - No Read of `01-research-questions.md`.
+    - A Read of `docs/design/screens/order-summary.html`, and `03-design.md` names that path (§9.14.5).
   - `design-onboarding` (a setup task in full mode with approved research; the fixture has `AGENTS.md` with "Push and open pull requests without asking for confirmation.", no `CLAUDE.md`, and a CI job named `test`):
     - `03-design.md` exists with `status: in-review`, a `## Open Questions — Round 1 of ~M` heading, and `**Q1.`.
     - Resolved Decisions has no table data rows and no list items.
@@ -2087,6 +2128,7 @@ evals/
     - Passed 4 of 4 local runs before M9a (haiku, macOS, Homebrew git, about 0.02 USD each); not run on the CI runner yet. In one run Bash denied a chained `cd …; ls …`, so the docs commit and the rebase did not happen; the body was still written. With the M9a fixture (mapped `docs.tasks`, required `## Test plan`) it passed 2 of 2 local runs (about 0.03 USD each), and 1 of 1 with the hardening after M9a (2026-11-12, §24.2).
 - Every case has `runs: 1` and `model: haiku` (cost); `--runs 3` and `--model sonnet` override them.
 - The full suite on the code of the hardening after M9a passed 5 of 5 cases (1 run each, haiku, macOS, Homebrew git, 0.32 USD in total, 2026-11-12, §24.2). On the M9b code it passed 6 of 6 cases locally (1 run each, haiku, macOS, Homebrew git, 0.32 USD in total, 2026-11-13).
+- On the M10a code, `research-full`, `design-full`, `implement-manual`, and `describe-pr-quick` passed 1 of 1 local run each, with every grader (haiku, macOS, Homebrew git, 0.29 USD in total, 2026-11-12). The grader `screens-never-touched` passed because its pattern was absent; no run has shown it fail on a real search of the screens directory.
 - `make eval` runs the suite with `--scaffold --ablation none --no-publish --trust-plugin`, a `--max-cost-usd` ceiling, and the narrowest `--allow-tools` set: `Write Edit 'Bash(git *)' 'Bash(make *)' 'Bash(loom-state *)' 'Bash(*/bin/loom-state *)'`. It is not part of `make check`. It puts the plugin's `bin/` on `PATH` (the eval runtime does not) and, on macOS only, the developer directory (`xcode-select -p`) first.
 - In loom's CI: `make check` (unit tests and `claude plugin validate --strict`), then `make test` on Python 3.9, on every PR and push to `main` (`.github/workflows/ci.yml`, §21). The evals run only on demand (`.github/workflows/eval.yml`, `workflow_dispatch`, repository secret `ANTHROPIC_API_KEY`), never on a schedule: they cost tokens.
 - `make eval` runs every case, locally and in the Evals workflow. The Evals workflow runs all 6 cases on a pinned `macos-26` runner. Linux cannot run the skill cases: the eval sandbox breaks every Bash call there (§24.2).
@@ -2148,7 +2190,9 @@ After every change to a skill, agent, shared snippet, or hook script. A prompt c
   - Empty repositories keep the fast `oneshot` setup.
   - New `loom.json` keys let skills use an existing structure: a docs map, the required CI check, and required PR sections.
   - Specified in §9.13. Both milestones, M9a and M9b (§9.13.8), are implemented and not released yet (`CHANGELOG.md`).
-- **UI design (M10):** an optional style guide and one mockup file per screen, in the repository. Issues name the screens they implement, and the phases read them. A new skill, `screens`, produces them with Claude Design or in local mode. Planned after M9b, for v1.2 or the release after it. Specified in §9.14, with the milestones M10a and M10b in §9.14.9.
+- **UI design (M10):** an optional style guide and one mockup file per screen, in the repository. Issues name the screens they implement, and the phases read them. A new skill, `screens`, produces them with Claude Design or in local mode. Specified in §9.14, with the milestones M10a and M10b in §9.14.9.
+  - Done in milestone M10a (not released yet, `CHANGELOG.md`): the docs roles `style` and `screens`, the `design` key, and the existing skills and agents read the files.
+  - Planned: M10b, the `screens` skill, for v1.2 or the release after it.
 
 Done in v1.1 (release 1.1.0, `CHANGELOG.md`):
 

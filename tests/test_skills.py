@@ -1883,7 +1883,7 @@ class StartTaskSkillTest(unittest.TestCase):
 
 # Keys that skills and agents take from the loom-state output, never from loom.json.
 STATE_CONFIG_KEYS = ("docs", "docsDir", "checks", "ci", "pullRequest", "mainBranch", "workDir", "rounds", "implement",
-                     "hooks")
+                     "hooks", "design")
 _KEY = r"`<?(?:%s)>?(?:\.[\w.<>]+)?`" % "|".join(STATE_CONFIG_KEYS)
 CONFIG_READ_PATTERNS = [
     # "Read `.claude/loom.json` → `checks`", "Read `.claude/loom.json` and note the `checks` commands"
@@ -1904,6 +1904,14 @@ ROLE_PATH_PATTERNS = [
     re.compile(r"architecture/decisions"),
     re.compile(r"(?<![\w-])conventions\.md"),
     re.compile(r"docs/tasks"),
+]
+# The default paths of the docs roles `style` and `screens` (§9.14.1). Skills and agents take `docs.style`,
+# `docs.screens`, and `design.screens` from the state; none builds these paths or lists the directory itself.
+DESIGN_PATH_PATTERNS = [
+    re.compile(r"docs/design"),
+    re.compile(r"design/DESIGN\.md"),
+    re.compile(r"(?<![\w.])DESIGN\.md"),
+    re.compile(r"design/screens"),
 ]
 
 
@@ -1959,6 +1967,8 @@ class ConfigFromStateTest(unittest.TestCase):
             "- **Limit**: `implement.maxFixAttempts` from `.claude/loom.json` (default `2`).",
             "Read `.claude/loom.json` at the git top level for the other keys. If a key is missing, use the default:\n\n"
             "| Key | Default |\n|---|---|\n| `implement.autoAdvance` | `true` |\n| `hooks.maxCheckAttempts` | `3` |",
+            "Read `.claude/loom.json` → `design.canvas`.",
+            "`design.canvas` from `.claude/loom.json`",
         ]
         for text in old:
             with self.subTest(text=text[:50]):
@@ -1967,6 +1977,13 @@ class ConfigFromStateTest(unittest.TestCase):
                      "Read `<docsDir>/conventions.md`.", "`docs/conventions.md`"):
             with self.subTest(text=text):
                 self.assertTrue(any(rx.search(text) for rx in ROLE_PATH_PATTERNS), text)
+        for text in ("Read `docs/design/DESIGN.md`.", "List `<docs>/design/screens/`.", "Read `DESIGN.md` first."):
+            with self.subTest(text=text):
+                self.assertTrue(any(rx.search(text) for rx in DESIGN_PATH_PATTERNS), text)
+        for text in ("Read the style guide `docs.style`.", "`design.screens` in the state", "`03-design.md`",
+                     "the `design` skill"):
+            with self.subTest(text=text):
+                self.assertFalse(any(rx.search(text) for rx in DESIGN_PATH_PATTERNS), text)
         for text in ("Take them from there, never from `.claude/loom.json`.", "`visual-conventions.md`",
                      "Cap: `rounds.cap.<size>` from the state.", "`<workDir>` is `workDir` from the state",
                      "`<mainBranch>` is the `Main branch:` line of the prompt.",
@@ -1988,6 +2005,13 @@ class ConfigFromStateTest(unittest.TestCase):
                 continue  # the research agents name example paths; they get no docs map
             text = re.sub(r"templates/docs/[\w./-]*", "", text)  # setup's skeleton templates
             for rx in ROLE_PATH_PATTERNS:
+                with self.subTest(file=name, pattern=rx.pattern):
+                    self.assertIsNone(rx.search(text))
+
+    def test_no_skill_or_agent_builds_a_design_path(self):
+        """Every skill, reference, shared snippet, and agent, the research agents included (§9.14.1)."""
+        for name, text in prompt_texts().items():
+            for rx in DESIGN_PATH_PATTERNS:
                 with self.subTest(file=name, pattern=rx.pattern):
                     self.assertIsNone(rx.search(text))
 
@@ -2030,8 +2054,12 @@ class ConfigFromStateTest(unittest.TestCase):
                 self.assertIn(needle, loop)
         iterate = skill_md("iterate").split("### The fix loop", 1)[1]
         self.assertIn("the fix items, and the `Checks:` and `Conventions:` lines of `implementation-loop.md`", iterate)
-        self.assertIn("the fix items, the `Conventions:` and `Main branch:` lines, and the implementer's report", iterate)
-        self.assertIn("the `Conventions:` and `Main branch:` lines, and the diff", skill_md("iterate"))
+        self.assertIn("the fix items, the `Conventions:` and `Main branch:` lines %s, and the implementer's report"
+                      % "(with the `Style guide:` and `Screens:` lines under their conditions)", iterate)
+        self.assertIn("the `Conventions:` and `Main branch:` lines %s, and the diff" % "(with the `Style guide:` and `Screens:` lines under their conditions)",
+                      skill_md("iterate"))
+        self.assertIn("the `Checks:` and `Conventions:` lines of `implementation-loop.md`, with the `Style guide:` and "
+                      "`Screens:` lines under their conditions", iterate)
         self.assertIn("Configuration: the `Checks:` line (`checks` from the state) and the `Conventions:` line",
                       skill_md("implement"))
         self.assertIn("the `Conventions:` and `Main branch:` (`mainBranch`) lines in the reviewer prompt",
@@ -3928,6 +3956,261 @@ class NextLineTest(unittest.TestCase):
         approve = skill_md("iterate").split("## Approve", 1)[1].split("### Pick the artifact", 1)[1]
         self.assertIn("The name `research` is `02-research.md`, and `research-questions` is "
                       "`01-research-questions.md`.", approve.split("\n2. ", 1)[0])
+
+
+# ---------------------------------------------------------------------------
+# M10a: the style guide and the screens in the existing skills and agents (§9.14.4, §9.14.5)
+# ---------------------------------------------------------------------------
+
+SCREENS_ONLY = "Only when the ticket has a `## Screens` section"
+
+
+class DesignFilesSkillTest(unittest.TestCase):
+    """Each rule of §9.14.4 and §9.14.5, conditional on the ticket's `## Screens` section or `design.style`."""
+
+    def body(self, name: str) -> str:
+        return split_frontmatter(skill_md(name))[1]
+
+    def test_issue_format_has_the_optional_screens_section(self):
+        text = reference("backlog", "issue-format.md")
+        block = text.split("```markdown\n", 1)[1].split("```", 1)[0]
+        headings = re.findall(r"(?m)^## (.+)$", block)
+        self.assertEqual(headings, ["Context", "Acceptance Criteria", "Screens", "Out of Scope"])
+        for needle in ("- **Screens** (optional): one line per screen that the issue implements, as its path from "
+                       "`design.screens`", "Omit the section when the issue implements no screen.",
+                       "An issue whose title starts with `Design screens:` has no `## Screens` section"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+
+    def test_backlog_writes_the_section_and_names_a_missing_screen(self):
+        create = section(self.body("backlog"), "## Create issues")
+        self.assertIn("Add `## Screens` with the paths of `design.screens` that the work implements.", create)
+        # Only a project with design files hears about a missing screen; without them no UI issue "needs" one.
+        self.assertIn("When `design.style` is `true` or `design.screens` is not empty, and the work needs a screen that "
+                      "`design.screens` does not have, say so: the screen file must land first, through its own task",
+                      create)
+        self.assertEqual(create.count("needs a screen"), 1)
+        self.assertIn("When `design.style` is `true`: the style guide `docs.style`.", self.body("backlog"))
+
+    def test_backlog_attaches_screens(self):
+        body = self.body("backlog")
+        self.assertIn("When `design.screens` is not empty, run [Attach screens](#attach-screens) first, with every "
+                      "activity.", body)
+        attach = section(body, "## Attach screens")
+        for needle in ("an issue, open or closed, names its path in its `## Screens` section",
+                       "`gh issue list --state all --limit 1000 --json number,title,state,body`",
+                       "List every path of `design.screens` that no issue names.",
+                       "add it to the `## Screens` section of an open issue (name the issue), or draft a new issue",
+                       "Ask for confirmation.", 'After "yes"',
+                       "`gh issue edit <k> --body-file <drafts>/issue-<k>-screens.md`", "Change nothing else."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, attach)
+        self.assertLess(attach.index("Ask for confirmation."), attach.index("gh issue edit <k>"))
+
+    def test_start_task_warns_about_an_unknown_screen(self):
+        final = section(self.body("start-task"), "## 9. Final message")
+        rule = final.split("**Screens.**", 1)[1]
+        for needle in ("Only when the issue body has a `## Screens` section.",
+                       "runs after the switch to the updated main branch", "`design.screens`",
+                       "add `Warning: screen <path> is not in design.screens"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, rule)
+
+    def test_research_skills_never_open_a_screen(self):
+        rq = self.body("research-questions")
+        self.assertIn("Never open a screen: a file at or below `docs.screens`.", rq)
+        self.assertIn("leave the paths of the ticket's `## Screens` section out of the pointers", rq)
+        self.assertIn("When the ticket has a `## Screens` section, add one descriptive question: which UI components, "
+                      "styles, and tokens exist in the code, and where.", rq)
+        research = self.body("research")
+        self.assertIn("**Never open a screen**: a file at or below `docs.screens`.", section(research, "### Both modes"))
+        self.assertIn("do not read them, and do not give their paths to an agent", research)
+
+    def test_research_skills_exclude_the_screens_from_every_agent(self):
+        line = ("When `design.screens` in the state is not empty, every such prompt also carries the line "
+                "`Excluded path: <docs.screens>`.")
+        for name in ("research-questions", "research"):
+            with self.subTest(skill=name):
+                self.assertIn(line, self.body(name))
+        self.assertIn("`Excluded path: <docs.screens>`. This includes the claim check.", self.body("research"))
+        own = ("When `design.screens` is not empty, your own calls follow the rule of the `Excluded path:` line too: "
+               "never Read a file at or below `docs.screens`; a Grep that starts at its parent or higher carries "
+               "`glob: \"!<docs.screens>/**\"`; a Glob gets a `path` or a pattern that does not reach it.")
+        for name in ("research-questions", "research", "iterate"):
+            with self.subTest(skill=name, main_context=True):
+                self.assertIn(own, self.body(name))
+        self.assertIn("When `design.screens` in the state is not empty, every such prompt also carries the line "
+                      "`Excluded path: <docs.screens>`, as in `research`.", self.body("iterate"))
+        self.assertIn("the issue title, or the screen IDs in `design.screens` of the state", self.body("research"))
+        for name in ("codebase-locator", "codebase-analyzer", "codebase-pattern-finder"):
+            with self.subTest(agent=name):
+                text = read(os.path.join(AGENTS_DIR, name + ".md"))
+                rule = text.split("- **Excluded path.** ", 1)[1].split("\n- ", 1)[0]
+                for needle in ("Only when your prompt has an `Excluded path: <path>` line.",
+                               "Never Read a file at or below `<path>`.",
+                               "Every search or listing that starts at its parent or higher excludes it in the call "
+                               "itself:", '  - Grep: `glob: "!<path>/**"`.', "  - Glob: it has no exclusion.",
+                               "`<path>` appears in a tool input only inside such an exclusion.",
+                               "drop it, and never open or report it."):
+                    self.assertIn(needle, rule)
+                self.assertNotIn("Never put that path in a tool input", text)
+        locator = read(os.path.join(AGENTS_DIR, "codebase-locator.md")).split("- **Excluded path.** ", 1)[1]
+        for needle in ("  - `git ls-files`: the pathspec `':(exclude)<path>'`.", "  - `find`: `-not -path '*<path>/*'`.",
+                       "  - `ls`: never on `<path>` or below it."):
+            self.assertIn(needle, locator)
+
+    def test_design_reads_the_screens_and_asks_about_them(self):
+        body = self.body("design")
+        inputs = section(body, "## 2. Input discipline")
+        self.assertIn("When the ticket has a `## Screens` section, read every screen it names in full", inputs)
+        self.assertIn("When `design.style` is `true` and the task builds or changes UI, read the style guide "
+                      "`docs.style` in full.", inputs)
+        rule = section(body, "## 5. Write the design").split("**Screens.** " + SCREENS_ONLY + ":", 1)[1]
+        for needle in ("Proposed Architecture maps each screen, by its path, to components (reused or new), state, and "
+                       "data.", "an open question for each state or behavior that the task needs and no screen shows: "
+                       "empty, loading, error, long content, narrow width",
+                       "an open question for each conflict between a screen and the style guide, or between a screen "
+                       "and an existing component", "The style guide wins over a screen",
+                       "A question whose answer makes the code differ from a screen names that screen ID."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, rule)
+
+    def test_plan_names_screens_manual_lines_and_tokens(self):
+        body = self.body("plan")
+        inputs = section(body, "## 2. Input discipline")
+        self.assertIn("Quick mode: when the ticket has a `## Screens` section, read every screen it names in full", inputs)
+        self.assertIn("When `design.style` is `true` and the task builds or changes UI, read the style guide "
+                      "`docs.style` in full.", inputs)
+        write = section(body, "## 5. Write the plan")
+        rule = write.split("**Screens.** " + SCREENS_ONLY + ":", 1)[1].split("**Style guide.**", 1)[0]
+        for needle in ("Each implementation phase that builds UI names its screens in its Changes, as paths.",
+                       "one `- [ ] Manual:` line per screen", "The line names the screen path.",
+                       "For a `.dc.html` screen it also names the artboard `<screen ID>` on the canvas "
+                       "`<design.canvas>`", "When `design.canvas` is `null`"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, rule)
+        self.assertIn("**Style guide.** Only when `design.style` is `true`: when the code defines no tokens yet, the "
+                      "first implementation phase that builds UI defines them, under the names of the style guide.",
+                      write)
+        self.assertIn("A question whose answer makes the code differ from a screen names that screen ID.",
+                      section(body, "## 6. Questions only where uncertain"))
+
+    def test_implement_and_iterate_pass_the_style_guide(self):
+        loop = shared("implementation-loop.md")
+        self.assertIn("  Conventions: <docs.conventions>\n  Style guide: <docs.style>\n  Screens: <docs.screens>\n"
+                      "  Main branch: <mainBranch>", loop)
+        self.assertIn("The `Style guide:` line goes into a prompt only when `design.style` is `true`, and the `Screens:` "
+                      "line only when `design.screens` is not empty. Each one then follows the `Conventions:` line in "
+                      "every prompt that has that line, for both agents.", loop)
+        for name in ("implement", "iterate"):
+            with self.subTest(skill=name):
+                self.assertIn("When `design.style` is `true`, also pass `docs.style` (the `Style guide:` line). When "
+                              "`design.screens` is not empty, also pass `docs.screens` (the `Screens:` line).",
+                              self.body(name))
+                self.assertIn("implementation-loop.md", self.body(name))
+        self.assertIn("The `Style guide:` line (`docs.style`, when `design.style` is `true`) and the `Screens:` line "
+                      "(`docs.screens`, when `design.screens` is not empty) follow each `Conventions:` line.",
+                      self.body("implement"))
+        # Every fix-loop prompt of iterate names the conditional lines explicitly (lines of the implementer and reviewers).
+        self.assertEqual(self.body("iterate").count("with the `Style guide:` and `Screens:` lines under their "
+                                                    "conditions"), 3)
+
+    def test_iterate_keeps_the_screen_rules_in_later_rounds(self):
+        """iterate writes later rounds and edits of 03-design.md and 04-plan.md (§9.8, §9.14.5)."""
+        body = self.body("iterate")
+        rule = section(body, "### Screens in design and plan (all sections)")
+        for needle in ("**Screens.** Only when the ticket (`00-ticket.md`) has a `## Screens` section",
+                       "this run writes `03-design.md` or `04-plan.md` (answers to a round, feedback, or a plan change)",
+                       "Keep the screen rules of that phase", "one `Manual:` line per screen",
+                       "A question whose answer makes the code differ from a screen names that screen ID."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, rule)
+        # The section sits before the preconditions, so every section of the skill follows it.
+        self.assertLess(body.index("### Screens in design and plan"), body.index("## 1. Check preconditions"))
+        self.assertIn("a question about a difference from a screen names the screen ID",
+                      spec_section("#### 9.14.5 Screens in the phases", "#### 9.14.6"))
+        self.assertIn("A question about a difference from a screen names the screen ID.",
+                      spec_section("### 9.8 `iterate`", "### 9.9 `implement`"))
+
+    def test_describe_pr_lists_screens_and_proposes_screen_updates(self):
+        body = self.body("describe-pr")
+        self.assertIn("When the ticket has a `## Screens` section, list each screen path with the result of its "
+                      "`Manual:` comparison.", section(body, "## 3. Task summary"))
+        self.assertIn("**Verification** lists each screen path of the ticket's `## Screens` section, if any: quick and "
+                      "full with the result of its `Manual:` comparison; oneshot (no plan, no `Manual:` line) only the "
+                      "paths.", section(body, "## 8. Pull request"))
+        self.assertNotIn("(oneshot too)", body)
+        follow = section(body, "## 9. Follow-up issues")
+        rule = follow.split("**Screens.** " + SCREENS_ONLY + ".", 1)[1]
+        for needle in ("a Resolved Decision (`03-design.md`, `04-plan.md`) or a deviation in `log.md` names",
+                       "one follow-up titled `Design screens: update <screen ID>`", "It has no `## Screens` section."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, rule)
+        for name in ("summary-template.md", "pr-template.md"):
+            with self.subTest(template=name):
+                verification = reference("describe-pr", name).split("## Verification", 1)[1].split("\n## ", 1)[0]
+                self.assertIn("When the ticket has a `## Screens` section: one line per screen, its path and the "
+                              "result of its manual comparison.", verification)
+
+    def test_glossary_terms(self):
+        style = shared("writing-style.md")
+        spec_terms = spec_section("### 9.14 UI design", "#### 9.14.1")
+        for term in ("style guide", "screen", "screen ID"):
+            with self.subTest(term=term):
+                self.assertIn("| **%s** |" % term, style)
+                spec_row = re.search(r"(?m)^\| \*\*%s\*\* \| (.+?) \|$" % re.escape(term), spec_terms).group(1)
+                # The glossary drops only the section references of the spec wording.
+                self.assertIn(re.sub(r" \(§[\d.]+\)", "", spec_row), style)
+        self.assertIn('The word "design" alone keeps one meaning: the design phase and its artifact `03-design.md`.',
+                      style)
+        for term in ("screens task", "canvas", "local mode"):  # M10b
+            with self.subTest(term=term):
+                self.assertNotIn("| **%s** |" % term, style)
+
+    def test_style_guide_rules_are_conditional(self):
+        """A project without a style guide sees no change: every skill line that names `docs.style` names its condition."""
+        for name in skill_dirs():
+            for line in skill_md(name).splitlines():
+                if "docs.style" in line:
+                    with self.subTest(skill=name, line=line[:60]):
+                        self.assertIn("`design.style` is `true`", line)
+
+    def test_screen_rules_are_conditional(self):
+        """Screen rules sit under the ticket's `## Screens` condition; the bans hold in every task."""
+        for name, marker in (("design", "**Screens.** " + SCREENS_ONLY + ":"),
+                             ("plan", "**Screens.** " + SCREENS_ONLY + ":"),
+                             ("describe-pr", "**Screens.** " + SCREENS_ONLY + "."),
+                             ("start-task", "**Screens.** Only when the issue body has a `## Screens` section.")):
+            with self.subTest(skill=name):
+                self.assertEqual(self.body(name).count(marker), 1)
+
+    def test_agent_design_rules_are_conditional(self):
+        """Agent rules for screens and the style guide hang on a prompt line that a project without design files lacks."""
+        for name in ("codebase-locator", "codebase-analyzer", "codebase-pattern-finder"):
+            text = read(os.path.join(AGENTS_DIR, name + ".md"))
+            with self.subTest(agent=name):
+                # Exactly one excluded-path rule, and it opens with its condition.
+                self.assertEqual(text.count("`Excluded path: <path>`"), 1)
+                self.assertIn("- **Excluded path.** Only when your prompt has an `Excluded path: <path>` line.", text)
+        for name in ("implementer", "implementation-reviewer"):
+            text = read(os.path.join(AGENTS_DIR, name + ".md"))
+            with self.subTest(agent=name):
+                self.assertIn("The `Style guide:` line is there only when the project has a style guide, and the "
+                              "`Screens:` line only when it has screens (mockup files).", text)
+        reviewer = read(os.path.join(AGENTS_DIR, "implementation-reviewer.md"))
+        for line in reviewer.splitlines():
+            if "token" in line:
+                with self.subTest(line=line[:60]):
+                    self.assertIn("Only when the prompt has a `Style guide:` line", line)
+        self.assertIn("a screen (a file at or below the directory of the `Screens:` line), when the reference does not "
+                      "name that change. Without these lines this check does not apply", reviewer)
+
+    def test_m10b_is_not_built_yet(self):
+        for name, text in prompt_texts().items():
+            with self.subTest(file=name):
+                self.assertNotIn("/loom:screens", text)
+                self.assertNotIn("Closes #<k>", text)
+                self.assertNotIn("screens-brief", text)
 
 
 if __name__ == "__main__":

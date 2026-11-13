@@ -48,6 +48,7 @@ One item per deviation: what differs and why. Write `None.` when the code follow
 <!--
 The checks that ran (`checks.check` and its result), the specific automated commands of the plan,
 and the manual steps with their result. Do not claim a manual step passed unless the user confirmed it.
+When the ticket has a `## Screens` section: one line per screen, its path and the result of its manual comparison.
 -->
 
 ## Follow-ups

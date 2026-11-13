@@ -44,7 +44,10 @@ Omit unchanged parts.
 
 ## Verification
 
-<!-- The checks and their result (`checks.check`: pass), specific automated commands, and manual steps the user confirmed. -->
+<!--
+The checks and their result (`checks.check`: pass), specific automated commands, and manual steps the user confirmed.
+When the ticket has a `## Screens` section: one line per screen, its path and the result of its manual comparison.
+-->
 
 ## Decisions
 

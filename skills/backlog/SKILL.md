@@ -37,7 +37,7 @@ The writing style applies to issues, commits, and the final message. It does not
 
 Below, `<main>` is `mainBranch`, and `<drafts>` is `<workDir>/_drafts` (`workDir` from the state). With an active task, `<n>` is `task.number` and `<task dir>` is `task.dir`. Issue bodies always go to `<drafts>`, also with an active task. If a file in `<drafts>` or `<task dir>/commit-msg.txt` already exists, Read it before you Write it (`git-flow.md`).
 
-Doc paths come from `docs` in the state (the docs map): `<vision>` is `docs.vision`, `<overview>` is `docs.overview`, and `<tasks>` is `docs.tasks`. Never build a doc path yourself.
+Doc paths come from `docs` in the state (the docs map): `<vision>` is `docs.vision`, `<overview>` is `docs.overview`, and `<tasks>` is `docs.tasks`. Never build a doc path yourself. The screens come from `design.screens` in the state; never list the screens directory yourself.
 
 ## 1. Check preconditions
 
@@ -58,6 +58,7 @@ Read all of this before you discuss anything:
 4. Recently closed issues: `gh issue list --state closed --limit 30 --json number,title,closedAt`.
 5. Recent work: `git log --oneline -20 <main>`.
 6. The code state: the top-level layout (`git ls-files`), the README, and the code paths an idea touches.
+7. When `design.style` is `true`: the style guide `docs.style`.
 
 ## 3. Choose the activity
 
@@ -71,6 +72,8 @@ Take the argument:
 | `vision` | [Fill the vision](#fill-the-vision) |
 
 You may switch activities when the conversation calls for it.
+
+When `design.screens` is not empty, run [Attach screens](#attach-screens) first, with every activity.
 
 ## Discuss
 
@@ -86,7 +89,7 @@ You may switch activities when the conversation calls for it.
 
 Follow `issue-format.md` exactly.
 
-1. **Draft** every issue: title, labels, and body (Context, Acceptance Criteria, and Out of Scope when it helps). Put `Depends on #<k>` lines at the end of the Context for dependencies on open issues. For dependencies between new drafts, number the drafts (`draft 1`, `draft 2`) and fill in the real numbers after the earlier draft is created.
+1. **Draft** every issue: title, labels, and body (Context, Acceptance Criteria, and Out of Scope when it helps). Add `## Screens` with the paths of `design.screens` that the work implements. When `design.style` is `true` or `design.screens` is not empty, and the work needs a screen that `design.screens` does not have, say so: the screen file must land first, through its own task (for example a `type:docs` issue that adds it). Put `Depends on #<k>` lines at the end of the Context for dependencies on open issues. For dependencies between new drafts, number the drafts (`draft 1`, `draft 2`) and fill in the real numbers after the earlier draft is created.
 2. **Labels**: read the existing ones with `gh label list --json name --limit 200`. Use only labels that exist. If the loom labels are missing, add `Warning: loom labels missing; /loom:setup creates them` to the final message.
 3. **Show the full list**: every draft with its title, labels, and body. Ask for confirmation. The user may drop or change drafts; show the changed drafts again.
 4. **After "yes"**, create the issues in order. For each one:
@@ -94,6 +97,16 @@ Follow `issue-format.md` exactly.
    - Run `gh issue create --title '<title>' --body-file <drafts>/issue-<draft number>.md --label '<type label>'`, plus one `--label` per other label. Single-quote the title and write every `'` in it as `'\''`.
    - Note the number and URL that `gh issue create` prints.
 5. If a `gh issue create` fails, stop creating. Report the created ones and the error.
+
+## Attach screens
+
+A screen is attached when an issue, open or closed, names its path in its `## Screens` section.
+
+1. Run `gh issue list --state all --limit 1000 --json number,title,state,body`. Read the `## Screens` section of each body.
+2. List every path of `design.screens` that no issue names. If there is none, skip the rest.
+3. For each such screen, propose one: add it to the `## Screens` section of an open issue (name the issue), or draft a new issue ([Create issues](#create-issues)).
+4. Show the proposals. Ask for confirmation. The user may drop or change proposals.
+5. After "yes", for each confirmed addition to issue `#<k>`: write the full new body to `<drafts>/issue-<k>-screens.md`, then run `gh issue edit <k> --body-file <drafts>/issue-<k>-screens.md`. The new body is the old body with the path added to its `## Screens` section; a missing section goes after Acceptance Criteria. Change nothing else.
 
 ## Prioritize
 
@@ -125,7 +138,7 @@ The vision (`<vision>`) holds what the product is, for whom, its goals, and its 
 Run `loom-state --json`. Use the `final-answer.md` format, with a `Result:` line instead of `Artifact` and `Status`:
 
 ```text
-Result: <one line: the issues created, the recommendation, or the vision update>
+Result: <one line: the issues created or edited, the recommendation, or the vision update>
 Issues: <#k, #m, or omit the line>
 Warning: <one line per warning, if any>
 Next: <next step>
