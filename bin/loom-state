@@ -69,6 +69,8 @@ DOCS_FILE_ROLES = {
 # `screens` (LOOM_SPEC.md 9.14.1): optional; one mockup file per screen.
 DOCS_DIR_ROLES = {"tasks": "tasks", "screens": "design/screens"}
 DOCS_ROLES = ("vision", "overview", "decisions", "conventions", "tasks", "style", "screens")
+# The optional docs roles: the docs map checks include them only when in use.
+OPTIONAL_DOCS_ROLES = ("style", "screens")
 # Role files that may share one file (one README.md can play several roles).
 SHARED_FILE_ROLES = ("vision", "overview", "conventions")
 DEFAULT_DECISIONS_DIR = "architecture/decisions"
@@ -304,7 +306,7 @@ def load_config(top: str) -> Tuple[Optional[Dict[str, Any]], List[str]]:
         warnings.append("%s: invalid 'checks'; using defaults" % CONFIG_PATH)
         cfg["checks"] = copy.deepcopy(DEFAULT_CONFIG["checks"])
     warnings.extend(_resolve_checks(cfg["checks"]))
-    cfg["docs"], w = resolve_docs(data.get("docs", MISSING), cfg["docsDir"], cfg["workDir"])
+    cfg["docs"], w = resolve_docs(data.get("docs", MISSING), cfg["docsDir"], cfg["workDir"], top)
     warnings.extend(w)
     cfg["ci"], w = resolve_ci(data.get("ci", MISSING))
     warnings.extend(w)
@@ -512,19 +514,37 @@ def default_docs(docs_dir: str) -> Dict[str, Any]:
     }
 
 
-def resolve_docs(raw: Any, docs_dir: str, work_dir: str) -> Tuple[Dict[str, Any], List[str]]:
+def resolve_docs(raw: Any, docs_dir: str, work_dir: str, top: str) -> Tuple[Dict[str, Any], List[str]]:
     """Resolve loom.json `docs` (the docs map) against the defaults (LOOM_SPEC.md 15, 19.1).
 
     Returns ({dir, vision, overview, decisions: {dir, pattern}, conventions,
     tasks, style, screens}, warnings). `dir` is docsDir. Paths are relative
-    to the git top level. An invalid value gets a warning and its default.
+    to the git top level `top`. An invalid value gets a warning and its default.
     raw is MISSING when loom.json has no `docs` key (null is not an object). The resolved
-    map, defaults included, is then checked for overlaps.
+    map, defaults included, is then checked for overlaps; an optional role only when in use.
     """
     docs, warnings = _resolve_docs_values(raw, docs_dir, work_dir)
-    warnings.extend(docs_overlaps(docs))
-    warnings.extend(docs_in_work_dir(docs, work_dir))
+    in_use = optional_docs_roles_in_use(raw, docs, top)
+    warnings.extend(docs_overlaps(docs, in_use))
+    warnings.extend(docs_in_work_dir(docs, work_dir, in_use))
     return docs, warnings
+
+
+def optional_docs_roles_in_use(raw: Any, docs: Dict[str, Any], top: str) -> Set[str]:
+    """The optional docs roles that the docs map checks include (LOOM_SPEC.md 9.14.1).
+
+    An optional role is in use when loom.json sets its key in `docs` (an
+    invalid value too: it falls back to its default), or when its resolved
+    path exists in the working tree: a file for docs.style, a directory for
+    docs.screens. A project without design files gets no new warning.
+    """
+    in_use: Set[str] = set()
+    for role in OPTIONAL_DOCS_ROLES:
+        path = os.path.join(top, docs[role])
+        exists = os.path.isfile(path) if role in DOCS_FILE_ROLES else os.path.isdir(path)
+        if (isinstance(raw, dict) and role in raw) or exists:
+            in_use.add(role)
+    return in_use
 
 
 def _resolve_docs_values(raw: Any, docs_dir: str, work_dir: str) -> Tuple[Dict[str, Any], List[str]]:
@@ -567,15 +587,17 @@ def _resolve_docs_values(raw: Any, docs_dir: str, work_dir: str) -> Tuple[Dict[s
     return docs, warnings
 
 
-def docs_in_work_dir(docs: Dict[str, Any], work_dir: str) -> List[str]:
+def docs_in_work_dir(docs: Dict[str, Any], work_dir: str, in_use: Set[str]) -> List[str]:
     """Warnings for resolved docs map paths at or below workDir; the values stay.
 
     A configured path there is already invalid, so only a default built from
     docsDir can land there (docsDir `work`, workDir `work/tasks`: docs.tasks
-    is `work/tasks`). Its default is the only default, so it stays.
+    is `work/tasks`). Its default is the only default, so it stays. An
+    optional role counts only when it is in `in_use`.
     """
     warnings: List[str] = []
-    roles = [("docs." + role, docs[role]) for role in list(DOCS_FILE_ROLES) + list(DOCS_DIR_ROLES)]
+    roles = [("docs." + role, docs[role]) for role in list(DOCS_FILE_ROLES) + list(DOCS_DIR_ROLES)
+             if role not in OPTIONAL_DOCS_ROLES or role in in_use]
     roles.append(("docs.decisions.dir", docs["decisions"]["dir"]))
     for key, path in roles:
         if _is_under_ignoring_case(path, posixpath.normpath(work_dir)):
@@ -584,32 +606,37 @@ def docs_in_work_dir(docs: Dict[str, Any], work_dir: str) -> List[str]:
     return warnings
 
 
-def docs_overlaps(docs: Dict[str, Any]) -> List[str]:
+def docs_overlaps(docs: Dict[str, Any], in_use: Set[str]) -> List[str]:
     """Warnings for docs map roles that collide (LOOM_SPEC.md 19.1); the values stay.
 
     vision, overview, and conventions may share one file; docs.style shares
     its file with no other role (the screens skill rewrites it). docs.tasks,
     docs.decisions.dir, and docs.screens must not be at or below one another,
-    and no role file may lie at or below any of them.
+    and no role file may lie at or below any of them. The optional roles
+    docs.style and docs.screens count only when they are in `in_use`.
     """
     warnings: List[str] = []
     # (key, path, what the directory holds)
-    dirs = (("docs.tasks", docs["tasks"], "task summaries"),
-            ("docs.decisions.dir", docs["decisions"]["dir"], "decision records"),
-            ("docs.screens", docs["screens"], "screens"))
+    dirs = [("docs.tasks", docs["tasks"], "task summaries"),
+            ("docs.decisions.dir", docs["decisions"]["dir"], "decision records")]
+    if "screens" in in_use:
+        dirs.append(("docs.screens", docs["screens"], "screens"))
     for i, (key_a, dir_a, what_a) in enumerate(dirs):
         for key_b, dir_b, what_b in dirs[i + 1:]:
             if _is_under_ignoring_case(dir_a, dir_b) or _is_under_ignoring_case(dir_b, dir_a):
                 warnings.append("%s: '%s' (%s) and '%s' (%s) overlap; %s and %s would mix"
                                 % (CONFIG_PATH, key_a, dir_a, key_b, dir_b, what_a, what_b))
-    for role in DOCS_FILE_ROLES:
+    file_roles = [role for role in DOCS_FILE_ROLES if role not in OPTIONAL_DOCS_ROLES or role in in_use]
+    # Without screens in use the text is the one from before the role existed.
+    where = ("task summary, decision, and screens directories" if "screens" in in_use
+             else "task summary and decision directories")
+    for role in file_roles:
         for dir_key, directory, _ in dirs:
             if _is_under_ignoring_case(docs[role], directory):
-                warnings.append("%s: 'docs.%s' (%s) is at or below '%s' (%s); keep role files outside the "
-                                "task summary, decision, and screens directories"
-                                % (CONFIG_PATH, role, docs[role], dir_key, directory))
+                warnings.append("%s: 'docs.%s' (%s) is at or below '%s' (%s); keep role files outside the %s"
+                                % (CONFIG_PATH, role, docs[role], dir_key, directory, where))
     for role in SHARED_FILE_ROLES:
-        if docs["style"].lower() == docs[role].lower():
+        if "style" in in_use and docs["style"].lower() == docs[role].lower():
             warnings.append("%s: 'docs.style' (%s) is also 'docs.%s'; the style guide needs a file of its own"
                             % (CONFIG_PATH, docs["style"], role))
     return warnings

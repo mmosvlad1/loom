@@ -3712,7 +3712,7 @@ class LoomJsonChangeTest(unittest.TestCase):
         for needle in ("Run `git status --porcelain -- .claude/loom.json`.",
                        "or the implementer's `Files changed` lists `.claude/loom.json`", "The report is a claim, so check both.",
                        "Run `loom-state --json` again.",
-                       "Take the configuration from its output (`checks`, `docs`, `mainBranch`, `implement`, `hooks`)",
+                       "Take the configuration from its output (`checks`, `docs`, `design`, `mainBranch`, `implement`, `hooks`)",
                        "your own `checks.check` run in step 4", "the reviewer prompt in step 5",
                        "the fix attempts in step 6", "the later implementation phases (`implement` only)",
                        "the rule holds for every task"):
@@ -3723,7 +3723,7 @@ class LoomJsonChangeTest(unittest.TestCase):
     def test_implement_and_iterate(self):
         trigger = ("When the implementer's `Files changed` lists `.claude/loom.json`, or `git status --porcelain -- "
                    ".claude/loom.json` shows it changed, run `loom-state --json` again (step 3 of `implementation-loop.md`). "
-                   "Take the configuration from that output (`checks`, `docs`, `mainBranch`, `implement`, `hooks`)")
+                   "Take the configuration from that output (`checks`, `docs`, `design`, `mainBranch`, `implement`, `hooks`)")
         implement = skill_md("implement").split("### Configuration", 1)[1].split("\n### ", 1)[0]
         self.assertIn(trigger + " for your own check run, the reviewer prompt, the fix attempts, and the later "
                       "implementation phases.", implement)
@@ -4011,7 +4011,8 @@ class DesignFilesSkillTest(unittest.TestCase):
         final = section(self.body("start-task"), "## 9. Final message")
         rule = final.split("**Screens.**", 1)[1]
         for needle in ("Only when the issue body has a `## Screens` section.",
-                       "runs after the switch to the updated main branch", "`design.screens`",
+                       "lists the screens of the task branch",
+                       "after a restore or a switch to an existing branch, that branch.", "`design.screens`",
                        "add `Warning: screen <path> is not in design.screens"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, rule)

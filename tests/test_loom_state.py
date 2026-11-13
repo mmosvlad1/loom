@@ -982,9 +982,9 @@ class DocsOverlapTest(RepoTestCase):
         self.assertEqual(docs["vision"], "docs/tasks/vision.md")
         self.assertEqual(warnings, [
             ".claude/loom.json: 'docs.vision' (docs/tasks/vision.md) is at or below 'docs.tasks' (docs/tasks); "
-            "keep role files outside the task summary, decision, and screens directories",
+            "keep role files outside the task summary and decision directories",
             ".claude/loom.json: 'docs.conventions' (docs/adr/conventions.md) is at or below 'docs.decisions.dir' "
-            "(docs/adr); keep role files outside the task summary, decision, and screens directories",
+            "(docs/adr); keep role files outside the task summary and decision directories",
         ])
 
     def test_neighbours_do_not_overlap(self):
@@ -1012,6 +1012,7 @@ class DocsOverlapTest(RepoTestCase):
         self.assertEqual(len(warnings), 3, warnings)  # every pair
 
     def test_role_file_below_the_screens_directory(self):
+        write(self.path("docs", "design", "DESIGN.md"), "# Style guide\n")  # docs.style at its default is in use
         docs, warnings = self.resolved({"screens": "docs/design", "vision": "docs/design/vision.md"})
         self.assertEqual((docs["screens"], docs["vision"]), ("docs/design", "docs/design/vision.md"))
         self.assertEqual(warnings, [
@@ -1042,12 +1043,95 @@ class DocsOverlapTest(RepoTestCase):
         self.write_config({"workDir": "work/design", "docsDir": "work"})
         cfg, warnings = ls.load_config(self.repo)
         self.assertEqual((cfg["docs"]["style"], cfg["docs"]["screens"]), ("work/design/DESIGN.md", "work/design/screens"))
-        self.assertEqual(len(warnings), 2, warnings)
-        self.assertTrue(all("is at or below workDir" in w for w in warnings), warnings)
+        self.assertEqual(warnings, [])  # no design files: the optional roles are not in use
+        write(self.path("work", "design", "DESIGN.md"), "# Style guide\n")
+        os.makedirs(self.path("work", "design", "screens"))
+        cfg, warnings = ls.load_config(self.repo)
+        self.assertEqual(warnings, [
+            ".claude/loom.json: 'docs.style' (work/design/DESIGN.md) is at or below workDir (work/design), where loom "
+            "ignores changes; set 'docs.style' or docsDir to a path outside workDir",
+            ".claude/loom.json: 'docs.screens' (work/design/screens) is at or below workDir (work/design), where loom "
+            "ignores changes; set 'docs.screens' or docsDir to a path outside workDir",
+        ])
         self.write_config({"workDir": "work/tasks", "docs": {"style": "work/tasks/DESIGN.md", "screens": "work/tasks/s"}})
         cfg, warnings = ls.load_config(self.repo)
         self.assertEqual((cfg["docs"]["style"], cfg["docs"]["screens"]), ("docs/design/DESIGN.md", "docs/design/screens"))
         self.assertEqual(len(warnings), 2, warnings)
+
+    # A map that holds the default design paths, and its warnings before M10a.
+    # The directory list names the screens only when the role `screens` is in use.
+    ROLE_FILES_IN = ".claude/loom.json: 'docs.%s' (%s) is at or below '%s' (docs); keep role files outside the %s"
+    DIRS = "task summary and decision directories"
+    DIRS_WITH_SCREENS = "task summary, decision, and screens directories"
+    BEFORE_M10A = {
+        "docs.tasks": ({"tasks": "docs"}, [
+            ".claude/loom.json: 'docs.tasks' (docs) and 'docs.decisions.dir' (docs/architecture/decisions) overlap; "
+            "task summaries and decision records would mix"]),
+        "docs.decisions.dir": ({"decisions": {"dir": "docs"}}, [
+            ".claude/loom.json: 'docs.tasks' (docs/tasks) and 'docs.decisions.dir' (docs) overlap; "
+            "task summaries and decision records would mix"]),
+    }
+
+    def before_m10a(self, key, dirs=DIRS):
+        docs, overlaps = self.BEFORE_M10A[key]
+        role_files = [self.ROLE_FILES_IN % (role, path, key, dirs) for role, path in (
+            ("vision", "docs/product/vision.md"), ("overview", "docs/architecture/overview.md"),
+            ("conventions", "docs/conventions.md"))]
+        return docs, overlaps, role_files
+
+    def test_no_design_files_no_new_warnings(self):
+        for key in self.BEFORE_M10A:
+            with self.subTest(key=key):
+                docs, overlaps, role_files = self.before_m10a(key)
+                _, warnings = self.resolved(docs)
+                self.assertEqual(warnings, overlaps + role_files)
+                self.assertFalse([w for w in warnings if "docs.style" in w or "docs.screens" in w], warnings)
+
+    def test_an_existing_screens_directory_is_checked(self):
+        os.makedirs(self.path("docs", "design", "screens"))
+        for key in self.BEFORE_M10A:
+            with self.subTest(key=key):
+                docs, overlaps, role_files = self.before_m10a(key, self.DIRS_WITH_SCREENS)
+                _, warnings = self.resolved(docs)
+                self.assertEqual(warnings, overlaps + [
+                    ".claude/loom.json: '%s' (docs) and 'docs.screens' (docs/design/screens) overlap; %s and screens "
+                    "would mix" % (key, "task summaries" if key == "docs.tasks" else "decision records")] + role_files)
+
+    def test_an_existing_style_guide_is_checked(self):
+        write(self.path("docs", "design", "DESIGN.md"), "# Style guide\n")
+        for key in self.BEFORE_M10A:
+            with self.subTest(key=key):
+                docs, overlaps, role_files = self.before_m10a(key)
+                _, warnings = self.resolved(docs)
+                self.assertEqual(warnings, overlaps + role_files + [
+                    self.ROLE_FILES_IN % ("style", "docs/design/DESIGN.md", key, self.DIRS)])
+        _, warnings = self.resolved({"vision": "docs/design/DESIGN.md"})
+        self.assertEqual(warnings, [".claude/loom.json: 'docs.style' (docs/design/DESIGN.md) is also 'docs.vision'; "
+                                    "the style guide needs a file of its own"])
+
+    def test_a_screens_file_or_a_style_directory_is_not_in_use(self):
+        write(self.path("docs", "design", "screens"), "not a directory\n")
+        os.makedirs(self.path("docs", "design", "DESIGN.md"))
+        docs, overlaps, role_files = self.before_m10a("docs.tasks")
+        _, warnings = self.resolved(docs)
+        self.assertEqual(warnings, overlaps + role_files)
+
+    def test_a_configured_optional_role_is_checked_without_its_path(self):
+        self.assertFalse(os.path.exists(self.path("docs", "design")))
+        docs, overlaps, role_files = self.before_m10a("docs.tasks")
+        screens_overlap = (".claude/loom.json: 'docs.tasks' (docs) and 'docs.screens' (docs/design/screens) overlap; "
+                           "task summaries and screens would mix")
+        with_screens = self.before_m10a("docs.tasks", self.DIRS_WITH_SCREENS)[2]
+        _, warnings = self.resolved(dict(docs, screens="docs/design/screens"))
+        self.assertEqual(warnings, overlaps + [screens_overlap] + with_screens)
+        _, warnings = self.resolved(dict(docs, style="docs/design/DESIGN.md"))
+        self.assertEqual(warnings, overlaps + role_files + [
+            self.ROLE_FILES_IN % ("style", "docs/design/DESIGN.md", "docs.tasks", self.DIRS)])
+        # An invalid value falls back to its default, and the role stays in use.
+        _, warnings = self.resolved(dict(docs, screens=""))
+        self.assertEqual(len(warnings), 6, warnings)
+        self.assertIn("'docs.screens'", warnings[0])
+        self.assertIn(screens_overlap, warnings)
 
 
 class DesignConfigTest(RepoTestCase):

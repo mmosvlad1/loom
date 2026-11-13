@@ -45,7 +45,7 @@ This file lists the notable changes of every loom version. The format follows [K
   - Two optional docs roles: `style` (default `docs/design/DESIGN.md`) and `screens` (default `docs/design/screens`, one file per screen ID). `setup` writes no skeleton for them.
   - The `loom.json` key `design.canvas`: `null`, or the URL of a Claude Design canvas.
   - `loom-state --json` outputs `design`: `canvas`, `style` (the style guide exists), and `screens` (the sorted screen paths). Two files with one screen ID get a warning.
-  - A custom `docs.tasks` or `docs.decisions.dir` at or above `docs/design` now gets an overlap warning with the default `docs.screens` or `docs.style`.
+  - The checks of the whole docs map include `docs.style` and `docs.screens` only when the role is in use: `docs` sets its key, or its path exists (a file for `style`, a directory for `screens`). A project without design files gets no new warning. With them, a custom `docs.tasks` or `docs.decisions.dir` at or above `docs/design` gets an overlap warning.
   - The issue format has an optional `## Screens` section. `backlog` writes it, and attaches every screen that no issue names to an issue (`gh issue edit`, with confirmation). `start-task` warns about a screen path that is not in `design.screens`.
   - `design` reads the screens of the ticket, maps them to components, and asks about missing states and conflicts with the style guide. `plan` names the screens in its Changes and adds one `Manual:` line per screen. `iterate` keeps these rules in later rounds.
   - The implementer builds UI from the screens with the project's components and tokens; the reviewer checks tokens, UI states, and unplanned changes to the design files. Both get the `Style guide:` and `Screens:` lines in their prompt.

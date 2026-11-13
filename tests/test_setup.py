@@ -625,10 +625,11 @@ def kickoff_settings() -> Dict:
 QUESTION_ADAPTATIONS = [
     ("(the check runs rule below)", "(the check runs rule of research)"),
     ("(the instruction files rule below)", "(the instruction files rule of research)"),
-    ("a document in each docs role (§15);",
-     "a document in each docs role: `vision` (what the product is, for whom, non-goals), `overview` (components "
-     "and data flow), `decisions` (decision records), `conventions` (code style, testing rules, module layout), "
-     "`tasks` (notes on past work);"),
+    ("a document in each of the docs roles `vision`, `overview`, `decisions`, `conventions`, and `tasks` (§15; the "
+     "optional `style` and `screens` are not part of onboarding, §9.14.1);",
+     "a document in each of the docs roles `vision` (what the product is, for whom, non-goals), `overview` "
+     "(components and data flow), `decisions` (decision records), `conventions` (code style, testing rules, module "
+     "layout), and `tasks` (notes on past work);"),
 ]
 
 
