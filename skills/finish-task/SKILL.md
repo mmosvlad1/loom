@@ -78,7 +78,7 @@ Read the result:
 
 | Result | Action |
 |---|---|
-| Every required check passes | Continue with step 4. |
+| Every required check passes | Continue with [CI item](#ci-item), then step 4. |
 | A required check fails | Do not merge. Stop: `Result: required checks fail on PR #<number>: <names>`, `Next: /loom:iterate`. |
 | The output says there are no required checks | Continue with [Without required checks](#without-required-checks). |
 | Any other error | Stop: `Result: <the error>`. |
@@ -92,21 +92,37 @@ Every other failing check is a `Warning:` line, in every case.
 
 | `pr.requiredCheck` | Action |
 |---|---|
-| `passing` | Continue with step 4. Add to the merge summary: `GitHub requires no check; loom checked <required check> by name.` |
+| `passing` | Continue with [CI item](#ci-item), then step 4. Add to the merge summary: `GitHub requires no check; loom checked <required check> by name.` |
 | `failing` | Do not merge. Stop: `Result: check <required check> fails on PR #<number>`, `Next: /loom:iterate`. |
 | `pending` | The watch ended early. Run item 1 again, at most 3 times in all. Then stop: `Result: check <required check> is still pending on PR #<number>`, `Next: /loom:finish-task`. |
 | `missing` | No check with that name ran. Report `no required checks, and no check named <required check>` on its own line. Merging then needs an explicit "yes, merge without required checks" in step 4. |
 
+### CI item
+
+`describe-pr` can write the *CI item* into the PR body: the unticked line `` - [ ] CI check `<required check>` passes on this PR ``. The CI item gets its tick in step 4 only when all are true:
+
+- `pr.requiredCheck` is `passing`. After "Every required check passes", this run has not read it yet: run `loom-state --json --pr` now.
+- `<task dir>/pr-body.md` exists and has the unticked line.
+- `pr.bodyInSync` is `true`: the PR body on GitHub equals `<task dir>/pr-body.md`. The tick uploads the file as the new body, so it must not differ.
+
+With `pr.bodyInSync` `false` and the unticked line in the file, do not tick. Add `Warning: the PR body on GitHub differs from <task dir>/pr-body.md; the CI item is not ticked` to the final message.
+
+Otherwise change nothing: no file, no unticked line, another state of the check, or a merge without checks (`missing`). Do not change the file before the "yes" of step 4. A re-run after a declined merge must still find the unticked line.
+
 ## 4. Merge
 
-1. Show what happens: `PR #<number> "<title>" is squash-merged into <main> as one commit with the subject "<title>"; the local and remote branch <branch> are deleted.` Add the checks result.
+1. Show what happens: `PR #<number> "<title>" is squash-merged into <main> as one commit with the subject "<title>"; the local and remote branch <branch> are deleted.` Add the checks result. When the CI item gets its tick (step 3), add: `The CI item of the PR body gets its tick.` One confirmation covers the tick and the merge.
 2. Ask for confirmation. When step 3 found no check at all (`missing`), ask for its explicit confirmation.
-3. After "yes", run:
+3. After "yes", when the CI item gets its tick, do this first:
+   - Change `[ ]` to `[x]` in that line of `<task dir>/pr-body.md` with the Edit tool.
+   - Run `gh pr edit --body-file <task dir>/pr-body.md`. The permission system asks for it (an ask rule); that is intended.
+   - If `gh pr edit` fails, add `Warning: gh pr edit failed: <the error>; the CI item on GitHub is not ticked`. Continue with the merge.
+4. Then run:
    `gh pr merge --squash --delete-branch --subject '<title>' --match-head-commit <head sha>`
    - Give no PR number: it selects the PR of the current branch.
    - Quote the title with the single-quote rule of `git-flow.md` (every `'` becomes `'\''`). `--subject` keeps the Conventional Commits title, which ends with `(#<n>)`, as the squash commit subject.
    - `--match-head-commit` refuses the merge if someone pushed after the checks you watched.
-4. If it fails (for example a missing approval, a ruleset, or a new head commit), stop with `Result: <the error>`. Nothing else changed.
+5. If it fails (for example a missing approval, a ruleset, or a new head commit), stop with `Result: <the error>`. Nothing else changed, except the tick of the CI item.
 
 **From here on, every stop ends with `Next: /loom:finish-task #<n>`.** After the merge you are on `<main>`, where only the argument `#<n>` finds the task again ([Resume on the main branch](#resume-on-the-main-branch)).
 

@@ -103,6 +103,7 @@ TICKET_FILE = "00-ticket.md"
 LOG_FILE = "log.md"
 EVENTS_FILE = "events.jsonl"
 PLAN_FILE = "04-plan.md"
+PR_BODY_FILE = "pr-body.md"
 RESEARCH_FILE = "02-research.md"
 ARCHIVE_DIR = "_archive"
 LOOM_DIR = ".loom"
@@ -1315,15 +1316,49 @@ def behind_main(top: str, cfg: Dict[str, Any], fetch: bool = True) -> Tuple[Opti
     return int(count), warnings
 
 
-def fetch_pr(top: str, cfg: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+def _normalize_body(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def body_in_sync(remote: Any, local: Optional[str]) -> Optional[bool]:
+    """Whether the PR body on GitHub equals pr-body.md (LOOM_SPEC.md 8.2).
+
+    None when the file is missing or unreadable (`local` is None) or gh gave no body string.
+    Line ending style and whitespace at the start and the end do not count.
+    """
+    if local is None or not isinstance(remote, str):
+        return None
+    return _normalize_body(remote) == _normalize_body(local)
+
+
+def read_pr_body(path: Optional[str]) -> Optional[str]:
+    """pr-body.md as text; None when it is missing, unreadable, or not UTF-8."""
+    if path is None:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return fh.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def fetch_pr(
+    top: str, cfg: Dict[str, Any], expect_pr: bool = True, body_path: Optional[str] = None
+) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """PR state of the current branch. `expect_pr` is False when the ticket has no `pr:`.
+
+    `body_path` is the task's pr-body.md; the PR body is compared with it, never returned.
+    """
     rc, out, err = run(
-        ["gh", "pr", "view", "--json", "number,state,reviewDecision,statusCheckRollup,mergeStateStatus"],
+        ["gh", "pr", "view", "--json", "number,state,reviewDecision,statusCheckRollup,mergeStateStatus,body"],
         top,
         timeout=GH_TIMEOUT,
     )
     if rc == 127:
         return None, ["gh is not installed; PR state unknown"]
     if rc != 0:
+        if not expect_pr and "no pull requests found" in err:
+            return None, []  # the normal state before describe-pr (LOOM_SPEC.md 8.2)
         first = (err.strip().splitlines() or ["unknown error"])[0]
         return None, ["gh pr view: %s" % first]
     try:
@@ -1344,6 +1379,7 @@ def fetch_pr(top: str, cfg: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], L
         "requiredCheck": required,
         "mergeStateStatus": data.get("mergeStateStatus"),
         "behindMain": behind,
+        "bodyInSync": body_in_sync(data.get("body"), read_pr_body(body_path)),
     }
     if required != "missing":
         others = sorted(name for name, state in checks_by_name(rollup).items()
@@ -1760,7 +1796,8 @@ def compute_state(cwd: str, with_pr: bool = False, for_line: bool = False) -> Op
             warnings.extend(w)
 
     if with_pr and state["task"] and not state["task"]["archived"]:
-        pr, w = fetch_pr(top, cfg)
+        pr, w = fetch_pr(top, cfg, expect_pr=state["task"]["pr"] is not None,
+                         body_path=os.path.join(top, state["task"]["dir"], PR_BODY_FILE))
         state["pr"] = pr
         warnings.extend(w)
 

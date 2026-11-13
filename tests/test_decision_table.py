@@ -47,7 +47,7 @@ FULL_APPROVED = [art("research-questions", "approved"), art("research", "approve
 
 def open_pr(**fields: Any) -> Dict[str, Any]:
     pr = {"number": 57, "state": "OPEN", "reviewDecision": None, "checks": "passing",
-          "mergeStateStatus": "CLEAN", "behindMain": 0}
+          "mergeStateStatus": "CLEAN", "behindMain": 0, "bodyInSync": True}
     pr.update(fields)
     return pr
 

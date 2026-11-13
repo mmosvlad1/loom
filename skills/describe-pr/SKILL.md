@@ -41,7 +41,7 @@ Read these files before you ask the user anything. The skill's tool permissions 
 
 ### Configuration
 
-Take every configuration value from the state, never from `.claude/loom.json`: `mainBranch`, `checks.check`, the doc paths (`docs`, the docs map), and `pullRequest.requiredSections`. Never build a doc path yourself.
+Take every configuration value from the state, never from `.claude/loom.json`: `mainBranch`, `checks.check`, the doc paths (`docs`, the docs map), `pullRequest.requiredSections`, and `ci.requiredCheck`. Never build a doc path yourself.
 
 Below, `<main>` is `mainBranch`, `<n>` is `task.number`, `<slug>` is `task.slug`, and `<task dir>` is `task.dir`. The doc paths:
 
@@ -167,6 +167,10 @@ Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`,
    - **Change outline** has one line per implementation phase (`1. <phase name> — <commit subject>`), then one visual: a file tree of the changed files only, or an interface `diff` block with only signatures and public API. Pick the one that shows the shape of the change better (`visual-conventions.md`). Omit unchanged parts.
    - Decisions links the new ADRs and the task summary by their repository paths.
    - **Required sections**: `pullRequest.requiredSections` from the state lists headings that the project's PR template or a CI check requires (empty by default). A required heading that the layout above already has (the same heading line, e.g. `## Verification`) is that section. Write every other required heading after Decisions (oneshot: after Verification), before `<details>`, in the order of the list, exactly as listed. Fill it from the task's artifacts, or write the single line None. (no backticks) when nothing applies.
+   - **CI item**: the PR does not exist yet, so you cannot verify the result of CI on it. A checklist item about that result has one fixed form: `` - [ ] CI check `<ci.requiredCheck>` passes on this PR ``, with the check name from the state.
+     - Write it only where a checklist names the CI result, for example in a required `## Test plan` section.
+     - Write at most one such line in the body, and no other unticked item about CI.
+     - `/loom:finish-task` ticks it after the check passed.
    - Remove every guidance comment. Add the user's notes from the argument where they fit.
 3. **Size**: count the characters of the body. If it is longer than 60,000, replace the plan inside `<details>` with its `## Phase Overview` section and the line `The full plan is longer than the PR body allows; only its Phase Overview is attached.`
 

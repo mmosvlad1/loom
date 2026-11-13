@@ -261,7 +261,7 @@ class TodayTest(RepoTestCase):
     def test_today_with_pr(self):
         import datetime
         original = ls.fetch_pr
-        ls.fetch_pr = lambda top, cfg: (None, ["gh is not installed; PR state unknown"])
+        ls.fetch_pr = lambda top, cfg, **kw: (None, ["gh is not installed; PR state unknown"])
         self.addCleanup(setattr, ls, "fetch_pr", original)
         git(self.repo, "switch", "-q", "-c", "feat/42-auth-flow")
         self.ticket(self.task_dir("42-auth-flow"))
@@ -451,10 +451,24 @@ class ArtifactsAndLineTest(RepoTestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return json.loads(proc.stdout)
 
+    NO_PR = "echo 'no pull requests found for branch \"feat/42-auth-flow\"' >&2\nexit 1\n"
+
     def test_pr_without_pull_request(self):
-        s = self.fake_gh("echo 'no pull requests found for branch \"feat/42-auth-flow\"' >&2\nexit 1\n")
+        # No `pr:` in the ticket: no PR is the normal state before describe-pr (LOOM_SPEC.md 8.2).
+        s = self.fake_gh(self.NO_PR)
+        self.assertIsNone(s["pr"])
+        self.assertFalse(any("gh pr view" in w for w in s["warnings"]), s["warnings"])
+
+    def test_pr_without_pull_request_but_ticket_pr_warns(self):
+        self.ticket(self.dir, mode="full", pr=57)
+        s = self.fake_gh(self.NO_PR)
         self.assertIsNone(s["pr"])
         self.assertTrue(any("no pull requests found" in w for w in s["warnings"]), s["warnings"])
+
+    def test_pr_other_gh_failure_warns_without_ticket_pr(self):
+        s = self.fake_gh("echo 'To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 4\n")
+        self.assertIsNone(s["pr"])
+        self.assertTrue(any("gh auth login" in w for w in s["warnings"]), s["warnings"])
 
     def test_pr_state_and_routing(self):
         payload = {"number": 57, "state": "OPEN", "reviewDecision": "", "mergeStateStatus": "CLEAN",
@@ -469,7 +483,21 @@ class ArtifactsAndLineTest(RepoTestCase):
         self.assertEqual(s["pr"]["checks"], "failing")
         self.assertIsNone(s["pr"]["reviewDecision"])
         self.assertEqual(s["pr"]["behindMain"], 0)  # no origin: local main is used
+        self.assertIsNone(s["pr"]["bodyInSync"])  # no body from gh, no pr-body.md
         self.assertEqual(s["next"]["command"], "/loom:iterate")
+
+    def test_pr_body_in_sync_with_pr_body_md(self):
+        body = "Closes #42\n\n## Test plan\n- [ ] CI check `check` passes on this PR\n"
+        payload = {"number": 57, "state": "OPEN", "reviewDecision": "", "mergeStateStatus": "CLEAN",
+                   "statusCheckRollup": [], "body": body.replace("\n", "\r\n").rstrip()}
+        script = "cat <<'EOF'\n%s\nEOF\n" % json.dumps(payload)
+        s = self.fake_gh(script)
+        self.assertIsNone(s["pr"]["bodyInSync"])  # no pr-body.md
+        self.assertNotIn("body", s["pr"])  # the body itself is not part of the output
+        write(os.path.join(self.dir, "pr-body.md"), body)
+        self.assertIs(self.fake_gh(script)["pr"]["bodyInSync"], True)
+        write(os.path.join(self.dir, "pr-body.md"), body.replace("[ ]", "[x]"))
+        self.assertIs(self.fake_gh(script)["pr"]["bodyInSync"], False)
 
 
 class FenceWarningTest(RepoTestCase):
@@ -1396,6 +1424,40 @@ class PrRequiredCheckTest(RepoTestCase):
                 s = self.fake_gh(output)
                 self.assertIsNone(s["pr"])
                 self.assertIn("gh pr view returned no JSON object; PR state unknown", s["warnings"])
+
+
+class PrBodyInSyncTest(unittest.TestCase):
+    """`pr.bodyInSync`: the PR body on GitHub against pr-body.md (LOOM_SPEC.md 8.2)."""
+
+    def test_compare(self):
+        body = "Closes #42\n\n## Test plan\n- [ ] CI check `check` passes on this PR\n"
+        cases = (
+            ("equal", body, body, True),
+            ("differs", body.replace("[ ]", "[x]"), body, False),
+            ("CRLF", body.replace("\n", "\r\n"), body, True),
+            ("trailing newline", body.rstrip("\n"), body, True),
+            ("whitespace at the start and the end", "  \n" + body + "\n\n  ", body, True),
+            ("inner whitespace counts", body.replace("\n\n", "\n"), body, False),
+            ("missing file", body, None, None),
+            ("no body from gh", None, body, None),
+        )
+        for name, remote, local, expected in cases:
+            with self.subTest(case=name):
+                self.assertIs(ls.body_in_sync(remote, local), expected)
+
+    def test_read_pr_body(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        path = os.path.join(tmp, "pr-body.md")
+        self.assertIsNone(ls.read_pr_body(None))
+        self.assertIsNone(ls.read_pr_body(path))  # missing
+        with open(path, "wb") as fh:
+            fh.write(b"Closes #42\n\xff\n")
+        self.assertIsNone(ls.read_pr_body(path))  # not UTF-8: unknown, never a guess
+        with open(path, "wb") as fh:
+            fh.write("Closes #42 — ok\n".encode("utf-8"))
+        self.assertEqual(ls.read_pr_body(path), "Closes #42 — ok\n")
+        self.assertIsNone(ls.read_pr_body(tmp))  # a directory is unreadable as a file
 
 
 class MetricsRobustnessTest(RepoTestCase):

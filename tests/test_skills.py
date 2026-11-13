@@ -2082,6 +2082,77 @@ class RequiredSectionsTest(unittest.TestCase):
         self.assertIn("its check for the layout before v1.1 ignores them", spec)
 
 
+CI_ITEM = "- [ ] CI check `<ci.requiredCheck>` passes on this PR"
+
+
+class CiItemTest(unittest.TestCase):
+    """The CI item of the PR body: describe-pr writes it, pr-update unticks it, finish-task ticks it (§13.6, §9.11)."""
+
+    def test_spec_defines_the_fixed_form(self):
+        self.assertIn("**CI item:** the result of CI on the PR", spec_section("### 13.6 PR body", "## 14. Writing Style"))
+        self.assertIn(CI_ITEM, spec_section("### 13.6 PR body", "## 14. Writing Style"))
+        spec = read(os.path.join(ROOT, "LOOM_SPEC.md"))
+        for needle in ("`<task dir>/pr-body.md` has the line, and `pr.bodyInSync` is `true` (§8.2)",
+                       "`Warning: the PR body on GitHub differs from <task dir>/pr-body.md; the CI item is not ticked`",
+                       "`bodyInSync` is `true` when the PR body on GitHub equals `<task dir>/pr-body.md`"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, spec)
+
+    def test_describe_pr_writes_one_fixed_line(self):
+        body = skill_md("describe-pr")
+        self.assertIn("`pullRequest.requiredSections`, and `ci.requiredCheck`. Never build a doc path yourself.", body)
+        draft = body.split("### Draft", 1)[1].split("### Confirm", 1)[0]
+        for needle in ("**CI item**: the PR does not exist yet, so you cannot verify the result of CI on it.",
+                       "A checklist item about that result has one fixed form: `` %s ``, with the check name from "
+                       "the state." % CI_ITEM,
+                       "Write it only where a checklist names the CI result, for example in a required `## Test plan` "
+                       "section.",
+                       "Write at most one such line in the body, and no other unticked item about CI.",
+                       "`/loom:finish-task` ticks it after the check passed."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, draft)
+
+    def test_pr_update_unticks_it(self):
+        step = shared("pr-update.md").split("2. **PR body.**", 1)[1].split("3. **Push**", 1)[0]
+        self.assertIn("Write the CI item of `describe-pr` (`` %s ``) unticked again, also when it was ticked: "
+                      "the checks run again on the new head." % CI_ITEM, step)
+
+    def test_finish_task_ticks_it_with_the_merge_confirmation(self):
+        body = split_frontmatter(skill_md("finish-task"))[1]
+        item = body.split("### CI item", 1)[1].split("## 4. Merge", 1)[0]
+        for needle in ("the unticked line `` - [ ] CI check `<required check>` passes on this PR ``",
+                       "- `pr.requiredCheck` is `passing`. After \"Every required check passes\", this run has not "
+                       "read it yet: run `loom-state --json --pr` now.",
+                       "- `<task dir>/pr-body.md` exists and has the unticked line.",
+                       "- `pr.bodyInSync` is `true`: the PR body on GitHub equals `<task dir>/pr-body.md`. The tick "
+                       "uploads the file as the new body, so it must not differ.",
+                       "With `pr.bodyInSync` `false` and the unticked line in the file, do not tick. Add `Warning: the "
+                       "PR body on GitHub differs from <task dir>/pr-body.md; the CI item is not ticked` to the final "
+                       "message.",
+                       "Otherwise change nothing: no file, no unticked line, another state of the check, or a merge "
+                       "without checks (`missing`).",
+                       "Do not change the file before the \"yes\" of step 4."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, item)
+        # Both ways to step 4 lead through the CI item.
+        step3 = body.split("## 3. Required checks", 1)[1].split("### CI item", 1)[0]
+        self.assertIn("| Every required check passes | Continue with [CI item](#ci-item), then step 4. |", step3)
+        self.assertIn("| `passing` | Continue with [CI item](#ci-item), then step 4.", step3)
+        self.assertNotIn("Continue with step 4", step3)
+        merge = body.split("## 4. Merge", 1)[1].split("## 5.", 1)[0]
+        for needle in ("When the CI item gets its tick (step 3), add: `The CI item of the PR body gets its tick.` "
+                       "One confirmation covers the tick and the merge.",
+                       "Change `[ ]` to `[x]` in that line of `<task dir>/pr-body.md` with the Edit tool.",
+                       "If `gh pr edit` fails, add `Warning: gh pr edit failed: <the error>; the CI item on GitHub is "
+                       "not ticked`. Continue with the merge."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, merge)
+        # Order: the confirmation, then the tick (file, then GitHub), then the merge.
+        order = [merge.index(n) for n in ("2. Ask for confirmation.", "with the Edit tool",
+                                          "`gh pr edit --body-file <task dir>/pr-body.md`", "`gh pr merge --squash")]
+        self.assertEqual(order, sorted(order))
+
+
 class RequiredCheckTest(unittest.TestCase):
     """finish-task builds the ruleset with ci.requiredCheck and reads classic branch protection (§17.3)."""
 
@@ -2238,7 +2309,7 @@ class HardeningTest(unittest.TestCase):
         without = step.split("### Without required checks", 1)[1]
         for needle in ("Without required checks on GitHub (no ruleset or branch protection)",
                        "`gh pr checks --watch`", "`loom-state --json --pr`", "`pr.requiredCheck`",
-                       "| `passing` | Continue with step 4.", "loom checked <required check> by name",
+                       "| `passing` | Continue with [CI item](#ci-item), then step 4.", "loom checked <required check> by name",
                        "| `failing` | Do not merge.", "`Next: /loom:iterate`", "| `pending` | The watch ended early.",
                        "no required checks, and no check named <required check>",
                        '"yes, merge without required checks"'):
