@@ -775,15 +775,30 @@ def list_screens(top: str, screens_dir: str) -> Tuple[List[str], List[str]]:
 
 
 def design_state(top: str, cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
-    """The `design` object of the state (LOOM_SPEC.md 9.14.1): canvas, style, screens."""
+    """The `design` object of the state (LOOM_SPEC.md 9.14.1): canvas, style, screens, pathConflicts."""
     docs = cfg["docs"]
     screens, warnings = list_screens(top, docs["screens"])
     design = {
         "canvas": cfg["design"]["canvas"],
         "style": os.path.isfile(os.path.join(top, docs["style"])),
         "screens": screens,
+        "pathConflicts": design_path_conflicts(cfg),
     }
     return design, warnings
+
+
+def design_path_conflicts(cfg: Dict[str, Any]) -> List[str]:
+    """The docs map warnings for docs.style and docs.screens as if both were in use (LOOM_SPEC.md 9.14.1).
+
+    The screens skill solves them before it writes a design file. Only the
+    warnings that name one of the two roles count, in the order of the checks.
+    `warnings` keeps the rule of optional_docs_roles_in_use.
+    """
+    docs = cfg["docs"]
+    in_use = set(OPTIONAL_DOCS_ROLES)
+    found = docs_overlaps(docs, in_use) + docs_in_work_dir(docs, cfg["workDir"], in_use)
+    keys = ["'docs.%s'" % role for role in OPTIONAL_DOCS_ROLES]
+    return [_printable(w) for w in found if any(key in w for key in keys)]
 
 
 def docs_change_paths(cfg: Dict[str, Any]) -> List[str]:
