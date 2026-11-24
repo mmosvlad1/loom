@@ -582,6 +582,9 @@ class GraderRegexTest(unittest.TestCase):
             '"name":"Bash","input":{"command":"git ls-files docs/design/screens"}',
             # An exclusion does not cover a second, plain use in the same call.
             '"name":"Grep","input":{"pattern":"x","glob":"!docs/design/screens/**","path":"docs/design/screens"}',
+            '"name":"Grep","input":{"pattern":"x","glob":"!{.loom/**,docs/design/screens/**}","path":"docs/design/screens"}',
+            # A brace list without `!` that starts with the path.
+            '"name":"Grep","input":{"pattern":"x","glob":"{docs/design/screens/**,src/**}"}',
             '"name":"Bash","input":{"command":"find . -not -path \'*docs/design/screens/*\' -path \'./docs/design/screens/a\'"}',
         )
         for call in uses:
@@ -593,6 +596,9 @@ class GraderRegexTest(unittest.TestCase):
             '"name":"Bash","input":{"command":"git ls-files \'*.html\' \':(exclude)docs/design/screens\'"}',
             '"name":"Bash","input":{"command":"git ls-files \':!docs/design/screens\'"}',
             '"name":"Bash","input":{"command":"find . -name \'*.html\' -not -path \'*docs/design/screens/*\'"}',
+            # One brace list that also skips the work directory, in both orders (seen in a run on 2026-11-24).
+            '"name":"Grep","input":{"pattern":"cart","path":"/w/cwd","glob":"!{.loom/**,docs/design/screens/**}"}',
+            '"name":"Grep","input":{"pattern":"cart","path":"/w/cwd","glob":"!{docs/design/screens/**,.loom/**}"}',
             # Other paths and other tools do not count.
             '"name":"Read","input":{"file_path":"/w/%s"}' % STYLE_GUIDE_PATH,
             '"name":"Glob","input":{"pattern":"docs/**/*.md"}',
@@ -984,7 +990,8 @@ class ScaffoldTest(unittest.TestCase):
                 state = fx.state()
                 self.assertEqual(state["docs"]["style"], STYLE_GUIDE_PATH)
                 self.assertEqual(state["docs"]["screens"], os.path.dirname(SCREEN_PATH))
-                self.assertEqual(state["design"], {"canvas": None, "style": True, "screens": [SCREEN_PATH]})
+                self.assertEqual(state["design"],
+                                 {"canvas": None, "style": True, "screens": [SCREEN_PATH], "pathConflicts": []})
 
     def test_screen_marker_is_unique_to_the_screen(self):
         """The screen-content-absent grader only works if its marker occurs nowhere but the screen file."""
@@ -1223,7 +1230,7 @@ class ScreensLocalTest(unittest.TestCase):
         # The branch is cut from main without a commit; no style guide and no screen exist.
         self.assertEqual(fx.git("log", "--format=%s", "main..HEAD"), "")
         self.assertEqual(fx.git("status", "--porcelain"), "")
-        self.assertEqual(state["design"], {"canvas": None, "style": False, "screens": []})
+        self.assertEqual(state["design"], {"canvas": None, "style": False, "screens": [], "pathConflicts": []})
         self.assertFalse(os.path.exists(os.path.join(fx.cwd, state["docs"]["style"])))
         for path in ("DESIGN.md", "screens", "log.md"):
             with self.subTest(absent=path):

@@ -458,6 +458,46 @@ class ScreensTaskStateTest(RepoTestCase):
             "-m", "Phase 1: oneshot\n\nFix: add the error state")
         self.assertEqual(self.state()["next"]["command"], "/loom:describe-pr")
 
+    def test_design_paths_commit_keeps_the_route(self):
+        """The design paths commit of the screens skill (no Phase line) leaves the routing as it was."""
+        # Phase 1 pending: the commit sets the paths before any stage draws.
+        self.write_config({"docs": {"decisions": {"dir": "docs/design"}}})
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "decisions in docs/design")
+        d = self.screens_task()
+        self.assertEqual(len(self.state()["design"]["pathConflicts"]), 2)
+        self.write_config({"docs": {"decisions": {"dir": "docs/design"}, "style": "docs/ui/DESIGN.md",
+                                    "screens": "docs/ui/screens"}})
+        git(self.repo, "add", "--", ".claude/loom.json")
+        git(self.repo, "commit", "-q", "-m", "docs(design): set the design paths (#57)")
+        s = self.state()
+        self.assertEqual((s["workingTree"], s["design"]["pathConflicts"], s["warnings"]), ("clean", [], []))
+        self.assertEqual(s["next"]["command"], "/loom:screens")
+        self.assertIn("phase 1 is pending", s["next"]["reason"])
+        # Phase 1 done at the old paths: the commit moves the files, and the task routes as after a landing.
+        self.write_config({"docs": {"decisions": {"dir": "docs/design"}}})
+        write(self.path("docs", "design", "DESIGN.md"), "# Style guide\n")
+        write(self.path("docs", "design", "screens", "sign-in.html"), "<html></html>\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "docs(design): add the sign-in screen (#57)", "-m", "Phase 1: oneshot")
+        write(os.path.join(d, "log.md"), "## Phase 1 — done — abc1234\n")
+        s = self.state()
+        self.assertEqual(len(s["warnings"]), 2, s["warnings"])
+        self.assertEqual(s["design"]["pathConflicts"], s["warnings"])
+        self.write_config({"docs": {"decisions": {"dir": "docs/design"}, "style": "docs/ui/DESIGN.md",
+                                    "screens": "docs/ui/screens"}})
+        os.makedirs(self.path("docs", "ui", "screens"))  # mkdir -p; the screens move one file at a time
+        git(self.repo, "mv", "--", "docs/design/DESIGN.md", "docs/ui/DESIGN.md")
+        git(self.repo, "mv", "--", "docs/design/screens/sign-in.html", "docs/ui/screens/sign-in.html")
+        self.assertEqual(git(self.repo, "diff", "--cached", "--name-status").split("\n")[-1],
+                         "R100\tdocs/design/screens/sign-in.html\tdocs/ui/screens/sign-in.html")
+        git(self.repo, "add", "--", ".claude/loom.json")  # git mv staged the moves; the skill stages nothing else
+        git(self.repo, "commit", "-q", "-m", "docs(design): set the design paths (#57)")
+        s = self.state()
+        self.assertEqual((s["workingTree"], s["design"]["pathConflicts"], s["warnings"]), ("clean", [], []))
+        self.assertEqual((s["design"]["style"], s["design"]["screens"]), (True, ["docs/ui/screens/sign-in.html"]))
+        self.assertEqual(s["next"]["command"], "/loom:describe-pr")
+
     def test_ordinary_docs_task_routes_as_before(self):
         d = self.task_dir("59-other")
         self.ticket(d, mode="oneshot", issue=59)
@@ -1265,7 +1305,7 @@ class DesignConfigTest(RepoTestCase):
         data, warnings = self.resolved()
         self.assertEqual(warnings, [])
         self.assertEqual((data["docs"]["style"], data["docs"]["screens"]), ("docs/design/DESIGN.md", "docs/design/screens"))
-        self.assertEqual(data["design"], {"canvas": None, "style": False, "screens": []})
+        self.assertEqual(data["design"], {"canvas": None, "style": False, "screens": [], "pathConflicts": []})
         data, warnings = self.resolved({"docsDir": "documentation", "design": {}})
         self.assertEqual(warnings, [])
         self.assertEqual((data["docs"]["style"], data["docs"]["screens"]),
@@ -1393,12 +1433,12 @@ class DesignStateTest(RepoTestCase):
         ])
 
     def test_missing_or_empty_directory(self):
-        self.assertEqual(self.design(), ({"canvas": None, "style": False, "screens": []}, []))
+        self.assertEqual(self.design(), ({"canvas": None, "style": False, "screens": [], "pathConflicts": []}, []))
         os.makedirs(self.screens_dir())
         self.assertEqual(self.design()[0]["screens"], [])
         os.rmdir(self.screens_dir())
         write(self.path("docs", "design", "screens"), "a file, not a directory\n")
-        self.assertEqual(self.design(), ({"canvas": None, "style": False, "screens": []}, []))
+        self.assertEqual(self.design(), ({"canvas": None, "style": False, "screens": [], "pathConflicts": []}, []))
 
     def test_custom_screens_directory(self):
         self.write_config({"docs": {"screens": "ui/mockups"}, "design": {"canvas": "https://claude.ai/c/1"}})
@@ -1407,14 +1447,14 @@ class DesignStateTest(RepoTestCase):
         design, warnings = self.design()
         self.assertEqual(warnings, [])
         self.assertEqual(design, {"canvas": "https://claude.ai/c/1", "style": False,
-                                  "screens": ["ui/mockups/home.dc.html"]})
+                                  "screens": ["ui/mockups/home.dc.html"], "pathConflicts": []})
 
     def test_present_without_and_with_a_task(self):
         write(self.path("docs", "design", "DESIGN.md"), "# Style guide\n")
         write(self.screens_dir("home.html"), "x\n")
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-q", "-m", "design")
-        expected = {"canvas": None, "style": True, "screens": ["docs/design/screens/home.html"]}
+        expected = {"canvas": None, "style": True, "screens": ["docs/design/screens/home.html"], "pathConflicts": []}
         for branch in (None, "spike/x"):
             if branch:
                 git(self.repo, "switch", "-q", "-c", branch)
@@ -1432,6 +1472,86 @@ class DesignStateTest(RepoTestCase):
         os.makedirs(sub)
         self.assertEqual(self.design(sub)[0], expected)  # paths stay relative to the git top level
         self.assertEqual(run_loom_state(self.repo, "--line").stdout, "#42 · full · ticket\n")
+
+
+class DesignPathConflictsTest(RepoTestCase):
+    """`design.pathConflicts`: the docs map checks of docs.style and docs.screens as if both were in use
+    (LOOM_SPEC.md 9.14.1); `warnings` keeps the in-use rule."""
+
+    loom_config = {}
+
+    # The texts of the live run: docs.decisions.dir mapped to docs/design.
+    DECISIONS_IN_DESIGN = [
+        ".claude/loom.json: 'docs.decisions.dir' (docs/design) and 'docs.screens' (docs/design/screens) overlap; "
+        "decision records and screens would mix",
+        ".claude/loom.json: 'docs.style' (docs/design/DESIGN.md) is at or below 'docs.decisions.dir' (docs/design); "
+        "keep role files outside the task summary, decision, and screens directories",
+    ]
+
+    def conflicts(self, config):
+        self.write_config(config)
+        s = self.state()
+        return s["design"]["pathConflicts"], s["warnings"]
+
+    def test_default_map_has_no_conflict(self):
+        self.assertEqual(self.conflicts({}), ([], []))
+        self.assertEqual(self.conflicts({"docsDir": "documentation"}), ([], []))
+
+    def test_decisions_in_the_design_directory_without_design_files(self):
+        conflicts, warnings = self.conflicts({"docs": {"decisions": {"dir": "docs/design"}}})
+        self.assertEqual(conflicts, self.DECISIONS_IN_DESIGN)
+        self.assertEqual(warnings, [])  # a project without design files gets no new warning
+
+    def test_decisions_in_the_design_directory_with_design_files(self):
+        write(self.path("docs", "design", "DESIGN.md"), "# Style guide\n")
+        write(self.path("docs", "design", "screens", "home.html"), "x\n")
+        conflicts, warnings = self.conflicts({"docs": {"decisions": {"dir": "docs/design"}}})
+        self.assertEqual(conflicts, self.DECISIONS_IN_DESIGN)
+        self.assertEqual(warnings, self.DECISIONS_IN_DESIGN)  # the same texts
+
+    def test_tasks_above_the_design_directory(self):
+        conflicts, warnings = self.conflicts({"docs": {"tasks": "docs"}})
+        # Only the entries that name docs.style or docs.screens, in the order of the checks.
+        self.assertEqual(conflicts, [
+            ".claude/loom.json: 'docs.tasks' (docs) and 'docs.screens' (docs/design/screens) overlap; "
+            "task summaries and screens would mix",
+            ".claude/loom.json: 'docs.style' (docs/design/DESIGN.md) is at or below 'docs.tasks' (docs); "
+            "keep role files outside the task summary, decision, and screens directories",
+        ])
+        self.assertEqual(len(warnings), 4, warnings)  # tasks and decisions overlap; three role files below docs
+        self.assertFalse([w for w in warnings if "docs.style" in w or "docs.screens" in w], warnings)
+
+    def test_style_path_is_a_role_file(self):
+        conflicts, warnings = self.conflicts({"docs": {"vision": "docs/design/DESIGN.md"}})
+        self.assertEqual(conflicts, [".claude/loom.json: 'docs.style' (docs/design/DESIGN.md) is also 'docs.vision'; "
+                                     "the style guide needs a file of its own"])
+        self.assertEqual(warnings, [])
+
+    def test_design_paths_at_or_below_work_dir(self):
+        conflicts, warnings = self.conflicts({"workDir": "work/design", "docsDir": "work"})
+        self.assertEqual(conflicts, [
+            ".claude/loom.json: 'docs.style' (work/design/DESIGN.md) is at or below workDir (work/design), where loom "
+            "ignores changes; set 'docs.style' or docsDir to a path outside workDir",
+            ".claude/loom.json: 'docs.screens' (work/design/screens) is at or below workDir (work/design), where loom "
+            "ignores changes; set 'docs.screens' or docsDir to a path outside workDir",
+        ])
+        self.assertEqual(warnings, [])
+
+    def test_only_style_in_use_names_the_screens_directories_in_path_conflicts(self):
+        """The one text difference of LOOM_SPEC.md 9.14.1: `warnings` follows the in-use rule, pathConflicts does not."""
+        conflicts, warnings = self.conflicts({"docs": {"style": "notmd.txt", "decisions": {"dir": "docs/design"}}})
+        # The invalid value falls back to its default, and the role stays in use; docs.screens is not in use.
+        self.assertEqual(len(warnings), 2, warnings)
+        self.assertIn("invalid 'docs.style'", warnings[0])
+        self.assertEqual(warnings[1], ".claude/loom.json: 'docs.style' (docs/design/DESIGN.md) is at or below "
+                                      "'docs.decisions.dir' (docs/design); keep role files outside the task summary and "
+                                      "decision directories")
+        self.assertEqual(conflicts, self.DECISIONS_IN_DESIGN)
+
+    def test_configured_design_paths_outside_the_conflict(self):
+        conflicts, warnings = self.conflicts({"docs": {"decisions": {"dir": "docs/design"},
+                                                       "style": "docs/ui/DESIGN.md", "screens": "docs/ui/screens"}})
+        self.assertEqual((conflicts, warnings), ([], []))
 
 
 class SettingsTest(RepoTestCase):

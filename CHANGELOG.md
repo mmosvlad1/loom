@@ -129,6 +129,7 @@ This file lists the notable changes of every loom version. The format follows [K
 - `git push --repo=origin main` and the matching refspec `git push origin :` were not recognized as pushes to the main branch.
 - A configured check with a pipe (`go test ./... | grep -v …`) could not run as configured.
 - The status line script stopped at a malformed `installed_plugins.json` instead of trying the marketplace and the cache.
+- `/loom:screens` landed the style guide and the screens inside another docs role's directory (for example `docs.decisions.dir` mapped to `docs/design`), and the overlap warnings appeared only after the landing. `loom-state --json` now reports these conflicts in advance as `design.pathConflicts`. `screens` proposes free paths, sets `docs.style` and `docs.screens` with the user's confirmation, and commits them as `docs(design): set the design paths (#<n>)` before any design file is written. The onboarding design sets both paths when its docs map takes the default design directory.
 
 ## [1.1.0] - 2026-11-11
 

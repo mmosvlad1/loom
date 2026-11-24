@@ -1916,8 +1916,9 @@ ROLE_PATH_PATTERNS = [
 DESIGN_PATH_PATTERNS = [
     re.compile(r"docs/design"),
     re.compile(r"design/DESIGN\.md"),
-    # The one exception: the draft of the screens skill in the task directory (stage 3 of §9.14.6).
-    re.compile(r"(?<![\w.])(?<!<task dir>/)DESIGN\.md"),
+    # Two exceptions: the draft of the screens skill in the task directory (stage 3 of §9.14.6), and the
+    # proposal of its design paths step, built from `docs.dir` of the state (§9.14.6, §9.13.4).
+    re.compile(r"(?<![\w.])(?<!<task dir>/)(?<!<docs\.dir>/ui/)DESIGN\.md"),
     re.compile(r"design/screens"),
 ]
 
@@ -1984,11 +1985,13 @@ class ConfigFromStateTest(unittest.TestCase):
                      "Read `<docsDir>/conventions.md`.", "`docs/conventions.md`"):
             with self.subTest(text=text):
                 self.assertTrue(any(rx.search(text) for rx in ROLE_PATH_PATTERNS), text)
-        for text in ("Read `docs/design/DESIGN.md`.", "List `<docs>/design/screens/`.", "Read `DESIGN.md` first."):
+        for text in ("Read `docs/design/DESIGN.md`.", "List `<docs>/design/screens/`.", "Read `DESIGN.md` first.",
+                     "Write `<docs>/ui/DESIGN.md`.", "Write `<docs.dir>/DESIGN.md`."):
             with self.subTest(text=text):
                 self.assertTrue(any(rx.search(text) for rx in DESIGN_PATH_PATTERNS), text)
         for text in ("Read the style guide `docs.style`.", "`design.screens` in the state", "`03-design.md`",
-                     "the `design` skill", "Draft it as `<task dir>/DESIGN.md`."):
+                     "the `design` skill", "Draft it as `<task dir>/DESIGN.md`.",
+                     "the style guide: `<docs.dir>/ui/DESIGN.md`;"):
             with self.subTest(text=text):
                 self.assertFalse(any(rx.search(text) for rx in DESIGN_PATH_PATTERNS), text)
         for text in ("Take them from there, never from `.claude/loom.json`.", "`visual-conventions.md`",
@@ -3281,6 +3284,33 @@ class OnboardingDesignTest(unittest.TestCase):
         spec = spec_section("#### 9.13.4 Design: the discussion", "#### 9.13.5")
         self.assertIn("The plan puts a hook change into implementation phase 1", spec)
 
+    def test_design_paths_when_the_map_takes_the_design_directory(self):
+        """The one exception to "the optional roles are not part of onboarding" (§9.13.4, §9.14.6)."""
+        ref = self.reference()
+        self.assertIn("The optional `style` and `screens` are not part of onboarding, with one exception: the "
+                      "[design paths](#design-paths) of topic 3.", ref)
+        self.assertIn("The optional roles `style` and `screens` get no question ([Design paths](#design-paths) below).",
+                      ref)
+        rule = ref.split("#### Design paths", 1)[1].split("\n### ", 1)[0]
+        for needle in ("`tasks` or `decisions` (its directory) at or above `docs.style`, or at, above, or below "
+                       "`docs.screens`;",
+                       "a role file (`vision`, `overview`, `conventions`) at `docs.style`, or at or below `docs.screens`.",
+                       "`style`: `<docs.dir>/ui/DESIGN.md`, and `screens`: `<docs.dir>/ui/screens`",
+                       "This gets no question of its own.", "record the two paths in one Resolved Decision",
+                       "The two roles still get no question, and no file or directory is created for them."):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, rule)
+        spec = spec_section("#### 9.13.4 Design: the discussion", "#### 9.13.5")
+        for needle in ("**Design paths**, the one exception to \"the optional roles are not part of onboarding\".",
+                       "`<docs.dir>/ui/DESIGN.md` and `<docs.dir>/ui/screens`",
+                       "It is one line in the text of the option, not a question of its own, and one Resolved Decision "
+                       "after the user chooses the option."):
+            with self.subTest(spec=needle):
+                self.assertIn(needle, spec)
+        # Research question 7 keeps the five roles.
+        self.assertIn("the optional `style` and `screens` are not part of onboarding, §9.14.1", spec_section(
+            "#### 9.13.3 Research: the fixed question list", "#### 9.13.4"))
+
     def test_no_unconditional_agents_md_ban(self):
         self.assertNotIn("never changes an `AGENTS.md` file itself", self.reference())
 
@@ -4280,7 +4310,8 @@ class ScreensSkillTest(unittest.TestCase):
         values = before_preconditions("screens")
         self.assertIn("Take `docs.vision`, `docs.style`, `docs.screens`, `design.canvas`, `design.style`, and "
                       "`design.screens` from the state. Never build a docs path, and never list the screens directory "
-                      "yourself.", values)
+                      "yourself. The one exception is the proposal of [Design paths](#design-paths), from `docs.dir` "
+                      "and `design.pathConflicts` of the state.", values)
         self.assertIn("`task.screens` is `true`", values)
         self.assertIn("`<branch>` is `docs/<n>-loom-screens`", values)
 
@@ -4372,8 +4403,8 @@ class ScreensSkillTest(unittest.TestCase):
         rows = table_rows(choice)[1:]
         self.assertEqual([r[0] for r in rows], ["The argument has `--local`",
                                                 "On a screens branch: `<task dir>/screens/` holds a screen draft, or "
-                                                "`git diff --name-only <base>...HEAD` lists an `.html` screen below "
-                                                "`docs.screens`",
+                                                "[the branch diff of the screens](#values) lists an `.html` screen "
+                                                "below `docs.screens`",
                                                 "[The canvas check](#the-canvas-check) finds a canvas",
                                                 "`design.canvas` is not `null`", "Otherwise"])
         # A task that already draws in local mode stays there, also in a session with a canvas.
@@ -4456,7 +4487,8 @@ class ScreensSkillTest(unittest.TestCase):
         self.assertIn("With `approve`: [land](#8-landing) again.", done[2])
         self.assertIn("With no argument: when `pr.reviewDecision` is `CHANGES_REQUESTED`, read the [review "
                       "comments](#review-comments); the comments that the user confirms are feedback", done[2])
-        self.assertIn("Otherwise, or when the user confirms none, print the state, and stop with `Next:` from "
+        self.assertIn("Otherwise, or when the user confirms none, run [Design paths](#design-paths) when "
+                      "`design.pathConflicts` is not empty, then print the state, and stop with `Next:` from "
                       "`loom-state`", done[2])
         spec = screens_spec()
         for needle in ("A branch `docs/<n>-loom-screens` exists, locally or on `origin`",
@@ -4483,7 +4515,7 @@ class ScreensSkillTest(unittest.TestCase):
     def test_kickoff(self):
         kickoff = section(screens_body(), "## 4. Kickoff")
         steps = re.findall(r"(?m)^(\d+)\. \*\*(.+?)\.\*\*", kickoff)
-        self.assertEqual([int(n) for n, _ in steps], list(range(1, 8)))  # the 7 steps of §9.14.6
+        self.assertEqual([int(n) for n, _ in steps], list(range(1, 9)))  # the 8 steps of §9.14.6
         for needle in ("refuse, as `start-task` does", "Offer the stash of `git-flow.md` (confirmation)",
                        "the open issues: `gh issue list --state open --limit 100 --json number,title,labels,body`",
                        "run the [drift check](#drift-check)", "A screen that serves neither is not in the scope.",
@@ -4513,7 +4545,7 @@ class ScreensSkillTest(unittest.TestCase):
         restore = section(screens_body(), "## 5. Restore")
         for needle in ("`git log --format=%h --grep='^Phase 1: oneshot' <base>..HEAD`", "## Phase 1 — done — <hash>",
                        "from the Acceptance Criteria of the issue",
-                       "`git diff --name-only <base>...HEAD` lists its file below `docs.screens`",
+                       "[the branch diff of the screens](#values) lists its file below `docs.screens`",
                        "ask whether the drafts have changes that are not landed",
                        "`mv <workDir>/_archive/<n>-loom-screens <workDir>/`",
                        "When `git remote get-url origin` succeeds, run `git fetch origin <main>`, so the base is current.",
@@ -4524,7 +4556,7 @@ class ScreensSkillTest(unittest.TestCase):
         drafts = restore.split("### Landed files as drafts", 1)[1]
         for needle in ("Read the landed file, then Write the draft. A draft that exists stays.",
                        "when `design.style` is `true` and `log.md` has a `done` entry of phase 1, copy `docs.style` to "
-                       "`<task dir>/DESIGN.md`", "`git diff --name-only <base>...HEAD`",
+                       "`<task dir>/DESIGN.md`", "[the branch diff of the screens](#values)",
                        "In local mode, copy an `.html` screen to `<task dir>/screens/<screen ID>.html`.",
                        "A `.dc.html` or image screen cannot become a local HTML draft: say so. It stays as landed, "
                        "without a draft, until feedback on it draws a new one",
@@ -4640,13 +4672,135 @@ class ScreensSkillTest(unittest.TestCase):
             with self.subTest(spec=needle):
                 self.assertIn(needle, spec)
 
+    def test_design_paths(self):
+        """design.pathConflicts is solved with the user before any design file is written (§9.14.6)."""
+        body = screens_body()
+        step = body.split("### Design paths", 1)[1].split("\n### ", 1)[0]
+        for needle in ("`<docs.dir>/ui/DESIGN.md`", "`<docs.dir>/ui/screens`",
+                       "An entry that names both roles (the two paths collide with each other) gets both.",
+                       "The user can name other paths instead.",
+                       # Review item 5: the proposal is checked against the map first.
+                       "When it is at or below `docs.tasks`, `docs.decisions.dir`, or `workDir`, or it is the path of "
+                       "another role, propose two other paths outside every directory of the map.",
+                       # Review item 6: a valid path, checked before the Edit and after it.
+                       "The style guide path ends in `.md`.", "not at or below `workDir`, `.claude/`, `.git/`, or "
+                       "`.loom/`", "`docs.style` and `docs.screens` equal the confirmed paths.",
+                       "Nothing has moved yet.",
+                       "In the kickoff, the confirmation of step 4 covers it: do not ask again.",
+                       # Review item 10: the Next: line of a decline.
+                       "`Result: the design paths conflict with the docs map; nothing changed`, `Next: /loom:screens, "
+                       "then confirm the paths or name others`",
+                       "Use the Read tool on `.claude/loom.json`, then the Edit tool: set `style`, `screens`, or both "
+                       "in its `docs` object", "Add the object when it is missing. Change nothing else.",
+                       "`design.pathConflicts` is `[]`.",
+                       # Review item 1: never another role's file, never the whole screens directory.
+                       "`git mv -- <old docs.style> <new docs.style>`",
+                       "When an entry says `'docs.style' (<path>) is also 'docs.<role>'`, the file is the document of "
+                       "that role: do not move it. The style guide then starts new at the new path.",
+                       "for each path of `design.screens`, run `git mv -- <path> <new docs.screens>/<file name>`",
+                       "the directory can hold `docs.decisions.dir` or a role file",
+                       # Review item 7: the git message of the fallback.
+                       "When `git mv` fails with `fatal: not under version control`",
+                       "`/loom:backlog` can rewrite these issues",
+                       "Run `git add -- .claude/loom.json`.", "Do not stage the moved paths again",
+                       # Review item 8: nothing else goes into the commit.
+                       "Run `git diff --cached --name-status`. It may list only `.claude/loom.json` and the `R` lines "
+                       "of the moves.",
+                       "Write `docs(design): set the design paths (#<n>)` to `<task dir>/commit-msg.txt`",
+                       "with no body and no `Phase` line", "Do not run the checks first.",
+                       "`Result: design paths commit failed: <the error>`, `Next: fix it, then /loom:screens`",
+                       "From now on, take every path from this state",
+                       # Review item 2: also before the state message of a task whose phase 1 is done.
+                       "before the state message of a task whose phase 1 is done",
+                       # Round 2: the move and its directory only for a role whose path changed.
+                       "The style guide, when `design.style` is `true` and `docs.style` changed: run",
+                       "The screens, when `design.screens` is not empty and `docs.screens` changed, one file at a time, "
+                       "never the whole directory: run `mkdir -p <new docs.screens>`.",
+                       # Round 2: an existing file at a new path is a condition of the check step.
+                       "Run `loom-state --json`. Three conditions must hold:",
+                       "No file exists at a new path of a role that the step changes: the new `docs.style`, and "
+                       "`<new docs.screens>/<file name>` for each screen to move. Run `test -e <path>`",
+                       # Round 2: no other paths: the config goes back, and the step stops as step 1 does.
+                       "When the user gives no other paths, Edit `.claude/loom.json` back to the values of the "
+                       "starting state: remove a key that the step added. Then stop with the result of step 1"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, step)
+        self.assertNotIn("the whole directory, `git mv", step)
+        self.assertNotIn("When a file already exists at a new path", step)
+        self.assertLess(step.index("Three conditions must hold"), step.index("4. **Move.**"))
+        # Round 2: the Result: line names the design paths commit of this run.
+        final = section(body, "## 10. Final message")
+        self.assertIn("When [Design paths](#design-paths) committed in this run, the `Result:` line of the state "
+                      "message, of the drafts message, and of every landing message (its stops included) ends with "
+                      "`; design paths set (<commit short hash>)`.", final)
+        # The config is checked before any file moves (no move back).
+        self.assertLess(step.index("3. **Check.**"), step.index("4. **Move.**"))
+        # Review item 1: a shared style path is no style guide until the step ran.
+        self.assertIn("Until [Design paths](#design-paths) has run, treat `design.style` as `false`: Direction stays "
+                      "`open`, and no stage reads or copies that file.", before_preconditions("screens"))
+        # Review item 4: a move without a change is not work of this branch.
+        self.assertIn("**The branch diff of the screens**: run `git diff --name-status -M <base>...HEAD`. Skip each "
+                      "`R100` line", before_preconditions("screens"))
+        self.assertNotIn("git diff --name-only <base>...HEAD", body)
+        # Review item 9: Design paths, then the in-progress entry, then the draft change.
+        feedback = section(body, "## 7. Feedback")
+        self.assertLess(feedback.index("run [Design paths](#design-paths) first"),
+                        feedback.index("append the `in-progress` entry next"))
+        self.assertLess(feedback.index("append the `in-progress` entry next"), feedback.index("- Change the drafts"))
+        # Every Bash command of the step is one command (bash-calls.md).
+        self.assertNotIn("&&", step)
+        # Where it runs: the kickoff after step 7, and on a screens branch before drawing, feedback, and the landing.
+        kickoff = section(body, "## 4. Kickoff")
+        self.assertIn("When `design.pathConflicts` is not empty, also show each entry and the proposal of "
+                      "[Design paths](#design-paths).", kickoff)
+        self.assertLess(kickoff.index("When `design.pathConflicts` is not empty, also show"),
+                        kickoff.index("Ask for confirmation once."))
+        self.assertLess(kickoff.index("7. **Ticket and brief.**"), kickoff.index("8. **Design paths.**"))
+        self.assertLess(kickoff.index("8. **Design paths.**"), kickoff.index("Then continue with the [stages]"))
+        where = section(body, "## 3. Where it runs")
+        self.assertIn("On a screens branch, when `design.pathConflicts` is not empty, run [Design paths](#design-paths) "
+                      "first: before a stage that draws (stages 2 to 4), before feedback changes a draft, before the "
+                      "landing plan, and before the state message of a task whose phase 1 is done. This holds after a "
+                      "restore too.", where)
+        self.assertIn("Before stages 2 to 4, run [Design paths](#design-paths)", section(body, "## 6. Stages"))
+        self.assertIn("run [Design paths](#design-paths) first", section(body, "## 7. Feedback"))
+        landing = section(body, "## 8. Landing")
+        self.assertLess(landing.index("run [Design paths](#design-paths) first"), landing.index("1. **Plan.**"))
+        self.assertIn("the landing writes to `docs.style` and `docs.screens` of the state read after it", landing)
+        # Review item 11: a moved target takes its old path from the design paths commits, also with large changes.
+        for needle in ("`git log --format=%h --reverse --grep='^docs(design): set the design paths' <hash>..HEAD`",
+                       "`git show --name-status -M --format= <that hash>`",
+                       "`git diff --name-status -M <hash> -- <old path> <target>`",
+                       "also a `D` and an `A` line for a file with large changes",
+                       "`git show <hash>:<target>` below reads `git show <hash>:<old path>`"):
+            with self.subTest(landing=needle):
+                self.assertIn(needle, landing)
+        spec = screens_spec()
+        for needle in ("**Design paths.**", "`<docs.dir>/ui/DESIGN.md` for the style guide and "
+                       "`<docs.dir>/ui/screens` for the screens", "8. When `design.pathConflicts` is not empty, runs "
+                       "the design paths step", "`Result: the design paths conflict with the docs map; nothing changed`",
+                       "`Next: /loom:screens, then confirm the paths or name others`",
+                       "`docs(design): set the design paths (#<n>)`", "with phase 1 `done`, the task routes as after a "
+                       "landing", "**A shared style path.**", "It never moves the old screens directory as a whole",
+                       "`fatal: not under version control`", "`git diff --cached --name-status`",
+                       "Nothing has moved yet, so nothing needs to move back.",
+                       "before the state message of a task whose phase 1 is done",
+                       "**The branch diff of the screens.**", "skips its `R100` lines",
+                       "`git diff --name-status -M <hash> -- <old path> <target>`",
+                       "no file may exist at a new path of a role that the step changes",
+                       "edits `.claude/loom.json` back to the values of the starting state",
+                       "only for a role whose path changed", "ends with `; design paths set (<commit short hash>)`"):
+            with self.subTest(spec=needle):
+                self.assertIn(needle, spec)
+        self.assertIn("`docs(design): set the design paths (#<n>)`", spec_section("### 16.2 Commits", "### 16.3"))
+
     def test_in_progress_entry_after_a_landing(self):
         body = screens_body()
         rule = body.split("### Changes after a landing", 1)[1].split("\n## 4. Kickoff", 1)[0]
         self.assertIn("## Phase 1 — in-progress\nStarted: <today>", rule)
         self.assertIn("Skip it when the last entry of phase 1 is already `in-progress`.", rule)
         self.assertIn("routes the task to `/loom:screens`, and no skill merges the old screens", rule)
-        self.assertIn("After a landing, append the `in-progress` entry first", section(body, "## 7. Feedback"))
+        self.assertIn("After a landing, append the `in-progress` entry next", section(body, "## 7. Feedback"))
         self.assertIn("The `in-progress` entry in `log.md` makes it visible", screens_spec())
 
     def test_final_messages(self):
@@ -4896,7 +5050,9 @@ class ScreensTaskInOtherSkillsTest(unittest.TestCase):
         # screens takes the items as feedback (an argument), and its own reading of comments never names iterate.
         done_row = [r for r in table_rows(section(screens_body(), "## 3. Where it runs").split("### ", 1)[0])
                     if "Phase 1 is done" in r[1]][0]
-        self.assertTrue(done_row[2].startswith("With feedback: first append the `in-progress` entry"))
+        self.assertTrue(done_row[2].startswith("With feedback: run [Design paths](#design-paths) when "
+                                               "`design.pathConflicts` is not empty, then append the `in-progress` "
+                                               "entry"))
         self.assertNotIn("/loom:iterate", done_row[2])
         spec = screens_spec()
         for needle in ("**Review comments on the PR of a screens task.**",
@@ -4954,8 +5110,12 @@ class ScreensTaskInOtherSkillsTest(unittest.TestCase):
         self.assertIn("The glossary terms **screens task**, **canvas**, **local mode**, and **stage**.", row)
 
     def test_spec_names_screens_as_the_writer_of_design_canvas(self):
-        self.assertIn("reads `design` from `loom.json`, except `screens`, which writes `design.canvas` (§9.14.7).",
-                      spec_text())
+        self.assertIn("reads `design` from `loom.json`, except `screens`, which writes `design.canvas` (§9.14.7) and, "
+                      "in its design paths step, `docs.style` and `docs.screens` (§9.14.6).", spec_text())
+        self.assertIn("The one exception is the proposal of new design paths, built from `docs.dir` of the state: in "
+                      "the design paths step of `screens` (§9.14.6) and in onboarding (§9.13.4).", spec_text())
+        self.assertIn("The one exception is onboarding (§9.13.4): when its docs map takes the default design "
+                      "directory, it also sets `docs.style` and `docs.screens`", spec_text())
 
     def test_stage_and_phase_in_the_glossary(self):
         """N11: "stage" is a term of screens; the entry of "phase" no longer calls it a synonym."""
@@ -4986,7 +5146,7 @@ class ScreensTaskInOtherSkillsTest(unittest.TestCase):
         for needle in ("`task.screens` is `true`", "for each `Covers #<k>` line of the ticket's Context",
                        "add the line `Closes #<k>` after `Closes #<n>`",
                        "only when the screen of issue `#<k>` is in the branch diff",
-                       "`git diff origin/<main>...HEAD --name-only`", "below `docs.screens`",
+                       "`git diff origin/<main>...HEAD --name-status -M`", "Skip each `R100` line", "below `docs.screens`",
                        "without `origin/<main>`: the local `<main>`"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, rule)
@@ -4999,8 +5159,10 @@ class ScreensTaskInOtherSkillsTest(unittest.TestCase):
         # in the same words as in describe-pr.
         method = ("     - For each `Covers #<k>` line of the ticket's Context, run `gh issue view <k> --json title`. Its "
                   "title `Design screens: update <screen ID>` names the screen.\n"
-                  "     - The branch diff: `git diff origin/<main>...HEAD --name-only` (without `origin/<main>`: the "
-                  "local `<main>`; `<main>` is `mainBranch`).\n"
+                  "     - The branch diff: `git diff origin/<main>...HEAD --name-status -M` (without `origin/<main>`: "
+                  "the local `<main>`; `<main>` is `mainBranch`). Skip each `R100` line: a move without a change, for "
+                  "example by the design paths step of `screens`, is not work of this branch. A rename line names the "
+                  "new path.\n"
                   "     - The screen is in the diff when the diff lists a file below `docs.screens` with that screen ID. "
                   "Then add the line `Closes #<k>` after `Closes #<n>`.\n"
                   "     - Keep no line whose screen is not in the diff: a covered issue whose screen did not land stays "
@@ -5040,6 +5202,8 @@ class ScreensTaskInOtherSkillsTest(unittest.TestCase):
                        "`docs(design): <summary> (#<n>)` | `Phase 1: oneshot` |",
                        "| Canvas commit | `screens` (when it creates the canvas) | "
                        "`docs(design): record the canvas (#<n>)` | none: no `Phase` line |",
+                       "| Design paths commit | `screens` (when it sets the design paths) | "
+                       "`docs(design): set the design paths (#<n>)` | none: no `Phase` line |",
                        "`finish-task`, and `screens` follow them"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, flow)

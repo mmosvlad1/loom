@@ -166,7 +166,7 @@ Follow the Rebase rules of `git-flow.md`: the guarded `git fetch origin <main>`,
    - oneshot: only `Closes #<n>`, Why, and Verification. Keep it short.
    - **Covered issues** (a screens task, `task.screens` is `true`): for each `Covers #<k>` line of the ticket's Context, add the line `Closes #<k>` after `Closes #<n>`, only when the screen of issue `#<k>` is in the branch diff. The shared `pr-update.md` repeats this method for a later update of the body:
      - For each `Covers #<k>` line of the ticket's Context, run `gh issue view <k> --json title`. Its title `Design screens: update <screen ID>` names the screen.
-     - The branch diff: `git diff origin/<main>...HEAD --name-only` (without `origin/<main>`: the local `<main>`; `<main>` is `mainBranch`).
+     - The branch diff: `git diff origin/<main>...HEAD --name-status -M` (without `origin/<main>`: the local `<main>`; `<main>` is `mainBranch`). Skip each `R100` line: a move without a change, for example by the design paths step of `screens`, is not work of this branch. A rename line names the new path.
      - The screen is in the diff when the diff lists a file below `docs.screens` with that screen ID. Then add the line `Closes #<k>` after `Closes #<n>`.
      - Keep no line whose screen is not in the diff: a covered issue whose screen did not land stays open.
    - **Why** is exactly one sentence of at most 25 words: the problem or need this PR answers (from `00-ticket.md`). It is not a list of what changed.

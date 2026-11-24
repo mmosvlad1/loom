@@ -46,7 +46,9 @@ Read these files before you ask the user anything. The skill's tool permissions 
 - `<main>` is `mainBranch`, `<workDir>` is `workDir`, and `<drafts>` is `<workDir>/_drafts`, all from the state.
 - `<n>` is the issue number of the screens task. `<branch>` is `docs/<n>-loom-screens`.
 - `<task dir>` is `task.dir` from the state. Before the task directory exists (kickoff, restore), it is `<workDir>/<n>-loom-screens`.
-- **Design paths.** Take `docs.vision`, `docs.style`, `docs.screens`, `design.canvas`, `design.style`, and `design.screens` from the state. Never build a docs path, and never list the screens directory yourself.
+- **Docs paths.** Take `docs.vision`, `docs.style`, `docs.screens`, `design.canvas`, `design.style`, and `design.screens` from the state. Never build a docs path, and never list the screens directory yourself. The one exception is the proposal of [Design paths](#design-paths), from `docs.dir` and `design.pathConflicts` of the state.
+- **A shared style path**: an entry of `design.pathConflicts` says `'docs.style' (<path>) is also 'docs.<role>'`. The file at `docs.style` is then the document of that role, not a style guide. Until [Design paths](#design-paths) has run, treat `design.style` as `false`: Direction stays `open`, and no stage reads or copies that file.
+- **The branch diff of the screens**: run `git diff --name-status -M <base>...HEAD`. Skip each `R100` line: a move without a change, for example by [Design paths](#design-paths), is not work of this branch. Every other line lists a file of this branch; a rename line names its new path.
 - **A screens branch**: `task.screens` is `true`. A screens branch without a task directory has no `task`: there, `branch` has the form `docs/<k>-loom-screens`, and `<n>` is `<k>`.
 - **Phase 1**: the only implementation phase of the screens task. It is done when `implementation.done` is `1`; its status is the first entry of `implementation.phases`.
 - **The base**: `origin/<main>` when `git remote get-url origin` succeeds, else `<main>`.
@@ -85,7 +87,7 @@ The *drawing target* of a screens task is `canvas` or `local`. The brief records
 | Condition | Drawing |
 |---|---|
 | The argument has `--local` | `local`: `forced by --local`. When `design.canvas` is not `null`, add the `Warning:` line of the table above. On a screens branch, copy the [landed files as drafts](#landed-files-as-drafts) first. |
-| On a screens branch: `<task dir>/screens/` holds a screen draft, or `git diff --name-only <base>...HEAD` lists an `.html` screen below `docs.screens` | `local`: `this task already draws in local mode` |
+| On a screens branch: `<task dir>/screens/` holds a screen draft, or [the branch diff of the screens](#values) lists an `.html` screen below `docs.screens` | `local`: `this task already draws in local mode` |
 | [The canvas check](#the-canvas-check) finds a canvas | `canvas` |
 | `design.canvas` is not `null` | `canvas`: the screens of the project are on its canvas. [No canvas in this session](#no-canvas-in-this-session) applies. |
 | Otherwise | `local`, with the reason of the canvas check |
@@ -113,9 +115,11 @@ Take the first matching row:
 | A screens branch | `task` is `null`, `task.archived` is `true`, or the directory `task.dir` is missing (a fresh clone, a deleted directory) | [Restore](#5-restore) it, then take this table again |
 | A screens branch | `pr.state` is `MERGED` | Stop: `Result: the PR of screens task #<n> is merged`, `Next: /loom:finish-task` |
 | A screens branch | Phase 1 is not done | With `approve`: the [landing](#8-landing), when stage 3 is done and at least one screen is `drafted`; otherwise say that `approve` waits for the drafts, and continue at the first [stage](#6-stages) whose result the brief lacks. With other text: [feedback](#7-feedback) when stage 4 is done; otherwise the answer of that first stage, and continue there. With no argument: continue at that first stage; when the brief lacks no result, stop with the [final message](#10-final-message) of the drafts (`Next: give feedback, or /loom:screens approve`). |
-| A screens branch | Phase 1 is done, and the PR is not merged | With feedback: first append the `in-progress` entry of phase 1 to `log.md` ([Changes after a landing](#changes-after-a-landing)), then [change the drafts](#7-feedback) and stop. With `approve`: [land](#8-landing) again. With no argument: when `pr.reviewDecision` is `CHANGES_REQUESTED`, read the [review comments](#review-comments); the comments that the user confirms are feedback, as above. Otherwise, or when the user confirms none, print the state, and stop with `Next:` from `loom-state` |
+| A screens branch | Phase 1 is done, and the PR is not merged | With feedback: run [Design paths](#design-paths) when `design.pathConflicts` is not empty, then append the `in-progress` entry of phase 1 to `log.md` ([Changes after a landing](#changes-after-a-landing)), then [change the drafts](#7-feedback) and stop. With `approve`: [land](#8-landing) again. With no argument: when `pr.reviewDecision` is `CHANGES_REQUESTED`, read the [review comments](#review-comments); the comments that the user confirms are feedback, as above. Otherwise, or when the user confirms none, run [Design paths](#design-paths) when `design.pathConflicts` is not empty, then print the state, and stop with `Next:` from `loom-state` |
 
 On a screens branch, check the ticket first: when its `mode` is not `oneshot` (another mode, or none), change only the `mode:` line of its frontmatter to `mode: oneshot`. `screens` owns the mode of the screens task. Name the change in a `Warning:` line of the final message.
+
+On a screens branch, when `design.pathConflicts` is not empty, run [Design paths](#design-paths) first: before a stage that draws (stages 2 to 4), before feedback changes a draft, before the landing plan, and before the state message of a task whose phase 1 is done. This holds after a restore too.
 
 ### Switch to the screens branch
 
@@ -141,6 +145,48 @@ When you append it, first bring the drafts to the landed state, so a fix of a la
 1. Run the check of [landing step 1.1](#8-landing) for every target. It finds each change made outside the drafts since the last landing.
 2. Copy each such change into its draft: Read the file, then Write the draft. On a canvas, publish it as the artboard of its screen ID.
 3. When the draft also changed since the last landing (the user edited the canvas by hand), merge them as step 1.1 describes.
+
+### Design paths
+
+`loom-state` checks `docs.style` and `docs.screens` against the docs map only when they are in use: `loom.json` sets the key, or the path exists. So a project that maps another role into the default design directory sees no warning before the first landing. `design.pathConflicts` lists these conflicts in advance. Solve them with the user before any design file is written.
+
+**Where it runs.** Only when `design.pathConflicts` is not empty:
+
+- kickoff step 8, after the branch and the ticket exist;
+- on a screens branch, before a stage that draws (stages 2 to 4), before feedback changes a draft, before the landing plan, and before the state message of a task whose phase 1 is done. This holds after a restore too.
+
+**The proposal.** Propose a new path for each role that an entry of `design.pathConflicts` names (`'docs.style'` or `'docs.screens'`):
+
+- the style guide: `<docs.dir>/ui/DESIGN.md`;
+- the screens: `<docs.dir>/ui/screens`.
+
+`<docs.dir>` is `docs.dir` from the state. An entry that names both roles (the two paths collide with each other) gets both. The user can name other paths instead.
+
+Check each proposed path against the map before you ask. When it is at or below `docs.tasks`, `docs.decisions.dir`, or `workDir`, or it is the path of another role, propose two other paths outside every directory of the map.
+
+**A valid path** is relative, without a `..` segment, and not at or below `workDir`, `.claude/`, `.git/`, or `.loom/`. The style guide path ends in `.md`. Write each path without `./` at the start and without `/` at the end. Check a path that the user names by these rules before step 2, and ask again when it fails.
+
+**The step.** The old paths are `docs.style` and `docs.screens` of the state that the step starts with; `design.style` and `design.screens` also come from that state.
+
+1. **Ask.** Show each entry of `design.pathConflicts` and the proposed paths. Ask for confirmation once. In the kickoff, the confirmation of step 4 covers it: do not ask again. Without "yes", stop: `Result: the design paths conflict with the docs map; nothing changed`, `Next: /loom:screens, then confirm the paths or name others`.
+2. **Config.** Use the Read tool on `.claude/loom.json`, then the Edit tool: set `style`, `screens`, or both in its `docs` object to the confirmed paths. Add the object when it is missing. Change nothing else.
+3. **Check.** Run `loom-state --json`. Three conditions must hold:
+   - `docs.style` and `docs.screens` equal the confirmed paths. An invalid value falls back to its default with a warning.
+   - `design.pathConflicts` is `[]`.
+   - No file exists at a new path of a role that the step changes: the new `docs.style`, and `<new docs.screens>/<file name>` for each screen to move. Run `test -e <path>` for each of them, one command per call. Exit status 0 means that a file exists.
+
+   If one fails, show the `warnings` entry of the path, the entries of `design.pathConflicts`, or the existing files. Nothing has moved yet. Ask the user for other paths, then repeat from step 2. When the user gives no other paths, Edit `.claude/loom.json` back to the values of the starting state: remove a key that the step added. Then stop with the result of step 1: `Result: the design paths conflict with the docs map; nothing changed`, `Next: /loom:screens, then confirm the paths or name others`.
+4. **Move.** Move the files at the old paths, one command per call:
+   - The style guide, when `design.style` is `true` and `docs.style` changed: run `mkdir -p <the parent directory of the new docs.style>`, then `git mv -- <old docs.style> <new docs.style>`. When an entry says `'docs.style' (<path>) is also 'docs.<role>'`, the file is the document of that role: do not move it. The style guide then starts new at the new path.
+   - The screens, when `design.screens` is not empty and `docs.screens` changed, one file at a time, never the whole directory: run `mkdir -p <new docs.screens>`. Then, for each path of `design.screens`, run `git mv -- <path> <new docs.screens>/<file name>`. Every other file of the old directory stays where it is: the directory can hold `docs.decisions.dir` or a role file.
+   - When `git mv` fails with `fatal: not under version control` (a file of a landing that stopped before its commit), run `mv <old path> <new path>` instead.
+   - Say that every issue whose `## Screens` section names an old path needs the new path, and that `/loom:backlog` can rewrite these issues.
+5. **Commit.**
+   1. Run `git add -- .claude/loom.json`. `git mv` already staged the moves. Do not stage the moved paths again: a landing that stopped on failing checks can have left changes there, and they belong to the next landing.
+   2. Run `git diff --cached --name-status`. It may list only `.claude/loom.json` and the `R` lines of the moves. When it lists more (for example the staged files of a landing whose commit a hook refused), show the list and ask the user before you commit.
+   3. Write `docs(design): set the design paths (#<n>)` to `<task dir>/commit-msg.txt` (Read it first when it exists), with no body and no `Phase` line. Run `git commit -F <task dir>/commit-msg.txt`. Do not run the checks first.
+   4. If the commit fails (a hook refuses it), stop: `Result: design paths commit failed: <the error>`, `Next: fix it, then /loom:screens`.
+6. **State.** Run `loom-state --json`. From now on, take every path from this state: the stages, the drafts, and the landing use its `docs.style` and `docs.screens`.
 
 ### Review comments
 
@@ -169,6 +215,7 @@ Run [the `gh` check](#values) before step 1: the kickoff reads and writes issues
    - Also list every open issue whose title starts with `Design screens:` and that has no branch `docs/<k>-loom-screens` (locally or on `origin`):
      - an update issue, `Design screens: update <screen ID>`: the user chooses which ones this task covers;
      - any other one (a kickoff that stopped after it created the issue, or an issue written by hand): it becomes the issue of this task. With several, the user picks one; the others are named and stay open.
+   - When `design.pathConflicts` is not empty, also show each entry and the proposal of [Design paths](#design-paths). The confirmation below covers the new paths. The user can name other paths instead.
    - Show the issue command and the branch of step 5 and step 6 in the same message. Ask for confirmation once. Without "yes", stop: `Result: no screens task started; nothing changed`.
 5. **Issue.** After the confirmation:
    - Draft the body in `issue-format.md` form: Context, then Acceptance Criteria with one line per screen and state (`- [ ] <screen ID>: <what the state shows>`). The Context ends with one line `Covers #<k>` per covered update issue. The body has no `## Screens` section.
@@ -186,7 +233,8 @@ Run [the `gh` check](#values) before step 1: the kickoff reads and writes issues
    2. Write `<task dir>/00-ticket.md` from `ticket-template.md`: `task: <n>-loom-screens`, `phase: ticket`, `mode: oneshot`, `size: S`, `issue: <n>`, `url: <url>`. The body is a verbatim copy of the issue, as `start-task` writes it.
    3. Write the brief `<task dir>/screens-brief.md` from `brief-template.md`: the drawing target (`drawing: canvas` or `drawing: local`), the confirmed Scope, what the user already said about Audience and References, and every screen `planned`. Direction is `open`; when `design.style` is `true`, it is the direction of the style guide.
    4. When the drift check chose a file over its artboard: [read the canvas](#read-the-canvas), then publish each such file as the artboard of its screen ID.
-   5. Run `loom-state --json --pr` (State after a switch). Continue with the [stages](#6-stages) in this run.
+   5. Run `loom-state --json --pr` (State after a switch).
+8. **Design paths.** When `design.pathConflicts` of that state is not empty, run [Design paths](#design-paths) with the paths that the user confirmed in step 4. Then continue with the [stages](#6-stages) in this run.
 
 ## 5. Restore
 
@@ -208,7 +256,7 @@ Otherwise restore the directory. Decisions that only the lost brief held are gon
 
 3. Write a new brief from the Acceptance Criteria of the issue: the [drawing target](#2-canvas-or-local-mode), one Scope line per screen, and one Screens row per screen and state. Audience and References stay empty, and Direction is `open`; when `design.style` is `true`, Direction is the direction of the style guide. With `design.canvas` set and a session that can draw on a canvas, the drawing target is `canvas`, unless the task already draws in local mode (the table of section 2).
 4. Copy the [landed files as drafts](#landed-files-as-drafts).
-5. A screen is `drafted` when its artboard exists (canvas; skip this check in a session without a canvas), when `<task dir>/screens/<screen ID>.html` exists (local mode), or when `git diff --name-only <base>...HEAD` lists its file below `docs.screens`. Else it is `planned`.
+5. A screen is `drafted` when its artboard exists (canvas; skip this check in a session without a canvas), when `<task dir>/screens/<screen ID>.html` exists (local mode), or when [the branch diff of the screens](#values) lists its file below `docs.screens`. Else it is `planned`.
 6. After a restore with a `done` entry, ask whether the drafts have changes that are not landed. On "yes", append the `in-progress` entry ([Changes after a landing](#changes-after-a-landing)).
 
 ### Landed files as drafts
@@ -216,13 +264,13 @@ Otherwise restore the directory. Decisions that only the lost brief held are gon
 The landing writes the drafts over the landed files, so each landed file needs its draft. Copy each landed file below to its draft path: Read the landed file, then Write the draft. A draft that exists stays.
 
 - The style guide: when `design.style` is `true` and `log.md` has a `done` entry of phase 1, copy `docs.style` to `<task dir>/DESIGN.md`.
-- The screens: each file below `docs.screens` that `git diff --name-only <base>...HEAD` lists.
+- The screens: each file below `docs.screens` that [the branch diff of the screens](#values) lists.
   - In local mode, copy an `.html` screen to `<task dir>/screens/<screen ID>.html`. A `.dc.html` or image screen cannot become a local HTML draft: say so. It stays as landed, without a draft, until feedback on it draws a new one ([Feedback](#7-feedback)).
   - On a canvas, the artboards are the screen drafts: copy nothing.
 
 ## 6. Stages
 
-Record each result in the brief, and change `updated`. A stage whose result the brief already holds is skipped (`brief-template.md` names each result). The stops of stages 1, 2, and 4 are the only stops before `approve`.
+Record each result in the brief, and change `updated`. A stage whose result the brief already holds is skipped (`brief-template.md` names each result). The stops of stages 1, 2, and 4 are the only stops before `approve`. Before stages 2 to 4, run [Design paths](#design-paths) when `design.pathConflicts` is not empty.
 
 1. **Brief.** In one message, ask what the Audience and References sections lack. References are sites, screenshots, brand assets, or an existing UI. They change the result more than any rule, so ask before you draw. Stop for the answer: end with `Answer here, or later with /loom:screens <answer>.` An answer in this session continues with stage 2.
 2. **Direction.** Skipped when `design.style` is `true`: the direction is settled. Otherwise draw 2-4 different low-fidelity directions: artboards titled `Direction A`, `Direction B`, and so on (canvas), or `<task dir>/screens/_direction-<letter>.html` (local mode). Name the tradeoff of each. Stop for the choice: end with `Choose here, or later with /loom:screens <choice>.` Never pick the direction yourself, unless the user says so. Record the choice in Direction and in Decisions.
@@ -233,22 +281,28 @@ Record each result in the brief, and change `updated`. A stage whose result the 
 
 Feedback comes in the conversation or as the argument.
 
+- When `design.pathConflicts` is not empty, run [Design paths](#design-paths) first, before the `in-progress` entry: a declined proposal leaves `log.md` unchanged.
+- After a landing, append the `in-progress` entry next ([Changes after a landing](#changes-after-a-landing)), before you change a draft.
 - Change the drafts (the style guide draft, the artboards, or the local files). Record each decision in Decisions.
 - A decision that is settled stays settled. When feedback contradicts a recorded decision, name the decision and ask before you change it.
 - A screen that the feedback adds joins Scope and Screens, if it serves the vision or an issue.
 - In local mode, feedback on a landed `.dc.html` or image screen (it has no draft) draws a new draft `<task dir>/screens/<screen ID>.html`. Tell the user: the landing then removes the old file, because a screen ID has one file.
-- After a landing, append the `in-progress` entry first ([Changes after a landing](#changes-after-a-landing)).
 - Then stop again with the final message of the drafts: `Next: give feedback, or /loom:screens approve`.
 
 ## 8. Landing
 
-`/loom:screens approve` lands the drafts in the repository. On a canvas, [read the canvas](#read-the-canvas) first: the user can edit it by hand.
+`/loom:screens approve` lands the drafts in the repository. When `design.pathConflicts` is not empty, run [Design paths](#design-paths) first: the landing writes to `docs.style` and `docs.screens` of the state read after it. On a canvas, [read the canvas](#read-the-canvas) first: the user can edit it by hand.
 
 A *target* is a file that this landing writes: `docs.style`, and the path below `docs.screens` of each `drafted` screen that has a draft.
 
 1. **Plan.**
    1. **Changes outside the drafts.** A target that differs from its draft can hold a change that no draft has: a fix of a landed file, for example by the user. Find these targets:
       - After a landing: `<hash>` is the hash of the newest `done` entry of phase 1 in `log.md` whose `Reviewer:` line names `/loom:screens`. When git does not know it (a rebase rewrote it), take the first line of `git log --format=%h --grep='^Phase 1: oneshot' <base>..HEAD`. Run `git diff --name-only <hash> -- <targets>`: it lists each target with a commit or an uncommitted change since that landing. Also run `git status --porcelain -- <targets>` for untracked targets.
+      - When [Design paths](#design-paths) moved the files after that landing, the first command lists each moved target. Find the moves:
+        1. Run `git log --format=%h --reverse --grep='^docs(design): set the design paths' <hash>..HEAD`. It prints one hash per design paths commit, oldest first.
+        2. For each of them, run `git show --name-status -M --format= <that hash>`. Each `R` line pairs an old path with a new path. Follow a file through the commits in this order: its *old path* is its path at `<hash>`.
+        3. For each moved target, run `git diff --name-status -M <hash> -- <old path> <target>` in place of the first command. No output, or one `R100` line, means no change since that landing. Any other output means a change, also a `D` and an `A` line for a file with large changes.
+        4. For a moved target, `git show <hash>:<target>` below reads `git show <hash>:<old path>`.
       - Before the first landing, only a dirty or untracked target can hold such a change: run `git status --porcelain -- <targets>`.
       - Keep each listed target that also differs from its draft. For each one, show its `diff` against the draft, and ask which side wins (one question for all of them):
         - **the file**: copy it into the draft first: Read the file, then Write the draft. On a canvas, publish it as the artboard of its screen ID.
@@ -366,3 +420,5 @@ Next: /clear, then /loom:describe-pr
 - A landing without a commit names the hash of the `done` entry and `no file change`.
 
 **The state** (phase 1 done, no argument): `Result: screens task #<n>: phase 1 done (<hash>); PR <#number and state, or not open>`, and `Next:` from `next.command`, mapped as `final-answer.md` describes.
+
+**After Design paths.** When [Design paths](#design-paths) committed in this run, the `Result:` line of the state message, of the drafts message, and of every landing message (its stops included) ends with `; design paths set (<commit short hash>)`.

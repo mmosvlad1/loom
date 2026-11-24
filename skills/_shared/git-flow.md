@@ -57,6 +57,7 @@ The first body line names the implementation phase. The resume flow of `implemen
 | Landing commit | `screens` (the first landing of a screens task) | `docs(design): <summary> (#<n>)` | `Phase 1: oneshot` |
 | Landing fix commit | `screens` (a later landing) | `docs(design): <summary of the change> (#<n>)` | `Phase 1: oneshot`, a blank line, then one `Fix: <item>` line per change |
 | Canvas commit | `screens` (when it creates the canvas) | `docs(design): record the canvas (#<n>)` | none: no `Phase` line |
+| Design paths commit | `screens` (when it sets the design paths) | `docs(design): set the design paths (#<n>)` | none: no `Phase` line |
 
 - `<name>` is the name of `## Phase N: <name>` in `04-plan.md`, exactly.
 - Never commit with `--no-verify`, and never amend a pushed commit.

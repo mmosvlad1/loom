@@ -19,7 +19,7 @@ A working tree that is dirty only in the docs paths (`workingTreeDocsOnly` is `t
    - A body in the layout before loom v1.1 (`## Summary` and `## Changes`, for example from `gh pr view`) is rewritten into this layout: Why, Special things to note, Change outline, Verification, Decisions, then the plan. A heading of `pullRequest.requiredSections` never marks the old layout: ignore the required headings in this check, also `## Summary` or `## Changes`.
    - **Covered issues** (a screens task, `task.screens` is `true`): compute the `Closes #<k>` lines after `Closes #<n>` again, with the method of `describe-pr`:
      - For each `Covers #<k>` line of the ticket's Context, run `gh issue view <k> --json title`. Its title `Design screens: update <screen ID>` names the screen.
-     - The branch diff: `git diff origin/<main>...HEAD --name-only` (without `origin/<main>`: the local `<main>`; `<main>` is `mainBranch`).
+     - The branch diff: `git diff origin/<main>...HEAD --name-status -M` (without `origin/<main>`: the local `<main>`; `<main>` is `mainBranch`). Skip each `R100` line: a move without a change, for example by the design paths step of `screens`, is not work of this branch. A rename line names the new path.
      - The screen is in the diff when the diff lists a file below `docs.screens` with that screen ID. Then add the line `Closes #<k>` after `Closes #<n>`.
      - Keep no line whose screen is not in the diff: a covered issue whose screen did not land stays open.
    - Write the CI item of `describe-pr` (`` - [ ] CI check `<ci.requiredCheck>` passes on this PR ``) unticked again, also when it was ticked: the checks run again on the new head.

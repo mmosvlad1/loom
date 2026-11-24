@@ -26,7 +26,7 @@ Keep the layout of the template. On the onboarding task the sections hold:
 | Testing Approach | `checks.check` passes locally and in the required CI check of the setup PR |
 
 - **Out of Scope**: write each `Follow-up:` line as a bullet that starts with `Follow-up: `, one gap per line. `/loom:describe-pr` proposes every `Follow-up:` line as an issue after the PR opens. A gap whose topic 4 question is still open gets its line for the recommended option ("Assumes Q4 b").
-- **The new `.claude/loom.json`**: show the full file in a `json` block: `version`, `mainBranch`, `checks`, `docs` (the docs map), `ci` with `requiredCheck`, and `pullRequest` with `requiredSections`. The keys of the docs map are the five docs roles `vision`, `overview`, `decisions`, `conventions`, and `tasks` only: the optional `style` and `screens` are not part of onboarding, and `docs.dir` of the state is not a key of the file. Where a value depends on an open question, write the value of the recommended option and point to the question.
+- **The new `.claude/loom.json`**: show the full file in a `json` block: `version`, `mainBranch`, `checks`, `docs` (the docs map), `ci` with `requiredCheck`, and `pullRequest` with `requiredSections`. The keys of the docs map are the five docs roles `vision`, `overview`, `decisions`, `conventions`, and `tasks`. The optional `style` and `screens` are not part of onboarding, with one exception: the [design paths](#design-paths) of topic 3. `docs.dir` of the state is not a key of the file. Where a value depends on an open question, write the value of the recommended option and point to the question.
 - **The table of project rules**: one row per project rule that topic 2 covers: `| Project rule (file:line) | Resolution in loom tasks |`. This table goes into the `conventions` document in the implementation phases.
 
 ## Rounds
@@ -72,13 +72,27 @@ Two kinds of conflict have no such default, because loom cannot win them by a ru
 
 ### 3. Documentation
 
-One question per docs role (`vision`, `overview`, `decisions`, `conventions`, `tasks`), or one question for several roles with the same answer. The optional roles `style` and `screens` get no question. The options for each role:
+One question per docs role (`vision`, `overview`, `decisions`, `conventions`, `tasks`), or one question for several roles with the same answer. The optional roles `style` and `screens` get no question ([Design paths](#design-paths) below). The options for each role:
 
 - **map**: an existing document plays the role; the docs map records its path. Recommended when one exists.
 - **migrate**: move the files into loom's layout, and update the links in the same implementation phase. Never recommend it: it applies only when the user asks for it, because other documents and people link to the old paths.
 - **create**: a new document from the setup skeleton, or from the approved draft of topic 1. Recommended when none exists. The path is the default of that role in `docs` of the state, unless the user names another.
 
 For `decisions`, record the directory and the file name pattern of the existing decision records in the docs map (`docs.decisions.dir`, `docs.decisions.pattern`). Known limit: loom reads and writes Markdown only. A project whose docs are reStructuredText or AsciiDoc can only **create** loom's documents.
+
+#### Design paths
+
+The optional roles keep their default paths, `docs.style` and `docs.screens` of the state. A later screens task would find a conflict with the docs map when an option of a docs question puts:
+
+- `tasks` or `decisions` (its directory) at or above `docs.style`, or at, above, or below `docs.screens`;
+- a role file (`vision`, `overview`, `conventions`) at `docs.style`, or at or below `docs.screens`.
+
+For such an option, the docs map also sets `style` and `screens`, at paths outside these directories:
+
+- `style`: `<docs.dir>/ui/DESIGN.md`, and `screens`: `<docs.dir>/ui/screens`, with `docs.dir` from the state.
+- When the docs map also holds these paths (for example, `tasks` is `docs.dir`), choose two other paths outside every directory of the map.
+- This gets no question of its own. Add one line to the text of the option: the two paths, and that a later screens task needs them free of the other roles. When the user chooses that option, record the two paths in one Resolved Decision.
+- The two roles still get no question, and no file or directory is created for them.
 
 ### 4. Gaps
 
